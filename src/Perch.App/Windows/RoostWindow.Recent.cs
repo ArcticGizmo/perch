@@ -50,12 +50,14 @@ internal sealed partial class RoostWindow
         return row;
     }
 
-    // Every dormant pane, in the Recent group's order (the app's: what Perch had open first, then the rest).
+    // Every dormant pane in the Recent group, in the app's order. A Perch session Perch still holds isn't one: it sits in
+    // the rail like a live session (RoostDormant.IsHeld).
     private IReadOnlyList<RoostPane> DormantPanes() =>
         _roster.Rail.FirstOrDefault(g => g.Group == RoostGroup.Recent)?.Panes ?? [];
 
-    // A pane stays in the rail unless it's dormant and no tab (Focus included) holds it — then it's only in the flyout.
-    private bool InRail(RoostPane pane) => !pane.IsDormant || _tabs.IsPlaced(pane.Key);
+    // A pane stays in the rail unless it's a Recent one (dormant, not held) and no tab (Focus included) holds it — then
+    // it's only in the flyout.
+    private bool InRail(RoostPane pane) => pane.Dormant is not { IsHeld: false } || _tabs.IsPlaced(pane.Key);
 
     private void RefreshRecentRow()
     {

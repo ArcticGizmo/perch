@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.7] - 2026-10-06
+
+- Perch sessions survive Perch closing (exit, update, crash, reboot alike)
+- They wait on the overlay and in the Roost, marked "not running"
+- Reply to one to pick it up, same model and mode
+- Only "End session" removes them (nothing expires on its own)
+- "End session" works on not-running sessions too
+- Exit and Update ask first if a session is mid-turn
+- Resume list stops quoting prices (opening a session is free now)
+
+---
+
 ## [v0.5.6] - 2026-10-06
 
 - GitHub alerts (opt-in): one overlay line for PRs that need you

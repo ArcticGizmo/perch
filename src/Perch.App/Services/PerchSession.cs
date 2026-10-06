@@ -394,7 +394,16 @@ internal sealed class PerchSession : IDisposable
     /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows. Perch's own exits
     /// call this too, and those sessions come back dormant on the next start; <see cref="EndByUser"/> is the user
     /// being done with it.</summary>
-    public void End() => _controller?.Stop();
+    public void End()
+    {
+        if (_controller is null) return;
+        StoppedByPerch = true;
+        _controller.Stop();
+    }
+
+    /// <summary><see cref="End"/> stopped the process, rather than it exiting by itself (a clean exit is <c>/exit</c>, a
+    /// non-zero one a crash).</summary>
+    public bool StoppedByPerch { get; private set; }
 
     /// <summary>The user let this session go from Perch (ended it, or handed it back to a terminal), so it doesn't
     /// come back after a restart (docs/session-recovery-plan.md, D3). Raised before the process stops.</summary>

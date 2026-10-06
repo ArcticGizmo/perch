@@ -346,6 +346,14 @@ public record ClaudeSession(
     public bool IsPerchControlled => PerchControlled;
 
     /// <summary>
+    /// A Perch session with no <c>claude</c> process behind it (docs/session-recovery-plan.md): it was running when
+    /// Perch closed, or its process ended without the user ending it. It isn't from a scan; the app adds it to the
+    /// overlay's list so the row stays where it was, and its first send starts it again. Its <see cref="Pid"/> is
+    /// empty, so nothing that acts on a process applies to it.
+    /// </summary>
+    public bool IsDormant { get; init; }
+
+    /// <summary>
     /// The editor/IDE hosting this session — VS Code, Cursor, Windsurf, a JetBrains IDE, … — when it runs
     /// inside one (or inside that IDE's integrated / an embedded terminal), or null for a plain terminal.
     /// Unlike <see cref="IsDesktop"/>/<see cref="IsBackground"/> this can't be read from the session file

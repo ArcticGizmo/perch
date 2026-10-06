@@ -492,6 +492,47 @@ changelog's Unreleased section.
 - `CHANGELOG.md` Unreleased: the whole feature (R1–R8) plus the Exit-cleanup fix from R5.
 - Render: `preview_pane_1x.png`, `settings_catalog_1x.png`.
 
+### R9 — Perch sessions keep their place (supersedes the "was open" restore)
+
+User decision (2026-10-06): a Perch session lives until the user ends it. Whatever stops its process (Exit, an update,
+a crash, an OS restart), it comes back **where it was** (an overlay row in Sessions, a Roost pane in its rail group and
+tab) with no `claude` behind it, and the first reply wakes it. This replaces R5/R7's "was open in Perch" entries at
+the top of Recent, the startup toast's Perch half, and the tray's "Reopen Perch sessions" item. Windows don't reopen
+(Perch often starts at login); clicking the row opens one. No expiry. Exit and Update both confirm when a session is
+mid-turn (a running turn or a pending permission/question card).
+
+**As built (R9):**
+- `LedgerSession` also keeps `Model`/`PermissionMode`/`Effort` (optional, so older ledgers read as defaults);
+  `TrackHeld` rewrites an entry only when it changes (it now also runs on `StateChanged`, which covers a mode switch).
+  `OpenDormantPerchSession` seeds a held session's dormant `PerchSession` with them, so a window's wake uses them, and
+  the Roost wake reads them too.
+- `App._parked` (was `_restorable`): the previous run's held sessions, plus this run's whose process ended while
+  Perch runs if Perch stopped it (`PerchSession.StoppedByPerch`, e.g. the update path) or it exited non-zero (a crash).
+  A clean exit on its own (`/exit`) is the user ending it, so it's forgotten. `_exiting` keeps Exit's own stops out.
+- Overlay: `App.WithDormantRows` appends a `ClaudeSession { IsDormant = true }` (Pid = `~sid`, Idle, `PerchControlled`,
+  the stored mode) per parked session to each scan. The row draws at `DormantRowOpacity` with "not running", is left
+  out of `_countedSessions` (header tally, dense strip), and has its own menu (Open / View history / Resume in terminal
+  / End session / Copy id). A click goes to `OpenSessionResume` (dormant window).
+- Roost: `RoostDormant.IsHeld` (`WasOpenInPerch`) puts the pane in the rail's Quiet group (and A–Z among the live ones),
+  not Recent, and keeps it in the rail without a tab. Its pill reads "Not running · reply to resume". "Dismiss" reads
+  "End session"; closing the pane only takes it out of the tab. A waking held pane keeps that kind until the scan
+  sees the process.
+- Recent (overlay button + Roost footer) no longer lists held sessions; the startup toast only counts terminal
+  sessions a restart interrupted.
+- `App.DormantRows.cs`: the rows, `EndDormant`, `ResumeDormantInTerminal` (lets go first, like hand-back), and
+  `ConfirmStopTurnsAsync` behind `StartUpdate` / `RequestExit`.
+- A dormant session window shows "End session" (confirm, then `PerchSession.EndByUser` → the app's dormant `Released`
+  handler → `EndDormant`, which forgets it and closes every window showing it dormant).
+- The launcher's "Resume recent" rows and the in-window `/resume` overlay no longer show the resume estimate (opening is
+  free); it stays only in the dormant note above the composer (`ShowDormantEstimate`, now always computed there).
+- Tests: `SessionLedgerTests.LaunchSettings_RoundTrip_…`, `RoostDormantTests.APerchSessionPerchStillHolds_…`. Render:
+  `overlay_1x.png` (the "Invoice export" sample row), `roost_dormant_1x.png`.
+
+**Live checks owed (R9):** start two Perch sessions (one in plan mode), Exit Perch, start it: both rows are back faded
+and "not running", nothing is spawned (Task Manager), the Roost has them in Quiet / their tab. Click one, reply: it
+resumes in plan mode and the row goes live. "End session" on the other: gone, and stays gone after a restart. Exit
+with a turn running: the prompt appears. Kill a session's `claude` process: its row turns "not running".
+
 ## Risks
 
 - **Claude's on-disk format can change.** `cost-state` and `history.jsonl` are undocumented. Everything degrades

@@ -2171,18 +2171,12 @@ internal static class HeadlessRenderer
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;
         var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };
-        var win = new Perch.Data.ContextWindowInfo(200_000, "claude-opus-4-8", Perch.Data.ContextWindowSource.ModelId);
-        var estimates = new Dictionary<string, Perch.Data.Control.ResumeEstimate>
-        {
-            ["s1"] = Perch.Data.Control.ResumeEstimate.Compute(58_000, win, TimeSpan.FromHours(2)),   // cold
-            ["s3"] = Perch.Data.Control.ResumeEstimate.Compute(120_000, win, TimeSpan.FromDays(1)),   // cold, heavier
-        };
         launcher.ShowLauncherSampleForRender(cwd, new List<HistoryEntry>
         {
             new("s1", "perch", @"C:\src\perch", "", now.AddHours(-2), false, 84 * 1024, "git-tree refactor"),
             new("s2", "acme-api", @"C:\src\acme-api", "", now.AddMinutes(-1), true, 12 * 1024),
             new("s3", "landing-site", @"C:\src\landing-site", "", now.AddDays(-1), false, 1400 * 1024, "copy tweaks"),
-        }, estimates);
+        });
         launcher.Show();
         Dispatcher.UIThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();

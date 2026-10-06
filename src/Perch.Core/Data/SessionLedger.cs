@@ -13,9 +13,12 @@ internal sealed class LedgerRun
     public DateTime? ShutdownAt { get; set; }
 }
 
-/// <summary>A Perch-controlled session Perch is holding, live or dormant, so it can come back after Perch restarts
-/// (docs/session-recovery-plan.md, D3). Removed when the user ends it.</summary>
-internal sealed record LedgerSession(string SessionId, string Cwd, string? ConfigDir, string? Title);
+/// <summary>A Perch-controlled session Perch is holding, live or not running, so it comes back after Perch restarts
+/// (docs/session-recovery-plan.md, D3). Removed when the user ends it. The launch settings (null = the CLI's default)
+/// are what it last ran with, so its first send starts it the way it was running.</summary>
+internal sealed record LedgerSession(
+    string SessionId, string Cwd, string? ConfigDir, string? Title,
+    string? Model = null, string? PermissionMode = null, string? Effort = null);
 
 /// <summary>
 /// Perch's own record for session recovery (docs/session-recovery-plan.md, D10): the current run's stamps, the recent
@@ -134,6 +137,12 @@ internal sealed class SessionLedger
             for (int j = Sessions.Count - 1; j >= 0; j--)
                 if (j != i && Sessions[j].SessionId == newId) Sessions.RemoveAt(j);
         }
+    }
+
+    /// <summary>The held session with <paramref name="sessionId"/>, or null.</summary>
+    public LedgerSession? Find(string sessionId)
+    {
+        lock (_gate) return Sessions.FirstOrDefault(s => s.SessionId == sessionId);
     }
 
     /// <summary>The ids of the sessions Perch holds (they're shown as Perch's own, so Recent leaves them out).</summary>

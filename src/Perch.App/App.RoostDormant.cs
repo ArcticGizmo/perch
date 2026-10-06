@@ -46,7 +46,7 @@ public partial class App
         var held = _ledger?.HeldIds() ?? new HashSet<string>(StringComparer.Ordinal);
         var dismissed = new Dictionary<string, DateTime>(_appSettings?.RecentDismissed ?? [], StringComparer.Ordinal);
         var shutdowns = _ledger?.ShutdownsSnapshot() ?? [];
-        var restorableIds = _restorable.Select(r => r.SessionId).ToList();
+        var parkedIds = _parked.Select(r => r.SessionId).ToList();
         Task.Run(() =>
         {
             var entries = SessionHistory.ListAll(active);
@@ -55,9 +55,9 @@ public partial class App
             foreach (var e in entries) byId.TryAdd(e.SessionId, e);
             var rowsById = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
             foreach (var r in rows) rowsById.TryAdd(r.Entry.SessionId, r);
-            // What Perch had open that has no transcript with a message in it (opened, never prompted): nothing to
-            // resume, so it doesn't come back as "was open".
-            var empty = restorableIds
+            // A held Perch session with no transcript with a message in it (opened, never prompted): nothing to resume, so
+            // it doesn't come back as a not-running row.
+            var empty = parkedIds
                 .Where(id => !byId.TryGetValue(id, out var e) || !_recentBuilder.EndOf(e.Path, null).HasConversation)
                 .ToHashSet(StringComparer.Ordinal);
             return (rows, rowsById, byId, empty);
@@ -67,7 +67,7 @@ public partial class App
             if (t.IsCompletedSuccessfully)
             {
                 (_recentRows, _recentById, _transcriptsById, var empty) = t.Result;
-                DropRestorable(empty);
+                DropParked(empty);
             }
             else LaunchLog.Write($"recent sessions: build failed ({t.Exception?.GetBaseException().GetType().Name})");
             _roostDormantReady = true;
@@ -111,9 +111,9 @@ public partial class App
 
     // ── The dormant set ───────────────────────────────────────────────────────────
 
-    /// <summary>Every session the Roost shows dormant, in the Recent group's order: what Perch had open when it closed,
-    /// then Perch sessions open dormant in a window, then what the tabs hold, then the Recent list. One per session,
-    /// never one that's live (the roster also refuses those), never a dismissed ending.</summary>
+    /// <summary>Every session the Roost shows dormant: the Perch sessions Perch holds with no process (they sit where a
+    /// live one would), then Perch sessions open dormant in a window, then what the tabs hold, then the Recent list. One
+    /// per session, never one that's live (the roster also refuses those), never a dismissed ending.</summary>
     private List<RoostDormant> RoostDormantSessions(IReadOnlyList<ClaudeSession> live)
     {
         var liveIds = live.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
@@ -127,10 +127,11 @@ public partial class App
             list.Add(d);
         }
 
-        foreach (var r in _restorable) Add(RestorableDormant(r), dismissible: false);
+        foreach (var r in _parked) Add(ParkedDormant(r), dismissible: false);
 
-        // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take. A
-        // dormant one with no transcript has nothing to show or resume, so it's left out.
+        // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take (it's
+        // held from the moment it wakes, so it keeps a held pane's place). A dormant one with no transcript has nothing
+        // to show or resume, so it's left out.
         foreach (var s in _perchSessions)
         {
             if (s.SessionId is not { } id) continue;
@@ -138,7 +139,8 @@ public partial class App
             if (!s.IsDormant && !waking) continue;
             if (!waking && !_transcriptsById.ContainsKey(id)) continue;
             Add(new RoostDormant(id, s.Cwd, ProjectOf(s.Cwd), s.Title, LastActiveOf(id),
-                _recentById.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
+                waking ? RoostDormantKind.WasOpenInPerch
+                : _recentById.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
                 dismissible: !waking);
         }
 
@@ -151,9 +153,9 @@ public partial class App
         return list;
     }
 
-    // What Perch had open when it closed. Perch closing ended it rather than the user, so it reads as interrupted
-    // whichever way it ended (RoostDormant.WasInterrupted).
-    private RoostDormant RestorableDormant(LedgerSession r) =>
+    // A Perch session Perch holds with no process. Perch closing (or losing) it ended it rather than the user, so it reads
+    // as interrupted whichever way it ended (RoostDormant.WasInterrupted).
+    private RoostDormant ParkedDormant(LedgerSession r) =>
         new(r.SessionId, r.Cwd, ProjectOf(r.Cwd), r.Title, LastActiveOf(r.SessionId), RoostDormantKind.WasOpenInPerch,
             PerchOrigin: true, JustBeforeShutdown: _recentById.TryGetValue(r.SessionId, out var ended) && ended.JustBeforeShutdown);
 
@@ -204,11 +206,11 @@ public partial class App
     // ── Pane actions ──────────────────────────────────────────────────────────────
 
     /// <summary>"Dismiss" on a Recent line or a dormant Roost pane: it leaves the overlay's Recent list and the Roost
-    /// (and its tab), and stays dismissed until the session ends again. One that Perch had open also stops coming back
-    /// after the next restart.</summary>
+    /// (and its tab), and stays dismissed until the session ends again. On a Perch session Perch holds it's the user
+    /// ending it: gone from the overlay and the Roost for good.</summary>
     private void DismissRecent(string sessionId)
     {
-        if (_restorable.Any(r => r.SessionId == sessionId)) ForgetHeld(sessionId);
+        if (_parked.Any(r => r.SessionId == sessionId)) EndDormant(sessionId);
         if (_appSettings is { } s)
         {
             var map = s.RecentDismissed ?? new Dictionary<string, DateTime>(StringComparer.Ordinal);
@@ -227,9 +229,9 @@ public partial class App
 
     private DispatcherTimer? _recentAgeTimer;
 
-    /// <summary>Pushes the lines behind the overlay's Recent button: what Perch had open first ("was open"), then the
-    /// whole Recent list (flagged first, newest first), each through the same <see cref="RecentLine.From"/> the Roost's
-    /// list uses. Never a session that's live now or dismissed. Cheap (no IO): run on every fold, and each minute so the
+    /// <summary>Pushes the lines behind the overlay's Recent button: the whole Recent list (flagged first, newest first),
+    /// each through the same <see cref="RecentLine.From"/> the Roost's list uses. Never a session that's live now or
+    /// dismissed, nor one Perch holds (that's a row of its own). Cheap (no IO): run on every fold, and each minute so the
     /// ages move.</summary>
     private void PushRecentLines()
     {
@@ -244,7 +246,6 @@ public partial class App
             if (!live.Contains(d.SessionId) && seen.Add(d.SessionId)) lines.Add(RecentLine.From(d, now));
         }
 
-        foreach (var r in _restorable) Add(RestorableDormant(r));
         foreach (var row in _recentRows)
             if (!IsDismissed(row.Entry.SessionId, row.EndedAt)) Add(FromRecent(row, perch: false));
         _overlay.Canvas.SetRecent(lines);
@@ -257,24 +258,19 @@ public partial class App
         }
     }
 
-    /// <summary>The startup toast (once a run, after the first Recent build): the Perch sessions that were open when
-    /// Perch closed, and the sessions the restart that ended the previous run interrupted.</summary>
+    /// <summary>The startup toast (once a run, after the first Recent build): the terminal sessions the restart that ended
+    /// the previous run interrupted. Perch's own sessions need no toast: they're back where they were.</summary>
     private void MaybeShowRecoveryToast()
     {
         if (!_recoveryToastPending) return;
         _recoveryToastPending = false;
-        int open = _restorable.Count;
         int interrupted = _previousShutdown is { } shutdown
             ? _recentRows.Count(r => r.End.Kind == SessionEndKind.Abrupt && SessionRecovery.JustBeforeShutdown(r.EndedAt, [shutdown]))
             : 0;
-        if (open == 0 && interrupted == 0) return;
-
-        static string Count(int n, string what) => n == 1 ? $"1 {what} was" : $"{n} {what}s were";
-        var parts = new List<string>();
-        if (open > 0) parts.Add($"{Count(open, "Perch session")} open when Perch closed");
-        if (interrupted > 0) parts.Add($"{Count(interrupted, "session")} interrupted by a restart");
-        _notifier?.Show(open == 0 ? "Interrupted by a restart" : "Pick up where you left off",
-            string.Join(", and ", parts) + ". They're behind the Recent (clock) button on the overlay.", ToastLevel.Info, null, null);
+        if (interrupted == 0) return;
+        _notifier?.Show("Interrupted by a restart",
+            (interrupted == 1 ? "1 session was" : $"{interrupted} sessions were") +
+            " interrupted by a restart. They're behind the Recent (clock) button on the overlay.", ToastLevel.Info, null, null);
     }
 
     /// <summary>
@@ -307,8 +303,11 @@ public partial class App
             if (session.IsDormant)
             {
                 LaunchLog.Write($"roost wake: {TranscriptLocator.DescribeResume(sid, cwd)}");
-                var mode = ClaudeUserSettings.ReadSessionDefaults().PermissionMode ?? Windows.SessionWindow.FallbackMode;
-                session.Wake(new SessionLaunchOptions(cwd, PermissionMode: mode, ResumeId: sid, ConfigDir: configDir));
+                // A Perch session Perch holds starts the way it last ran; anything else with the user's defaults.
+                var held = ParkedEntry(sid);
+                var mode = held?.PermissionMode
+                           ?? ClaudeUserSettings.ReadSessionDefaults().PermissionMode ?? Windows.SessionWindow.FallbackMode;
+                session.Wake(new SessionLaunchOptions(cwd, held?.Model, mode, held?.Effort, sid, configDir));
             }
             session.SendPrompt(text);
             return true;

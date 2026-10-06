@@ -111,6 +111,9 @@ internal static class SampleData
             },
             new ClaudeSession("8803", "s10", SessionStatus.AwaitingInput, @"C:\src\svc", "service", now,
                 IdeHost: new IdeHost(IdeHostKind.JetBrains, "PyCharm", "pycharm64")),
+            // A Perch session with no process (Perch closed while it was open): faded, "not running", plan mode kept.
+            new ClaudeSession("~s11", "s11", SessionStatus.Idle, @"C:\src\billing", "billing", now.AddHours(-3),
+                Mode: PermissionMode.Plan, Title: "Invoice export", PerchControlled: true) { IsDormant = true },
         ];
     }
 
