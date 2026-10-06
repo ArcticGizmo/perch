@@ -329,7 +329,7 @@ public partial class App : Application
             _monitorHost = new SessionMonitorHost(sessions =>
             {
                 _lastSessions = sessions;
-                _overlay!.Canvas.Update(sessions);
+                _overlay!.Canvas.Update(WithDormantRows(sessions));   // + Perch sessions that aren't running
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
@@ -375,6 +375,9 @@ public partial class App : Application
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
+            // A not-running Perch session's row (App.DormantRows.cs).
+            _overlay.Canvas.DormantEndRequested += s => EndDormant(s.SessionId);
+            _overlay.Canvas.DormantTerminalRequested += s => ResumeDormantInTerminal(s.Cwd, s.SessionId);
             _overlay.Canvas.NewSessionRequested += OpenSessionWindow;   // "+ New session" row → rich session window
             _overlay.Canvas.RoostRequested += OpenRoost;                // …its split-panes button → the Roost
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
@@ -416,7 +419,7 @@ public partial class App : Application
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
             // the menu is complete, with best-effort/stub handlers until those windows land.
-            _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
+            _overlay.Canvas.ExitRequested += RequestExit;
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
             _overlay.Canvas.OverlayModeToggleRequested += ToggleOverlayMode;
             _overlay.Canvas.QuietModeRequested += OnQuietModeRequested;
@@ -511,7 +514,7 @@ public partial class App : Application
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
-            _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
+            _overlay.Canvas.UpdateRequested += () => StartUpdate();
             // Secret: press and hold the brand mark (~700ms) to open the little arcade chooser (Invaders /
             // Crossing / Wordle). Once discovered, ArcadeUnlocked flips on and is persisted so the header's
             // right-click menu can offer a quick shortcut thereafter.
@@ -522,7 +525,7 @@ public partial class App : Application
                 if (_appSettings is { } s && !s.ArcadeUnlocked) { s.ArcadeUnlocked = true; s.Save(); }
             };
             // Clicking the "update available" toast starts the update, same as the update button.
-            _notifier.UpdateActivated += () => _updateService!.PerformUpdate(CloseAuxWindows);
+            _notifier.UpdateActivated += () => StartUpdate();
 
             // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
             // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).
@@ -688,7 +691,8 @@ public partial class App : Application
 
     // Closes the auxiliary windows before an update applies (the closing windows signal the update is
     // under way and stop a button being clicked again mid-download). The overlay stays up so the app
-    // survives the awaits — ApplyUpdatesAndRestart tears everything down when it relaunches.
+    // survives the awaits — ApplyUpdatesAndRestart tears everything down when it relaunches. The Perch sessions it
+    // stops stay held: not-running rows now, and in the next run (App.DormantRows.cs).
     private void CloseAuxWindows()
     {
         _settings?.Close();
@@ -738,6 +742,13 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
+        // A Perch session that isn't running: its conversation, waiting for a reply to start it.
+        if (session.IsDormant)
+        {
+            OpenDormantRow(session);
+            return;
+        }
+
         // A session Perch drives over stream-json lives in a SessionWindow, not a terminal — bring its window
         // forward (Activate switches to the virtual desktop it's on), or open a fresh view if the user had
         // closed it, instead of hunting for a terminal that doesn't exist.
@@ -1705,7 +1716,7 @@ public partial class App : Application
                 // Dormant panes (session recovery R6): open in a Perch window (still dormant), resume in a terminal,
                 // dismiss, or wake on the first send.
                 w.OpenDormantRequested += p => OpenSessionResume(p.Session.SessionId, p.Session.Cwd);
-                w.ResumeInTerminalRequested += p => ReopenSession(p.Session.Cwd, p.Session.SessionId);
+                w.ResumeInTerminalRequested += p => ResumeDormantInTerminal(p.Session.Cwd, p.Session.SessionId);
                 w.DismissRequested += p => DismissRecent(p.Session.SessionId);
                 w.WakeAndSend = WakeFromRoostAsync;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
@@ -2093,6 +2104,15 @@ public partial class App : Application
     {
         if (options.ResumeId is { } id && _perchSessions.FirstOrDefault(s => s.SessionId == id && !s.HasEnded) is { } existing)
             return existing;
+        // A Perch session Perch holds opens with the settings it last ran with, so a window's first send (which reads
+        // them off the session) starts it the way it was running.
+        if (ParkedEntry(options.ResumeId) is { } held)
+            options = options with
+            {
+                Model = options.Model ?? held.Model,
+                PermissionMode = options.PermissionMode ?? held.PermissionMode,
+                Effort = options.Effort ?? held.Effort,
+            };
         var session = Services.PerchSession.Dormant(options);
         _perchSessions.Add(session);
         Dispatcher.UIThread.Post(RefoldRoost);   // after the caller has attached it
@@ -2105,6 +2125,12 @@ public partial class App : Application
         {
             HoldSession(s);   // live now: held like any started session
             _monitorHost?.Rescan();
+        };
+        // "End session" in its window while it's still dormant: Perch stops holding it (the overlay row and Roost pane
+        // go). Once it's woken, ending it goes through HoldSession's release instead.
+        session.Released += s =>
+        {
+            if (s.IsDormant && s.SessionId is { } sid) EndDormant(sid);
         };
         return session;
     }
@@ -2920,12 +2946,12 @@ public partial class App : Application
         _updateItem = new NativeMenuItem("Check for Updates…");
         _updateItem.Click += (_, _) =>
         {
-            if (_updateService is { HasPendingUpdate: true }) _updateService.PerformUpdate(CloseAuxWindows);
+            if (_updateService is { HasPendingUpdate: true }) StartUpdate();
             else _updateService?.CheckManual();
         };
 
         var exitItem = new NativeMenuItem("Exit");
-        exitItem.Click += (_, _) => desktop.Shutdown();
+        exitItem.Click += (_, _) => RequestExit();
 
         // An opt-in debug log (PERCH_SESSION_LOG records full session output) is named in the tooltip and at the
         // top of the menu, so one switched on by accident — or by something else — can't go unnoticed (CP16).
@@ -2946,7 +2972,6 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 newSessionItem,
-                BuildReopenItem(),   // "Reopen Perch sessions (N)": hidden until some came back after a restart
                 roostItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
@@ -3195,7 +3220,7 @@ public partial class App : Application
             TestNotification = kind => _notifications?.ShowTest(kind),
             TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
             CheckForUpdates = () => _updateService?.CheckManual(),
-            PerformUpdate = () => _updateService?.PerformUpdate(CloseAuxWindows),
+            PerformUpdate = () => StartUpdate(_settings),
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,

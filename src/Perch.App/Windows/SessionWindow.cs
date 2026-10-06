@@ -184,10 +184,6 @@ internal sealed partial class SessionWindow : Window
     // A spinner shown in the recents area until the (off-thread) machine-wide session scan lands.
     private readonly Border _recentsLoadingRow;
     private IReadOnlyList<HistoryEntry> _allRecents = [];
-    // Per-session resume estimate (context tokens, cache warmth, cost), computed lazily off-thread for the
-    // rows on screen and cached by session id. _estimating guards against re-queuing one that's in flight.
-    private readonly Dictionary<string, ResumeEstimate> _estimates = new();
-    private readonly HashSet<string> _estimating = new();
 
     // A floating, viewport-relative toast for launcher errors ("live in a terminal", "already controlled by
     // another Perch", …). It sits over _center rather than at the bottom of the recents column so a long
@@ -920,7 +916,8 @@ internal sealed partial class SessionWindow : Window
             : dormant ? "Reply to pick this session back up"
             : "Session ended — Resume to pick it back up";
         _dormantNote.IsVisible = dormant;
-        _endButton.IsVisible = running;
+        // A dormant one can be ended too: it's how a Perch session that isn't running stops coming back.
+        _endButton.IsVisible = running || dormant;
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
         HideToast();
     }
@@ -1253,50 +1250,12 @@ internal sealed partial class SessionWindow : Window
         _recentsHeader.Text = searching ? "SEARCH RESULTS" : "RESUME RECENT";
         // The search box only earns its space once there's a corpus to search.
         _recentsSearchFrame.IsVisible = _allRecents.Count > 0;
-
-        EnsureEstimates(matches, RenderRecents);
     }
 
     // Two cwds name the same project when their paths match (trailing separators + case ignored).
     private static bool SameProject(string a, string b) =>
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
         && string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
-
-    // Computes the resume estimate for any on-screen row that lacks one, off the UI thread, then re-renders
-    // once so the freshly-cached figures appear. Only the displayed rows pay the transcript read, and each is
-    // computed once (cached by session id), so typing in the search box stays cheap.
-    private void EnsureEstimates(IReadOnlyList<HistoryEntry> shown, Action reRender)
-    {
-        var todo = shown
-            .Where(e => !e.IsActive && !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Path)
-                     && !_estimates.ContainsKey(e.SessionId) && _estimating.Add(e.SessionId))
-            .ToList();
-        if (todo.Count == 0) return;
-
-        System.Threading.Tasks.Task.Run(() =>
-        {
-            var results = new List<(string Id, ResumeEstimate Est)>();
-            foreach (var e in todo)
-            {
-                try
-                {
-                    var (used, window) = TranscriptReader.ReadContextUsage(e.Path, e.Cwd);
-                    results.Add((e.SessionId, ResumeEstimate.Compute(used, window, DateTime.Now - e.LastUpdated)));
-                }
-                catch { results.Add((e.SessionId, default)); }
-            }
-            return results;
-        }).ContinueWith(t =>
-        {
-            if (!t.IsCompletedSuccessfully) return;
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_closed) return;
-                foreach (var (id, est) in t.Result) { _estimates[id] = est; _estimating.Remove(id); }
-                reRender();   // repaint the rows (launcher or resume overlay) now their estimates are known
-            });
-        });
-    }
 
     // Every space-separated term must appear somewhere across the session's name, folder path or id
     // (case-insensitive) — so "perch social" narrows to sessions matching both.
@@ -1343,18 +1302,9 @@ internal sealed partial class SessionWindow : Window
             FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint,
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 0, 0),
         };
+        // No resume estimate here: picking a row opens it dormant, which costs nothing. The estimate shows above the
+        // composer of the opened session, next to the send that would pay it (ShowDormantEstimate).
         var text = new StackPanel { Children = { name, sub }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 0, 0) };
-        // The resume estimate (once computed off-thread) — only for a plain resumable session, not a live one.
-        if (!e.IsActive && e.SessionId is { } id && _estimates.TryGetValue(id, out var est) && est.HasData)
-        {
-            text.Children.Add(new TextBlock
-            {
-                Text = ResumeEstimateLine(est), FontFamily = _p.Mono, FontSize = 11,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
-                Foreground = est.Warmth == CacheWarmth.Cold ? _p.Await : _p.Faint,
-                [ToolTip.TipProperty] = ResumeEstimateTip(est),
-            });
-        }
         var row = new DockPanel { Children = { dot, when, text } };
         when[DockPanel.DockProperty] = Dock.Right;
         var frame = new Border
@@ -1424,12 +1374,6 @@ internal sealed partial class SessionWindow : Window
         _dormantNote.Foreground = _p.Faint;
         _dormantNote[ToolTip.TipProperty] = null;
         if (session.SessionId is not { } id) return;
-        // Picked from this window's launcher: its row already worked the estimate out.
-        if (_estimates.TryGetValue(id, out var known) && known.HasData)
-        {
-            ApplyDormantEstimate(known);
-            return;
-        }
         var cwd = session.Cwd;
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -1450,8 +1394,8 @@ internal sealed partial class SessionWindow : Window
         _dormantNote[ToolTip.TipProperty] = ResumeEstimateTip(est);
     }
 
-    // The one-line resume estimate under a recent row: input tokens to resume, cache warmth, theoretical 5h
-    // share, and the likely dollar cost. "↩" marks it as the resume-cost readout.
+    // The one-line resume estimate in the dormant note above the composer: input tokens to resume, cache warmth,
+    // theoretical 5h share, and the likely dollar cost. "↩" marks it as the resume-cost readout.
     private static string ResumeEstimateLine(ResumeEstimate est)
     {
         var parts = new List<string>
@@ -1670,6 +1614,20 @@ internal sealed partial class SessionWindow : Window
 
     private async System.Threading.Tasks.Task ConfirmEndAsync()
     {
+        // Not running: there's no process to stop, only Perch's hold on it — the overlay row and the Roost pane, and
+        // its coming back after Perch restarts.
+        if (_session is { IsDormant: true } dormant)
+        {
+            if (await ConfirmDialog.ShowAsync(this, "End this session?",
+                    "Removes it from the overlay and the Roost, and it won't come back when Perch restarts. The " +
+                    "conversation stays on disk and can be resumed later — from Recent, history or `claude --resume`.",
+                    "End session", "Keep it", anchor: _endButton))
+            {
+                dormant.EndByUser();   // the app closes every window showing it dormant, this one included
+                if (!_closed) Close();
+            }
+            return;
+        }
         if (_session is not { IsRunning: true } live) return;
         bool ok = await ConfirmDialog.ShowAsync(this, "End this session?",
             "Stops the Claude process and closes this window. The conversation stays on disk and can be resumed " +
@@ -2571,8 +2529,6 @@ internal sealed partial class SessionWindow : Window
                 Text = query.Length > 0 ? "no sessions match that search" : "no past sessions in this project",
                 FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, Margin = new Thickness(10, 6),
             });
-
-        EnsureEstimates(matches, RenderResumeOverlay);
 
         if (_resumeIndex >= 0 && _resumeIndex < _resumeList.Children.Count)
             Dispatcher.UIThread.Post(() =>
@@ -3875,14 +3831,10 @@ internal sealed partial class SessionWindow : Window
         _findBox.Text = query;   // TextChanged → RunFind → search + jump to the first match
     }
 
-    /// <summary>HeadlessRenderer: the launcher with a sample recents list (and optional seeded resume
-    /// estimates, since the sample sessions have no transcript on disk to compute one from).</summary>
-    internal void ShowLauncherSampleForRender(string folder, IReadOnlyList<HistoryEntry> entries,
-        IReadOnlyDictionary<string, ResumeEstimate>? estimates = null)
+    /// <summary>HeadlessRenderer: the launcher with a sample recents list.</summary>
+    internal void ShowLauncherSampleForRender(string folder, IReadOnlyList<HistoryEntry> entries)
     {
         _folderBox.Text = folder;
-        if (estimates is not null)
-            foreach (var kv in estimates) _estimates[kv.Key] = kv.Value;
         PopulateRecents(entries);
     }
 

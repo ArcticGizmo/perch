@@ -33,6 +33,22 @@ public sealed class SessionLedgerTests : IDisposable
     }
 
     [Fact]
+    public void LaunchSettings_RoundTrip_AndAnOldFileReadsThemAsDefaults()
+    {
+        var ledger = new SessionLedger();
+        ledger.Track(new LedgerSession("s1", @"C:\fixtures\proj", null, null, "opus", "plan", "high"));
+        ledger.Save(_path);
+        Assert.Equal(new LedgerSession("s1", @"C:\fixtures\proj", null, null, "opus", "plan", "high"),
+            SessionLedger.Load(_path).Find("s1"));
+
+        // Written before the ledger kept launch settings.
+        File.WriteAllText(_path, """{ "Sessions": [ { "SessionId": "s2", "Cwd": "C:\\p", "ConfigDir": null, "Title": "t" } ] }""");
+        var old = SessionLedger.Load(_path).Find("s2");
+        Assert.Equal(new LedgerSession("s2", @"C:\p", null, "t"), old);
+        Assert.Null(SessionLedger.Load(_path).Find("missing"));
+    }
+
+    [Fact]
     public void MissingOrCorruptFile_LoadsEmpty()
     {
         Assert.Empty(SessionLedger.Load(_path).Sessions);

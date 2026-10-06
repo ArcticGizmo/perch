@@ -1675,6 +1675,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// with no window left to type Ctrl+C into.</summary>
     public event Action<ClaudeSession>? TerminateRequested;
 
+    /// <summary>"End session" on a not-running Perch session's row (<see cref="ClaudeSession.IsDormant"/>): the app stops
+    /// holding it, and the row goes.</summary>
+    public event Action<ClaudeSession>? DormantEndRequested;
+
+    /// <summary>"Resume in terminal" on a not-running Perch session's row: <c>claude --resume</c> in a terminal.</summary>
+    public event Action<ClaudeSession>? DormantTerminalRequested;
+
     /// <summary>Raised when the user clicks the note button at the start of the quick-links row. The app
     /// opens the global scratch pad (prefilled from <c>AppSettings.ScratchText</c>) and persists it.</summary>
     public event Action? ScratchPadRequested;
@@ -1782,9 +1789,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ? null
             : _daemonWorkers.Select(w => w.SessionId).ToHashSet();
 
-        _countedSessions = daemonIds is null
+        // A not-running Perch session keeps its row but isn't a running session: the header tally and the dense strip
+        // count only what has a process.
+        _countedSessions = daemonIds is null && !sessions.Any(s => s.IsDormant)
             ? sessions
-            : sessions.Where(s => !daemonIds.Contains(s.SessionId)).ToList();
+            : sessions.Where(s => !s.IsDormant && daemonIds?.Contains(s.SessionId) != true).ToList();
 
         // Interactive sessions render at the top (terminal *and* Claude Desktop sessions — both have a
         // human driving them); only background/SDK-driven ones group under the collapsible "Autonomous"
@@ -2861,6 +2870,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // ── Session row (core) ────────────────────────────────────────────────────
+    // How faded a not-running Perch session's row is (ClaudeSession.IsDormant).
+    private const double DormantRowOpacity = 0.55;
+
     private void DrawSessionRow(DrawingContext ctx, int rowIndex, ClaudeSession session, double top, double width)
     {
         double rowH = SessionRowHeight(session);
@@ -2890,6 +2902,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 new Rect(1, top + 1, 3, rowH - 1));
         }
 
+        // A Perch session with no process behind it (Perch closed, or lost it) keeps its row, faded: the hover wash
+        // above stays full strength so it still reads as clickable.
+        using var dim = ctx.PushOpacity(session.IsDormant ? DormantRowOpacity : 1);
 
         bool running = session.Status == SessionStatus.Running;
         // When the waiting timer is off, an awaiting row keeps its "input ↩" status but drops the "waiting
@@ -2969,7 +2984,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ctx.DrawEllipse(OverlayDraw.Brush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
         }
 
-        string statusText = session.Status switch
+        string statusText = session.IsDormant ? "not running" : session.Status switch
         {
             SessionStatus.Running        => "running",
             SessionStatus.NeedsAttention => "done ↩",
@@ -4949,7 +4964,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
         bool subRow = sessionRow && _rows[row].IsSubAgent;
 
-        if (sessionRow && _rows[row].Session is { } s)
+        if (sessionRow && _rows[row].Session is { IsDormant: true } dormant)
+        {
+            // A not-running Perch session: there's no process to act on, so it's open (the click), pick it up in a
+            // terminal, or end it — which is the only thing that takes the row away.
+            AddMenuGroups(items,
+                [
+                    MenuItem("Open", () => SessionActivated?.Invoke(dormant)),
+                    MenuItem("View history", () => HistoryRequested?.Invoke(dormant.SessionId)),
+                ],
+                [MenuItem("Resume in terminal", () => DormantTerminalRequested?.Invoke(dormant))],
+                [MenuItem("End session", () => DormantEndRequested?.Invoke(dormant))],
+                [MenuItem("Copy session ID", () => CopyToClipboard(dormant.SessionId))]);
+        }
+        else if (sessionRow && _rows[row].Session is { } s)
         {
             // The menu is grouped by everyday use, most-used first, with the technical (copy id / transcript)
             // items tucked at the bottom. Groups are separated only when non-empty (AddMenuGroups), so a

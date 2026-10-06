@@ -385,7 +385,7 @@ internal sealed class SessionPane : Border
     /// <summary>A dormant pane's pill: why it's here and when it stopped.</summary>
     internal static string DormantPillText(RoostDormant d) => d.Kind switch
     {
-        RoostDormantKind.WasOpenInPerch => "Was open in Perch",
+        RoostDormantKind.WasOpenInPerch => "Not running · reply to resume",
         RoostDormantKind.Interrupted => $"Interrupted {Ago(d.LastActive)}",
         RoostDormantKind.BeforeShutdown => $"Before shutdown · {Ago(d.LastActive)}",
         RoostDormantKind.Exited => $"Exited {Ago(d.LastActive)}",
@@ -396,7 +396,7 @@ internal sealed class SessionPane : Border
     /// <summary>A dormant pane's rail-row note: short, beside the name.</summary>
     internal static string DormantRailLabel(RoostDormant d) => d.Kind switch
     {
-        RoostDormantKind.WasOpenInPerch => "was open",
+        RoostDormantKind.WasOpenInPerch => "not running",
         RoostDormantKind.Interrupted => "interrupted",
         RoostDormantKind.BeforeShutdown => "shutdown",
         RoostDormantKind.NotRunning => "",
@@ -461,7 +461,7 @@ internal sealed class SessionPane : Border
         _body.Opacity = ended ? 0.6 : 1;
 
         // A dormant pane's pill: the attention hue for an ending worth noticing (interrupted, just before a shutdown),
-        // the brand for one Perch had open, else quiet.
+        // the brand for a Perch session Perch still holds, else quiet.
         (IBrush fg, IBrush line, IBrush wash) = pane.Dormant is { } d
             ? d.IsFlagged ? ((IBrush)_p.Await, (IBrush)_p.Await, (IBrush)_p.AwaitWash)
               : d.Kind == RoostDormantKind.WasOpenInPerch ? (_p.Brand, _p.BrandLine, _p.BrandWash)
@@ -763,8 +763,12 @@ internal sealed class SessionPane : Border
         }
         flyout.Items.Add(copy);
         flyout.Items.Add(new Separator());
-        // A dormant pane isn't running, so there's nothing to hide: it's dismissed (from the Recent list too).
-        var close = pane.IsDormant ? new MenuItem { Header = "Dismiss" } : new MenuItem { Header = "Close pane" };
+        // A dormant pane isn't running, so there's nothing to hide: it's dismissed (from the Recent list too). For a Perch
+        // session Perch holds that's ending it, so it says so.
+        var close = new MenuItem
+        {
+            Header = pane.Dormant is { IsHeld: true } ? "End session" : pane.IsDormant ? "Dismiss" : "Close pane",
+        };
         close.Click += (_, _) => ActionRequested?.Invoke(Key, pane.IsDormant ? RoostPaneAction.Dismiss : RoostPaneAction.Close);
         flyout.Items.Add(close);
         flyout.ShowAt(_menuButton);

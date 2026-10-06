@@ -19,7 +19,9 @@ public enum RoostGroup
 /// <summary>Why a dormant pane is in the Roost, most specific first — what its pill says.</summary>
 public enum RoostDormantKind
 {
-    /// <summary>Perch had it open when Perch closed (an Exit, an update, a restart).</summary>
+    /// <summary>A Perch session Perch still holds with no process: it was running when Perch closed (an Exit, an update, a
+    /// restart), or its process ended without the user ending it. It sits where a live one would, not in the Recent
+    /// list (<see cref="RoostDormant.IsHeld"/>).</summary>
     WasOpenInPerch = 0,
     /// <summary>It died without a clean exit (a restart, a crash).</summary>
     Interrupted = 1,
@@ -52,6 +54,10 @@ public sealed record RoostDormant(
 
     /// <summary>Cut off rather than ended: it died without a clean exit, or Perch closing ended it.</summary>
     public bool WasInterrupted => Kind is RoostDormantKind.Interrupted or RoostDormantKind.WasOpenInPerch;
+
+    /// <summary>A Perch session Perch still holds: it keeps its place among the live sessions (the rail's Quiet group,
+    /// any tab) rather than going to the Recent list, until it's woken or the user ends it.</summary>
+    public bool IsHeld => Kind == RoostDormantKind.WasOpenInPerch;
 
     /// <summary>Ended within a shutdown's window, whatever its kind.</summary>
     public bool EndedBeforeShutdown => JustBeforeShutdown || Kind == RoostDormantKind.BeforeShutdown;
@@ -403,7 +409,7 @@ public sealed class RoostRoster
         foreach (var key in _order)
         {
             var e = _entries[key];
-            var group = e.Dormant is not null ? RoostGroup.Recent : GroupFor(e.Session.Status, e.EndedAt is not null);
+            var group = e.Dormant is { IsHeld: false } ? RoostGroup.Recent : GroupFor(e.Session.Status, e.EndedAt is not null);
             var pane = new RoostPane(key, e.Session, group, e.EndedAt, e.Dormant);
             (_closed.Contains(key) ? closed : panes).Add(pane);
         }
@@ -427,7 +433,7 @@ public sealed class RoostRoster
         }
         _rail = rail;
         // OrderBy is stable, so equal names keep first-seen order.
-        RailAlphabetical = panes.OrderBy(p => p.Ended ? 2 : p.IsDormant ? 1 : 0)
+        RailAlphabetical = panes.OrderBy(p => p.Ended ? 2 : p.Dormant is { IsHeld: false } ? 1 : 0)
             .ThenBy(p => p.Session.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
     }
 }

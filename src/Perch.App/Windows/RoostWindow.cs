@@ -360,7 +360,8 @@ internal sealed partial class RoostWindow : Window
     /// <summary>A dormant pane's "Resume in terminal" (<c>claude --resume</c> in a new terminal).</summary>
     public event Action<RoostPane>? ResumeInTerminalRequested;
 
-    /// <summary>A dormant pane's "Dismiss": it leaves the Roost and the Recent list.</summary>
+    /// <summary>A dormant pane's "Dismiss": it leaves the Roost and the Recent list. On a Perch session Perch holds it's
+    /// "End session".</summary>
     public event Action<RoostPane>? DismissRequested;
 
     /// <summary>A dormant pane's first send: the app runs the resume checks, wakes the session and sends the text.
@@ -809,8 +810,17 @@ internal sealed partial class RoostWindow : Window
                 if (pane.IsLive && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
             case RoostPaneAction.Close:
-                // A dormant pane has nothing running to hide: closing it is dismissing it.
-                if (pane.IsDormant) DismissRequested?.Invoke(pane);
+                // A dormant pane has nothing running to hide: closing it is dismissing it. Not one Perch holds — that
+                // would end the session — so closing that one only takes it out of the tab; it stays in the rail.
+                if (pane.Dormant is { IsHeld: true })
+                {
+                    if (_tabs.Unassign(key))
+                    {
+                        if (_focused == key) _focused = null;
+                        Refresh();
+                    }
+                }
+                else if (pane.IsDormant) DismissRequested?.Invoke(pane);
                 else if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
                 break;
         }

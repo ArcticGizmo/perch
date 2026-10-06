@@ -8,7 +8,11 @@ namespace Perch.Avalonia;
 // Session recovery (docs/session-recovery-plan.md, R3/R5): Perch's own ledger of its runs — when this run started, a
 // heartbeat while it's alive, how it ended (a clean Exit, or the OS shutting down) — and of the Perch-controlled
 // sessions it holds. The next run reads it to find the shutdown that ended this one (the Recent list's "just before
-// shutdown" flag) and to bring those sessions back, dormant.
+// shutdown" flag) and to bring those sessions back.
+//
+// A Perch session lives until the user ends it. Whatever stops its process — Perch exiting, an update, a crash, the OS
+// restarting — it stays where it was (an overlay row, a Roost pane) with no claude behind it, and the first reply starts
+// it again with the settings it last ran with.
 public partial class App
 {
     private SessionLedger? _ledger;
@@ -17,17 +21,18 @@ public partial class App
     private bool _recoveryToastPending;
     private DispatcherTimer? _ledgerHeartbeat;
     private bool _ledgerShutdownStamped;
+    private bool _exiting;   // Perch is closing: the processes it stops now come back next run, not this one
     private static readonly Lock LedgerSaveGate = new();
     private CoalescingTrigger? _ledgerSave;   // SaveLedgerSoon: a burst of changes is one save, off the UI thread
 
-    // The Perch sessions this run holds in the ledger, each with the id last written for it (so a /clear's new id
-    // rebinds the entry). A session leaves when the user releases it (ended / handed back) or its process ends.
-    private readonly Dictionary<Services.PerchSession, string?> _heldSessions = new();
+    // The Perch sessions this run holds in the ledger, each with the entry last written for it (so a /clear's new id
+    // rebinds the entry, and an unchanged one isn't rewritten). A session leaves when the user releases it (ended /
+    // handed back) or its process ends.
+    private readonly Dictionary<Services.PerchSession, LedgerSession?> _heldSessions = new();
 
-    // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item, and the top
-    // of the Roost's dormant panes (App.RoostDormant.cs) and of the overlay's Recent list.
-    private List<LedgerSession> _restorable = [];
-    private NativeMenuItem? _reopenItem;
+    // Perch sessions Perch holds with no process: the previous run's (until they're woken), and this run's whose process
+    // Perch stopped or lost. Overlay rows (App.DormantRows.cs) and Roost panes in their usual places (App.RoostDormant.cs).
+    private List<LedgerSession> _parked = [];
 
     // The same guard every other Perch-owned file honours: render/tests disable persistence, and a replay runs against
     // a sandbox, so its stamps would describe a recording rather than this machine.
@@ -65,9 +70,9 @@ public partial class App
 
             // What the previous run held is what comes back — read before this run's own sessions are tracked in.
             var holding = _heldSessions.Keys.Select(s => s.SessionId).OfType<string>().ToHashSet();
-            _restorable = ledger.Sessions.Where(s => !holding.Contains(s.SessionId)).ToList();
+            _parked = ledger.Sessions.Where(s => !holding.Contains(s.SessionId)).ToList();
             foreach (var s in _heldSessions.Keys.ToList()) TrackHeld(s);   // started before the ledger was ready
-            OnRestorableChanged();
+            OnParkedChanged();
             // The toast waits for the Recent build, so it can also count the sessions a restart interrupted.
             _recoveryToastPending = true;
             RefreshRecent();
@@ -92,34 +97,44 @@ public partial class App
     // ── Held sessions ─────────────────────────────────────────────────────────────
 
     /// <summary>Holds a Perch session in the ledger from now on: it started, or a dormant one woke. It comes back
-    /// dormant after a restart unless the user releases it first.</summary>
+    /// not running after a restart unless the user releases it first.</summary>
     private void HoldSession(Services.PerchSession session)
     {
         if (!_heldSessions.ContainsKey(session))
         {
-            _heldSessions[session] = session.SessionId;
+            _heldSessions[session] = null;
             session.TitleChanged += () => TrackHeld(session);
-            // /clear starts a new id under the same process: move the ledger entry with it.
-            session.Conversation.StateChanged += () =>
-            {
-                if (!_heldSessions.TryGetValue(session, out var last) || last == session.SessionId) return;
-                _heldSessions[session] = session.SessionId;
-                if (last is not null && session.SessionId is { } now) _ledger?.Rebind(last, now);
-                SaveLedgerSoon();
-            };
+            // /clear starts a new id under the same process, and a mode switch changes what it would resume with: both
+            // land here (TrackHeld writes only a real change).
+            session.Conversation.StateChanged += () => TrackHeld(session);
             session.Released += ReleaseHeld;
-            // A process that ended (Perch exiting, or a crash) stays in the ledger — that's what comes back.
-            session.Ended += s => _heldSessions.Remove(s);
+            session.Ended += OnHeldEnded;
         }
         TrackHeld(session);
     }
 
     private void TrackHeld(Services.PerchSession session)
     {
-        if (_ledger is not { } ledger || session.SessionId is not { } id) return;
-        ledger.Track(new LedgerSession(id, session.Cwd, session.ConfigDir, session.Title));
-        DropRestorable(id);
+        if (!_heldSessions.TryGetValue(session, out var last) || _ledger is not { } ledger || session.SessionId is not { } id) return;
+        var entry = new LedgerSession(id, session.Cwd, session.ConfigDir, session.Title,
+            session.Model, session.PermissionMode, session.Effort);
+        if (entry == last) return;
+        if (last is not null && last.SessionId != id) ledger.Rebind(last.SessionId, id);
+        _heldSessions[session] = entry;
+        ledger.Track(entry);
+        DropParked(id);
         SaveLedgerSoon();
+    }
+
+    // The process went. Perch stopping it (an update) or losing it (a crash) leaves it where it was, not running; one
+    // that exited by itself, cleanly (/exit), is the user ending it. Perch exiting leaves the ledger as it is: those
+    // come back next run.
+    private void OnHeldEnded(Services.PerchSession session)
+    {
+        _heldSessions.Remove(session);
+        if (_exiting || session.SessionId is not { } id || _ledger?.Find(id) is not { } entry) return;
+        if (session.StoppedByPerch || session.ExitCode != 0) Park(entry);
+        else ForgetHeld(id);
     }
 
     // The user ended it or handed it back to a terminal: it isn't Perch's to bring back.
@@ -129,53 +144,44 @@ public partial class App
         if (session.SessionId is { } id) ForgetHeld(id);
     }
 
-    // Out of the ledger and the restorable list: it won't come back after a restart.
+    // Out of the ledger and the parked list: it's gone from the overlay and the Roost, and won't come back.
     private void ForgetHeld(string sessionId)
     {
         _ledger?.Forget(sessionId);
-        DropRestorable(sessionId);
+        DropParked(sessionId);
         SaveLedgerSoon();
     }
 
-    // ── Restorable sessions ───────────────────────────────────────────────────────
+    // ── Parked sessions ───────────────────────────────────────────────────────────
 
-    /// <summary>Opens every restorable session, dormant, each in its own window. They stay in the ledger until they're
-    /// woken (then held as live) or released, so ignoring a reopened one just brings it back next time.</summary>
-    private void ReopenRestorable()
+    private void Park(LedgerSession entry)
     {
-        var toOpen = _restorable.ToList();
-        _restorable = [];
-        OnRestorableChanged();
-        foreach (var s in toOpen) OpenSessionResume(s.SessionId, s.Cwd);
+        _parked.RemoveAll(s => s.SessionId == entry.SessionId);
+        _parked.Add(entry);
+        OnParkedChanged();
     }
 
-    private void DropRestorable(string sessionId)
+    private void DropParked(string sessionId)
     {
-        if (_restorable.RemoveAll(s => s.SessionId == sessionId) > 0) OnRestorableChanged();
+        if (_parked.RemoveAll(s => s.SessionId == sessionId) > 0) OnParkedChanged();
     }
 
     // A batch in one go: one refold, not one per session.
-    private void DropRestorable(IReadOnlySet<string> sessionIds)
+    private void DropParked(IReadOnlySet<string> sessionIds)
     {
-        if (sessionIds.Count > 0 && _restorable.RemoveAll(s => sessionIds.Contains(s.SessionId)) > 0) OnRestorableChanged();
+        if (sessionIds.Count > 0 && _parked.RemoveAll(s => sessionIds.Contains(s.SessionId)) > 0) OnParkedChanged();
     }
 
-    private void OnRestorableChanged()
+    private void OnParkedChanged()
     {
-        RefoldRoost();   // they're the top of the Roost's dormant panes and the overlay's Recent list
-        if (_reopenItem is not { } item) return;
-        item.Header = _restorable.Count == 1 ? "Reopen Perch session" : $"Reopen Perch sessions ({_restorable.Count})";
-        item.IsVisible = _restorable.Count > 0;
+        RefoldRoost();      // Roost panes
+        PushOverlayRows();  // overlay rows
     }
 
-    /// <summary>The tray's "Reopen Perch sessions" item, hidden until there's something to reopen.</summary>
-    private NativeMenuItem BuildReopenItem()
-    {
-        _reopenItem = new NativeMenuItem("Reopen Perch sessions") { IsVisible = false };
-        _reopenItem.Click += (_, _) => ReopenRestorable();
-        OnRestorableChanged();
-        return _reopenItem;
-    }
+    /// <summary>The launch settings a not-running Perch session last ran with, for its wake. Null when Perch doesn't
+    /// hold it.</summary>
+    private LedgerSession? ParkedEntry(string? sessionId) =>
+        sessionId is null ? null : _parked.FirstOrDefault(s => s.SessionId == sessionId) ?? _ledger?.Find(sessionId);
 
     // ── Exit and shutdown ─────────────────────────────────────────────────────────
 
@@ -196,6 +202,7 @@ public partial class App
     /// The held sessions are already in the ledger, so ending their processes here doesn't lose them.</summary>
     private void StampLedgerExit()
     {
+        _exiting = true;
         _ledgerHeartbeat?.Stop();
         if (_ledgerShutdownStamped || _ledger is not { } ledger) return;
         ledger.MarkCleanExit(DateTime.Now);

@@ -49,6 +49,21 @@ public class RoostDormantTests
     }
 
     [Fact]
+    public void APerchSessionPerchStillHolds_SitsWithTheLiveOnes_NotInRecent()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1", "live")], T0, [D("held", RoostDormantKind.WasOpenInPerch, "Zulu"), D("ended", RoostDormantKind.Ended)]);
+
+        var held = r.Find(Dk("held"))!;
+        Assert.True(held.IsDormant && held.Dormant!.IsHeld);
+        Assert.Equal(RoostGroup.Quiet, held.Group);
+        Assert.Equal([Dk("ended")], Keys(r.Rail.Single(g => g.Group == RoostGroup.Recent).Panes));
+        // A–Z: a held one sorts by name among the live ones, ahead of the Recent ones.
+        Assert.Equal(["1", Dk("held"), Dk("ended")], Keys(r.RailAlphabetical));
+        Assert.False(D("x", RoostDormantKind.Interrupted).IsHeld);
+    }
+
+    [Fact]
     public void ALiveConversationIsNeverAlsoDormant()
     {
         var r = new RoostRoster();
