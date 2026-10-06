@@ -71,6 +71,21 @@ public sealed class ResumeConfigDirTests : IDisposable
     }
 
     [Fact]
+    public void A_shared_projects_tree_resumes_under_the_dir_the_hook_reported()
+    {
+        // projects/ junctioned across every dir: the transcript is found under the primary first, so the tree
+        // can't say which account ran the session. The hook's {sid}.configdir marker can.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        SeedTranscript(primary, "s-shared");
+        Directory.CreateDirectory(primary.SessionsDir);
+        File.WriteAllText(Path.Combine(primary.SessionsDir, "s-shared.configdir"), work.Root);
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-shared", Cwd));
+    }
+
+    [Fact]
     public void An_unknown_session_inherits()
     {
         ClaudeConfigSet.SetForTesting(new[] { MakeDir("primary"), MakeDir("work") });

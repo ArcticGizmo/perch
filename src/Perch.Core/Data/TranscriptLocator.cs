@@ -124,13 +124,30 @@ internal static class TranscriptLocator
     /// the transcript: the root of the config dir that owns it, or <c>null</c> to inherit Perch's own environment
     /// — when the owner is the primary (inheriting <em>is</em> the primary, and pinning it explicitly would move
     /// Claude's <c>.claude.json</c> lookup), or when the transcript can't be found or attributed. A <c>projects/</c>
-    /// tree junctioned across several dirs resolves to its first owner, so there it can't tell accounts apart.
+    /// tree junctioned across several dirs resolves to its first owner, so the hook's <c>{sessionId}.configdir</c>
+    /// marker, when it names a dir in the set, decides instead.
     /// </summary>
     public static string? ResumeConfigRoot(string sessionId, string cwd)
     {
         if (OwningConfigDir(Resolve(sessionId, cwd)) is not { } owner) return null;
-        var primary = ClaudeConfigSet.Instance.Primary;
-        return ClaudeConfigDir.PathComparer.Equals(owner.RealRoot, primary.RealRoot) ? null : owner.Root;
+        var set = ClaudeConfigSet.Instance;
+        if (set.ForRoot(ReadConfigDirMarker(owner, sessionId)) is { } reported) owner = reported;
+        return ClaudeConfigDir.PathComparer.Equals(owner.RealRoot, set.Primary.RealRoot) ? null : owner.Root;
+    }
+
+    // The config-dir root the hook stamped for this session, or null when absent or unreadable.
+    private static string? ReadConfigDirMarker(ClaudeConfigDir owner, string sessionId)
+    {
+        try
+        {
+            var path = Path.Combine(owner.SessionsDir, sessionId + ".configdir");
+            if (!File.Exists(path)) return null;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs);
+            var text = reader.ReadToEnd().Trim();
+            return text.Length > 0 ? text : null;
+        }
+        catch { return null; }
     }
 
     /// <summary>For <see cref="LaunchLog"/>: how <see cref="ResumeConfigRoot"/> decided, as one log line — the transcript it found, the
