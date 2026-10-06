@@ -970,6 +970,11 @@ internal sealed class SessionMonitor : IDisposable
                 BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
             };
 
+            // Write down which account this session runs under while it's live: once it ends, the hook deletes its
+            // marker, and a shared projects/ can't say. A resume reads it back (TranscriptLocator.ResumeDir).
+            if (session.AttributedConfigDir is { } account)
+                SessionAccounts.Remember(sessionId, account.Root);
+
             if (status == SessionStatus.NeedsAttention
                 && (fireSubsCompletion || fireCompletionSettled))
                 NeedsAttention?.Invoke(session);
@@ -1101,7 +1106,7 @@ internal sealed class SessionMonitor : IDisposable
 
     // Reads a small single-line text marker (e.g. {sessionId}.configdir), trimmed; null when the file is
     // missing, blank, or unreadable. Never throws.
-    private static string? ReadMarker(string path)
+    internal static string? ReadMarker(string path)
     {
         try
         {

@@ -28,6 +28,8 @@ internal sealed class ClaudeSessionController : IDisposable
     private StreamWriter? _stdin;
     // The sessions/ dir the lock sidecar lives in: the pinned config dir's, or null for the primary.
     private string? _lockDir;
+    // The CLAUDE_CONFIG_DIR it was launched under (null = Perch's own), recorded against each id it runs as.
+    private string? _configDir;
     private readonly Lock _writeLock = new();
     private int _requestCounter;
 
@@ -99,6 +101,7 @@ internal sealed class ClaudeSessionController : IDisposable
         // Ownership is claimed before the process exists so nothing can race the pre-init window; a
         // failed launch releases it again below.
         _lockDir = lockDir;
+        _configDir = configDir;
         SessionId = id;
         Cwd = cwd;
         ControlledSessions.Register(id);
@@ -118,6 +121,9 @@ internal sealed class ClaudeSessionController : IDisposable
         }
         _process = process;
         _stdin = process.StandardInput;
+        // Which account this id runs under, for a later resume (see SessionAccounts): the hook's own record of it is
+        // deleted when the session ends, and a projects/ shared across config dirs can't say.
+        SessionAccounts.Remember(id, configDir);
 
         // The control-protocol handshake; the CLI answers with its capability catalogue (ignored here).
         WriteLine(new JsonObject
@@ -157,6 +163,7 @@ internal sealed class ClaudeSessionController : IDisposable
                         SessionId = init.SessionId;
                         ControlledSessions.Register(init.SessionId);   // focus routing skips owned sessions
                         SessionLock.Acquire(init.SessionId, Cwd, _lockDir);
+                        SessionAccounts.Remember(init.SessionId, _configDir);   // /clear: same account, new id
                     }
                     EventReceived?.Invoke(ev);
                 }

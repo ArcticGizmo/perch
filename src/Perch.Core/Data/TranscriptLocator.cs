@@ -120,21 +120,55 @@ internal static class TranscriptLocator
     }
 
     /// <summary>
-    /// The <c>CLAUDE_CONFIG_DIR</c> a <c>claude --resume &lt;sessionId&gt;</c> must run under so the CLI finds
-    /// the transcript: the root of the config dir that owns it, or <c>null</c> to inherit Perch's own environment
-    /// — when the owner is the primary (inheriting <em>is</em> the primary, and pinning it explicitly would move
-    /// Claude's <c>.claude.json</c> lookup), or when the transcript can't be found or attributed. A <c>projects/</c>
-    /// tree junctioned across several dirs resolves to its first owner, so there it can't tell accounts apart.
+    /// The <c>CLAUDE_CONFIG_DIR</c> a <c>claude --resume &lt;sessionId&gt;</c> must run under: the account the session
+    /// ran under, or <c>null</c> to inherit Perch's own environment — when that's the primary (inheriting <em>is</em>
+    /// the primary, and pinning it explicitly would move Claude's <c>.claude.json</c> lookup), or when the transcript
+    /// can't be found or attributed. See <see cref="ResumeDir"/> for how the account is chosen.
     /// </summary>
     public static string? ResumeConfigRoot(string sessionId, string cwd)
     {
-        if (OwningConfigDir(Resolve(sessionId, cwd)) is not { } owner) return null;
-        var primary = ClaudeConfigSet.Instance.Primary;
-        return ClaudeConfigDir.PathComparer.Equals(owner.RealRoot, primary.RealRoot) ? null : owner.Root;
+        if (ResumeDir(sessionId, cwd).Dir is not { } dir) return null;
+        return ClaudeConfigDir.PathComparer.Equals(dir.RealRoot, ClaudeConfigSet.Instance.Primary.RealRoot) ? null : dir.Root;
+    }
+
+    /// <summary>
+    /// The config dir to resume <paramref name="sessionId"/> under, and which source chose it (for the launch log).
+    /// The transcript's owner is the dir whose <c>projects/</c> holds it, but a <c>projects/</c> tree junctioned
+    /// across several dirs resolves to its first owner, so on its own it can't tell accounts apart. Checked in order:
+    /// the account Perch saw the session run under (<see cref="SessionAccounts"/>), the hook's
+    /// <c>{sessionId}.configdir</c> marker (present only while the session hasn't ended), then the owner. A candidate
+    /// is taken only when its <c>projects/</c> is the same real folder as the owner's, so the CLI can find the
+    /// transcript there.
+    /// </summary>
+    internal static (ClaudeConfigDir? Dir, string Source) ResumeDir(string sessionId, string cwd)
+    {
+        if (OwningConfigDir(Resolve(sessionId, cwd)) is not { } owner) return (null, "no transcript");
+        var set = ClaudeConfigSet.Instance;
+        if (SeesTranscript(set.ForRoot(SessionAccounts.Recall(sessionId)), owner) is { } remembered)
+            return (remembered, "remembered");
+        if (SeesTranscript(ReportedConfigDir(set, sessionId), owner) is { } reported)
+            return (reported, "marker");
+        return (owner, "transcript owner");
+    }
+
+    // The candidate when it reads the owner's projects/ (the same dir, or junctioned onto the same folder), else null.
+    private static ClaudeConfigDir? SeesTranscript(ClaudeConfigDir? candidate, ClaudeConfigDir owner) =>
+        candidate is not null && ClaudeConfigDir.PathComparer.Equals(
+            ClaudeConfigSet.ResolveReal(candidate.ProjectsDir), ClaudeConfigSet.ResolveReal(owner.ProjectsDir))
+            ? candidate : null;
+
+    // The dir the hook's {sessionId}.configdir marker names. The hook writes it to the sessions/ of the dir the session
+    // ran under, which needn't be the transcript owner's (only projects/ may be shared), so every sessions/ is checked.
+    private static ClaudeConfigDir? ReportedConfigDir(ClaudeConfigSet set, string sessionId)
+    {
+        foreach (var sessions in set.DistinctSessionsDirs())
+            if (set.ForRoot(SessionMonitor.ReadMarker(Path.Combine(sessions, sessionId + ".configdir"))) is { } dir)
+                return dir;
+        return null;
     }
 
     /// <summary>For <see cref="LaunchLog"/>: how <see cref="ResumeConfigRoot"/> decided, as one log line — the transcript it found, the
-    /// owner it attributed it to, the primary, and the whole config-dir set.</summary>
+    /// owner it attributed it to, the dir it chose and why, the primary, and the whole config-dir set.</summary>
     public static string DescribeResume(string sessionId, string cwd)
     {
         try
@@ -142,9 +176,11 @@ internal static class TranscriptLocator
             var set = ClaudeConfigSet.Instance;
             var path = Resolve(sessionId, cwd);
             var owner = OwningConfigDir(path);
+            var (chosen, source) = ResumeDir(sessionId, cwd);
             var dirs = string.Join(", ", set.All.Select(d => $"{d.Root} (real {d.RealRoot})"));
             return $"session={sessionId} cwd={LaunchLog.Show(cwd)} transcript={LaunchLog.Show(path)} " +
-                   $"owner={LaunchLog.Show(owner?.Root)} primary={LaunchLog.Show(set.Primary.Root)} " +
+                   $"owner={LaunchLog.Show(owner?.Root)} chosen={LaunchLog.Show(chosen?.Root)} via={source} " +
+                   $"primary={LaunchLog.Show(set.Primary.Root)} " +
                    $"-> CLAUDE_CONFIG_DIR={LaunchLog.Show(ResumeConfigRoot(sessionId, cwd))} | set: {dirs}";
         }
         catch (Exception ex) { return $"session={sessionId} describe failed: {ex.Message}"; }
