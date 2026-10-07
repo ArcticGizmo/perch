@@ -270,10 +270,12 @@ public class BackgroundTaskTests
     [Fact]
     public void Output_PathFor_PrefersNamedThenSiblingDirectory()
     {
-        var named = new BackgroundTask("b1") { OutputFile = @"C:\t\tasks\b1.output" };
+        // Host-native paths: on macOS a backslash isn't a separator, so a C:\ literal has no directory.
+        var tasksDir = Path.Combine(Path.GetTempPath(), "t", "tasks");
+        var named = new BackgroundTask("b1") { OutputFile = Path.Combine(tasksDir, "b1.output") };
         var monitor = new BackgroundTask("b2");
-        Assert.Equal(@"C:\t\tasks\b1.output", BackgroundTaskOutput.PathFor(named, [], null, null));
-        Assert.Equal(Path.Combine(@"C:\t\tasks", "b2.output"), BackgroundTaskOutput.PathFor(monitor, [named], null, null));
+        Assert.Equal(Path.Combine(tasksDir, "b1.output"), BackgroundTaskOutput.PathFor(named, [], null, null));
+        Assert.Equal(Path.Combine(tasksDir, "b2.output"), BackgroundTaskOutput.PathFor(monitor, [named], null, null));
         Assert.EndsWith(Path.Combine("claude", "C--p", "sid", "tasks", "b2.output"),
             BackgroundTaskOutput.PathFor(monitor, [], @"C:\p", "sid"));
     }
