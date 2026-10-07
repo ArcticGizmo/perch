@@ -162,7 +162,26 @@ acceptance, the fetch path, suggestions and persistence. `FeedInjectionTests` ad
 an unforgeable split and cleaned captions. The block-level rule and the nonce were both mutation-checked. Render
 probes: `feed_story_xkcd{,_light,_off}`.
 
-Still not built from F7: OPML import/export, and authenticated feeds.
+**F7, OPML part, built** (on `feeds`). `FeedOpml` (Core) does both directions:
+
+- **Import** treats the file as untrusted, like a feed. It reads it through the parser's own hardened reader
+  settings (`FeedParser.ReaderSettings`, now shared), with a depth pre-scan, a 2 MB cap, at most 500 feeds and
+  no fetching.
+  - It collects every `outline` with an `xmlUrl`, however the folders nest.
+  - Addresses must pass `FeedUrl.Safe` as absolute http(s). Titles (`title`, else `text`) are cleaned.
+  - Feeds you already follow, and duplicates within the file, drop out.
+- **Export** writes OPML 2.0 through `XDocument`, so everything is escaped. Disabled feeds are included.
+- **Feeds page:** "Import OPML…" and "Export OPML…" buttons.
+  - Import parses off the UI thread, then confirms with a summary: what will be added, how many are already
+    followed, and how many were skipped.
+  - Imported feeds start quiet, with images off. The file's names aren't kept as title overrides, so each feed
+    shows its own title once fetched.
+
+Tests: `FeedOpmlTests` (a reader-style export with nested folders, duplicates, unsafe addresses, DOCTYPE
+refusal, the depth, size and count caps, cleaned titles, non-OPML files, and an export → import round trip).
+The Feeds page isn't render-verified (no Settings harness).
+
+Still not built from F7: authenticated feeds.
 
 **Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
 YouTube channel feed) and an interactive pass over the keys, slides, tray switching and read-on-show in the

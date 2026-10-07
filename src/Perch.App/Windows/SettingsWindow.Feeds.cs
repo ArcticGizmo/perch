@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Perch.Avalonia.Theming;
 using Perch.Data;
 using Perch.Feeds;
@@ -20,6 +21,8 @@ internal sealed partial class SettingsWindow
     private StackPanel _feedsList = null!;
     private Button? _feedsMarkRead, _feedsCheckNow;
     private StackPanel? _feedSuggestions;
+    private Button? _feedsExport;
+    private TextBlock? _feedsOpmlStatus;
 
     /// <summary>Re-reads the subscriptions from settings (a feed was changed elsewhere, e.g. its images switched
     /// from the story player), so this page's copy can't later write the old state back.</summary>
@@ -70,6 +73,24 @@ internal sealed partial class SettingsWindow
         _feedSuggestions = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
         page.Children.Add(_feedSuggestions);
 
+        // OPML: the subscription-list format every feed reader imports and exports.
+        var opmlRow = SettingsUi.ButtonRow();
+        var import = SettingsUi.FlatButton("Import OPML…");
+        import.Click += async (_, _) => await ImportOpmlAsync();
+        opmlRow.Children.Add(import);
+        _feedsExport = SettingsUi.FlatButton("Export OPML…");
+        _feedsExport.Click += async (_, _) => await ExportOpmlAsync();
+        opmlRow.Children.Add(_feedsExport);
+        page.Children.Add(opmlRow);
+        _feedsOpmlStatus = new TextBlock
+        {
+            FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap, IsVisible = false,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        page.Children.Add(_feedsOpmlStatus);
+        page.Children.Add(SettingsUi.BodyText(
+            "Bring your list over from another feed reader, or back it up. Imported feeds start quiet, with images off."));
+
         page.Children.Add(SettingsUi.Separator());
 
         page.Children.Add(SettingsUi.TitleRow("Check every", BuildFeedsIntervalStepper()));
@@ -99,6 +120,7 @@ internal sealed partial class SettingsWindow
             _feedsMarkRead.IsEnabled = _feeds.Any(f => (_hooks.FeedStatus?.Invoke(f.Id)?.UnreadCount ?? 0) > 0);
         if (_feedsCheckNow is not null)
             _feedsCheckNow.IsEnabled = _settings.ShowFeeds && _feeds.Any(f => f.Enabled);
+        if (_feedsExport is not null) _feedsExport.IsEnabled = _feeds.Count > 0;
         RebuildFeedSuggestions();
         if (_feeds.Count == 0)
         {
@@ -177,6 +199,94 @@ internal sealed partial class SettingsWindow
         grid.Children.Add(remove);
 
         return grid;
+    }
+
+    // Import: pick a file, parse it off the UI thread (FeedOpml treats it as untrusted), say what it holds, and add
+    // the new feeds only once the user agrees. Nothing is fetched until they're subscriptions like any other.
+    private async System.Threading.Tasks.Task ImportOpmlAsync()
+    {
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import feeds (OPML)", AllowMultiple = false,
+                FileTypeFilter = [new FilePickerFileType("OPML") { Patterns = ["*.opml", "*.xml"] }, FilePickerFileTypes.All],
+            });
+            if (files.Count == 0) return;
+
+            var existing = _feeds.Select(f => f.Clone()).ToList();
+            var file = files[0];
+            var result = await System.Threading.Tasks.Task.Run(async () =>
+            {
+                await using var stream = await file.OpenReadAsync();
+                return FeedOpml.Parse(stream, existing);
+            });
+            if (!IsVisible) return;
+
+            if (result.Error is { } error) { ShowOpmlStatus("⚠ " + error, warn: true); return; }
+            string extra = string.Join(", ", new[]
+            {
+                result.AlreadyFollowed > 0 ? $"{result.AlreadyFollowed} already followed" : null,
+                result.Skipped > 0 ? $"{result.Skipped} skipped (not a web address, or over the {FeedOpml.MaxFeeds} limit)" : null,
+            }.Where(s => s is not null));
+            if (result.Feeds.Count == 0)
+            {
+                ShowOpmlStatus("No new feeds in that file" + (extra.Length > 0 ? $" ({extra})." : "."), warn: false);
+                return;
+            }
+
+            var names = string.Join(", ", result.Feeds.Take(5).Select(f => f.Title ?? FeedUrl.DisplayHost(f.Url)));
+            if (result.Feeds.Count > 5) names += $" and {result.Feeds.Count - 5} more";
+            string count = result.Feeds.Count == 1 ? "1 feed" : $"{result.Feeds.Count} feeds";
+            bool ok = await ConfirmDialog.ShowAsync(this, "Import feeds",
+                $"Add {count}: {names}." + (extra.Length > 0 ? $"\n\n{extra}." : "") +
+                "\n\nThey start quiet (only what's published from now lights up), with images off.",
+                "Import", "Cancel");
+            if (!ok) return;
+
+            var now = DateTime.UtcNow;
+            foreach (var f in result.Feeds)
+                _feeds.Add(new FeedSubscription { Url = f.Url.AbsoluteUri, Enabled = true, AddedUtc = now });
+            RebuildFeedsList();
+            RaiseFeedsChanged();
+            ShowOpmlStatus($"Added {count}.", warn: false);
+        }
+        catch
+        {
+            ShowOpmlStatus("⚠ Couldn't import that file.", warn: true);
+        }
+    }
+
+    private async System.Threading.Tasks.Task ExportOpmlAsync()
+    {
+        try
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export feeds (OPML)", SuggestedFileName = "perch-feeds.opml", DefaultExtension = "opml",
+                FileTypeChoices = [new FilePickerFileType("OPML") { Patterns = ["*.opml"] }],
+            });
+            if (file is null) return;   // cancelled
+
+            var xml = FeedOpml.Export(_feeds, f => FeedRowTitle(f, _hooks.FeedStatus?.Invoke(f.Id)), DateTime.UtcNow);
+            await using var stream = await file.OpenWriteAsync();
+            if (stream.CanSeek) stream.SetLength(0);   // overwriting a longer file mustn't leave its tail
+            await using var writer = new System.IO.StreamWriter(stream, new System.Text.UTF8Encoding(false));
+            await writer.WriteAsync(xml);
+            ShowOpmlStatus(_feeds.Count == 1 ? "Exported 1 feed." : $"Exported {_feeds.Count} feeds.", warn: false);
+        }
+        catch
+        {
+            ShowOpmlStatus("⚠ Couldn't write the file.", warn: true);
+        }
+    }
+
+    private void ShowOpmlStatus(string text, bool warn)
+    {
+        if (_feedsOpmlStatus is null) return;
+        _feedsOpmlStatus.Text = text;
+        _feedsOpmlStatus.Foreground = warn ? new SolidColorBrush(Palette.Yellow) : Palette.MutedBrush;
+        _feedsOpmlStatus.IsVisible = true;
     }
 
     // "Suggested" one-click adds for feeds not yet followed (FeedSuggestions); the section goes once all are added.

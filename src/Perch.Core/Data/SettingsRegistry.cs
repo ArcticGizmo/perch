@@ -385,9 +385,11 @@ internal static class SettingsRegistry
             nameof(AppSettings.QuickLinks)),
 
         Info("feed-subscriptions", "Feed subscriptions",
-            "The Atom and RSS feeds shown as story-style heads on the overlay. Add, edit, reorder or remove them.",
+            "The Atom and RSS feeds shown as story-style heads on the overlay. Add, edit, reorder or remove them, " +
+            "or import and export the list as OPML.",
             SettingSurface.Integrations, SettingKind.List,
-            ["feed", "feeds", "atom", "rss", "blog", "news", "subscribe", "subscription", "stories", "releases"],
+            ["feed", "feeds", "atom", "rss", "blog", "news", "subscribe", "subscription", "stories", "releases",
+             "opml", "import", "export", "xkcd"],
             PreviewTarget.Feeds, nameof(AppSettings.Feeds)),
 
         Toggle("feeds", "Feeds",

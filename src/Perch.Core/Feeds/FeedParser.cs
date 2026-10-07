@@ -30,8 +30,9 @@ internal static partial class FeedParser
     private static readonly XNamespace AtomNs = "http://www.w3.org/2005/Atom";
     private static readonly XName XmlBase = XNamespace.Xml + "base";
 
-    // Stated explicitly — never left to defaults — so a refactor can't quietly loosen them.
-    private static XmlReaderSettings ReaderSettings() => new()
+    // Stated explicitly — never left to defaults — so a refactor can't quietly loosen them. Shared with FeedOpml, so
+    // every untrusted XML Perch reads goes through the one configuration.
+    internal static XmlReaderSettings ReaderSettings() => new()
     {
         DtdProcessing = DtdProcessing.Prohibit,
         XmlResolver = null,
