@@ -29,6 +29,8 @@ public enum OverlaySection
     Todo,
     /// <summary>The one-line GitHub alerts strip: how many open PRs need you.</summary>
     GitHub,
+    /// <summary>The one-line row of story-style feed heads (docs/feeds-plan.md).</summary>
+    Feeds,
     /// <summary>The session rows (and, directly beneath them, the daemon-worker strip). Sessions that ended lately
     /// aren't a section: they're behind the Recent button on this section's "+ New session" row.</summary>
     Sessions,
@@ -55,6 +57,7 @@ public static class OverlaySectionOrder
         OverlaySection.QuickLinks,
         OverlaySection.Hypertree,
         OverlaySection.Todo,
+        OverlaySection.Feeds,
         OverlaySection.GitHub,
         OverlaySection.Sessions,
         OverlaySection.Friends,

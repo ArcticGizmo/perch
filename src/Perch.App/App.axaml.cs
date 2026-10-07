@@ -101,6 +101,7 @@ public partial class App : Application
     // GitHub alerts: the poller behind the overlay's one-line GitHub strip, and the reused list window it opens.
     private Services.GitHubAlertsMonitorHost? _gitHubHost;
     private Services.FeedsMonitorHost? _feedsHost;
+    private readonly Services.FeedIconCache _feedIcons = new();
     private GitHubAlertsWindow? _gitHubWindow;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
@@ -508,7 +509,18 @@ public partial class App : Application
             // ShowFeeds). Nothing is fetched while it's off. See docs/feeds-plan.md.
             _feedsHost = new Services.FeedsMonitorHost(
                 new Perch.Feeds.FeedsService(Perch.Feeds.FeedStore.Default(), new Perch.Feeds.FeedFetcher()), _sessionLock);
-            _feedsHost.Changed += () => _settings?.RefreshFeedStatus();
+            _feedsHost.Changed += () => { PushFeedsRow(); _settings?.RefreshFeedStatus(); };
+            _feedIcons.Loaded += PushFeedsRow;
+            _overlay.Canvas.FeedStoryRequested += OpenFeedStory;
+            _overlay.Canvas.FeedAddRequested += () => OpenSettings("feeds");
+            _overlay.Canvas.FeedSettingsRequested += () => OpenSettings("feeds");
+            _overlay.Canvas.FeedEditRequested += _ => OpenSettings("feeds");
+            _overlay.Canvas.FeedRefreshRequested += id => _feedsHost?.RefreshNow(id);
+            _overlay.Canvas.FeedMarkAllReadRequested += id => _feedsHost?.MarkAllRead(id);
+            _overlay.Canvas.FeedOpenSiteRequested += id =>
+            {
+                if (_feedsHost?.Head(id)?.SiteUrl is { } site) PlatformServices.UrlOpener.Open(site);
+            };
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
@@ -1920,6 +1932,39 @@ public partial class App : Application
             () => new GitHubAlertsWindow(host),
             () => _gitHubWindow = null,
             w => w.Retarget());
+    }
+
+    // Pushes the feeds engine's heads onto the overlay row, with icons from the off-thread decode cache.
+    private void PushFeedsRow()
+    {
+        if (_overlay is null || _feedsHost is null) return;
+        var heads = _feedsHost.Current.Heads
+            .Select(h => new OverlayCanvas.FeedHeadView(h.SubId, h.Title, _feedIcons.Get(h.IconPath), h.UnreadCount,
+                h.LatestTitle, h.LatestUtc, h.Error, h.SiteUrl))
+            .ToList();
+        _overlay.Canvas.SetFeedsRow(heads);
+    }
+
+    // A head (or the "+N" chip, null) was clicked. Until the story player lands (F4), open the feed's oldest unread
+    // entry in the browser and mark it read — or its website when nothing is unread.
+    private void OpenFeedStory(string? subId)
+    {
+        if (_feedsHost is not { } host) return;
+        var stories = host.Current.Stories;
+        var story = subId is null
+            ? stories.FirstOrDefault(s => s.UnreadIds.Count > 0) ?? stories.FirstOrDefault()
+            : stories.FirstOrDefault(s => s.SubId == subId);
+        if (story is null) return;
+        var next = story.Entries.LastOrDefault(e => story.UnreadIds.Contains(e.Id));
+        if (next is not null)
+        {
+            if (next.Url is { } url) PlatformServices.UrlOpener.Open(url);
+            host.MarkRead(story.SubId, next.Id);
+        }
+        else if (host.Head(story.SubId)?.SiteUrl is { } site)
+        {
+            PlatformServices.UrlOpener.Open(site);
+        }
     }
 
     private void OpenAchievements() =>

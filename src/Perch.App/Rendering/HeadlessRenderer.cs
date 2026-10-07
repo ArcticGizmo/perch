@@ -327,6 +327,34 @@ internal static class HeadlessRenderer
         RenderGitHubAlertsWindow(outDir);
         RenderFeedDialog(outDir);
 
+        // Feeds row: heads with news (gradient ring + count; one in double figures → "9+"), read heads, a failing
+        // one (yellow badge), one with a real icon clipped round; then a narrow panel where the tail folds into
+        // "+N" (its dot lit because a folded head has news), and the empty "Add a feed" row.
+        global::Avalonia.Media.Imaging.Bitmap? perchIcon = null;
+        try
+        {
+            perchIcon = new global::Avalonia.Media.Imaging.Bitmap(
+                global::Avalonia.Platform.AssetLoader.Open(new Uri("avares://perch/Assets/icon.png")));
+        }
+        catch { }
+        void FeedsProbe(string file, IReadOnlyList<OverlayCanvas.FeedHeadView> heads, double dpi = 96, double? width = null)
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.SetShowFeeds(true);
+            c.SetFeedsRow(heads);
+            if (width is { } w) c.SetFloatingWidth(w);
+            RenderControl(c, Path.Combine(outDir, file), dpi);
+        }
+        var feedHeads = SampleData.FeedHeads().ToList();
+        feedHeads[3] = feedHeads[3] with { Icon = perchIcon };
+        FeedsProbe("overlay_feeds_1x.png", feedHeads);
+        FeedsProbe("overlay_feeds_1.5x.png", feedHeads, 144);
+        var manyHeads = feedHeads.Concat(Enumerable.Range(1, 6).Select(i =>
+            new OverlayCanvas.FeedHeadView($"x{i}", $"Extra feed {i}", null, i == 6 ? 1 : 0, null, null, null, null))).ToList();
+        FeedsProbe("overlay_feeds_narrow_1x.png", manyHeads, width: OverlayCanvas.MinOverlayWidthDip);
+        FeedsProbe("overlay_feeds_empty_1x.png", []);
+
         // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
         // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
         var recentProbe = new OverlayCanvas();

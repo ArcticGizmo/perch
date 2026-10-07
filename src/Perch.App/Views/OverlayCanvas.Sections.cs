@@ -8,7 +8,7 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// The overlay panel's section ordering — the single source of truth for the vertical sequence of movable
-/// sections (system info, claude metrics, quick links, hypertree, todo, github, sessions, friends, media, call). The
+/// sections (system info, claude metrics, quick links, hypertree, todo, feeds, github, sessions, friends, media, call). The
 /// header (top) and outage status bar (bottom) are fixed chrome and are laid out directly by <c>Draw</c>, so
 /// they aren't members here.
 ///
@@ -48,6 +48,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripVisible,
         OverlaySection.Todo          => TodosStripVisible,
         OverlaySection.GitHub        => GitHubStripVisible,
+        OverlaySection.Feeds         => FeedsRowVisible,
         OverlaySection.Sessions      => true,
         OverlaySection.Friends       => FeedStripVisible || SocialSignInStripVisible,
         OverlaySection.Media         => MediaStripVisible,
@@ -65,6 +66,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripHeight,
         OverlaySection.Todo          => TodosStripHeight,
         OverlaySection.GitHub        => GitHubStripHeight,
+        OverlaySection.Feeds         => FeedsRowHeight,
         OverlaySection.Sessions      => SessionsSectionHeight,
         OverlaySection.Friends       => FriendsSectionHeight,
         OverlaySection.Media         => MediaStripHeight,
@@ -129,6 +131,7 @@ public sealed partial class OverlayCanvas
             case OverlaySection.Hypertree:     DrawHypertreeStrip(ctx, width); break;
             case OverlaySection.Todo:          DrawTodosStrip(ctx, width, top); break;
             case OverlaySection.GitHub:        DrawGitHubStrip(ctx, width, top); break;
+            case OverlaySection.Feeds:         DrawFeedsRow(ctx, width, top); break;
             case OverlaySection.Sessions:      PaintSessions(ctx, width, top); break;
             case OverlaySection.Friends:
                 if (FeedStripVisible) DrawSocialRegion(ctx, width, top);

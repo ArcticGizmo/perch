@@ -303,6 +303,21 @@ internal static class SampleData
         new("t-3", "Cut the next release", "Fri", Overdue: false),
     ];
 
+    /// <summary>The overlay feeds row: two feeds with news (one in double figures), two read, one failing — icons
+    /// left out so the initials fallback shows (the app decodes real ones off the UI thread).</summary>
+    public static IReadOnlyList<Views.OverlayCanvas.FeedHeadView> FeedHeads()
+    {
+        var now = DateTime.UtcNow;
+        return
+        [
+            new("rt", "Release notes from runtime", null, 2, ".NET 10.0.3", now.AddHours(-2), null, "https://github.com/dotnet/runtime/releases"),
+            new("av", "Avalonia blog", null, 12, "Avalonia 12 preview 3", now.AddHours(-5), null, "https://avaloniaui.net/blog"),
+            new("hn", "Hacker News: Show HN", null, 0, "Show HN: A tiny Atom reader", now.AddDays(-1), null, null),
+            new("gh", "GitHub Changelog", null, 0, "Copilot code review updates", now.AddDays(-2), null, "https://github.blog/changelog"),
+            new("st", "Status page", null, 0, null, null, "404 Not Found", null),
+        ];
+    }
+
     /// <summary>A parsed feed for the feed dialog / row / story renders: a releases feed with a few entries.</summary>
     public static Perch.Feeds.FeedDoc FeedDoc()
     {
