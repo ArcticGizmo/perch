@@ -134,6 +134,36 @@ through the gate, feed-level URLs, inert content, clean text, xml:base poisoning
 links, and private candidates dropped. The private-candidate filter was mutation-checked. The new render probe is
 `feed_dialog_discovered`.
 
+**F7, images part, built** (on `feeds`; asked for so Perch can offer xkcd). It adds:
+
+- **Opt-in per feed.** `FeedSubscription.ShowImages` defaults to off. It's set by a checkbox in `FeedDialog`
+  (with a note that image hosts can see when you read), by "Show images" in the story player's ⋯ menu, and by a
+  "This post has images. Show images for this feed" line on a card that has stubbed images. Off, nothing changes:
+  images stay link stubs.
+- **Sanitizer.** `HtmlToMarkdown.ConvertParts` lifts block-level images out as `FeedImage`s, in order between
+  Markdown parts. Block level means directly in a paragraph, figure or other plain container, or a link (which
+  then gives up its target).
+  - Images inside lists, tables, quotes, headings or emphasis stay stubs, so a split can't cut a structure in two.
+  - The split marker carries a fresh random nonce per call, so no feed text, verbatim code or attribute can forge
+    one. The Markdown still never contains image syntax.
+  - `img@title` is now kept as a cleaned caption: xkcd's hover text. Each entry is capped at 12 images.
+- **Fetching.** `FeedFetcher.FetchImageAsync` shares the icon path: fenced, with the same private-host
+  exception and manual vetted redirects. It's capped at 5 MB and accepted only on the header sniff (PNG, JPEG,
+  GIF, WebP or BMP within 25 MP). SVG and anything else is refused, and the server's content type is ignored.
+  - Both handlers now run with **`UseCookies = false`**, so image hosts can't recognise you across fetches.
+  - The story player fetches a card's images only when it's shown (no prefetch). It decodes them off the UI
+    thread through `BoundedBitmap.Load(bytes, …)` at 720 px wide and caches up to 40 in memory. A failure shows
+    "couldn't be shown. Open it in the browser ↗".
+- **Suggestions.** `FeedSuggestions` (Core) offers **xkcd** (`https://xkcd.com/atom.xml`, images on) as a
+  one-click "Suggested" add on the Feeds page. It's hidden once followed. The Settings row says "images on".
+
+Tests: `FeedImageTests` covers the xkcd shape, ordering, linked images, structure stubs, the cap, fallback,
+acceptance, the fetch path, suggestions and persistence. `FeedInjectionTests` adds unsafe sources, inert parts,
+an unforgeable split and cleaned captions. The block-level rule and the nonce were both mutation-checked. Render
+probes: `feed_story_xkcd{,_light,_off}`.
+
+Still not built from F7: OPML import/export, and authenticated feeds.
+
 **Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
 YouTube channel feed) and an interactive pass over the keys, slides, tray switching and read-on-show in the
 running app. None of it has been run live.

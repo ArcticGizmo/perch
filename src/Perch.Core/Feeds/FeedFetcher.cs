@@ -49,6 +49,9 @@ internal sealed class FeedFetcher : IDisposable
 {
     public const int MaxRedirects = 5;
     public const int MaxIconBytes = 256 * 1024;
+    public const int MaxImageBytes = 5 * 1024 * 1024;
+    /// <summary>A post image's decoded size cap: ~100 MB of pixels. Comics and photos fit; decompression bombs don't.</summary>
+    public const long MaxImagePixels = 25_000_000;
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromHours(24);
 
     private readonly HttpClient _open;
@@ -89,6 +92,8 @@ internal sealed class FeedFetcher : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(10),
             MaxResponseHeadersLength = 64,   // KB
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            // Feeds need no cookies, and keeping none means an image host can't recognise you across fetches.
+            UseCookies = false,
         };
         if (fenced) h.ConnectCallback = (ctx, ct) => FencedConnectAsync(ctx, ct, _resolve);
         return h;
@@ -220,9 +225,25 @@ internal sealed class FeedFetcher : IDisposable
     /// from its own host (<paramref name="privateHost"/>). Returns the bytes only if <see cref="FeedIcon"/>
     /// accepts them; null on any failure.
     /// </summary>
-    public async Task<byte[]?> FetchIconAsync(Uri iconUrl, string? privateHost, CancellationToken ct)
+    public Task<byte[]?> FetchIconAsync(Uri iconUrl, string? privateHost, CancellationToken ct) =>
+        FetchFencedAsync(iconUrl, privateHost, MaxIconBytes, b => FeedIcon.Validate(b) is not null, ct);
+
+    /// <summary>
+    /// Fetches an image from a post, for a feed the user turned images on for (F7). Fenced like an icon — a feed
+    /// can't point Perch into the local network — with the same private-host exception. The bytes come back only
+    /// if their header (never the server's content type) says PNG, JPEG, GIF, WebP or BMP within
+    /// <see cref="MaxImagePixels"/>; SVG and anything else is refused. Null on any failure.
+    /// </summary>
+    public Task<byte[]?> FetchImageAsync(Uri imageUrl, string? privateHost, CancellationToken ct) =>
+        FetchFencedAsync(imageUrl, privateHost, MaxImageBytes, IsAcceptableImage, ct);
+
+    internal static bool IsAcceptableImage(byte[] bytes) =>
+        ImageHeader.TryReadSize(new MemoryStream(bytes, writable: false)) is var (w, h) && (long)w * h <= MaxImagePixels;
+
+    private async Task<byte[]?> FetchFencedAsync(Uri url, string? privateHost, int cap, Func<byte[], bool> accept,
+        CancellationToken ct)
     {
-        if (FeedUrl.Safe(iconUrl.OriginalString, null) is not { } start) return null;
+        if (FeedUrl.Safe(url.OriginalString, null) is not { } start) return null;
         var client = privateHost is not null && string.Equals(start.IdnHost, privateHost, StringComparison.OrdinalIgnoreCase)
             ? _open : _fenced;
         try
@@ -233,8 +254,8 @@ internal sealed class FeedFetcher : IDisposable
             using (resp)
             {
                 if (!resp.IsSuccessStatusCode) return null;
-                var bytes = await ReadCappedAsync(resp, MaxIconBytes, ct);
-                return bytes is not null && FeedIcon.Validate(bytes) is not null ? bytes : null;
+                var bytes = await ReadCappedAsync(resp, cap, ct);
+                return bytes is not null && accept(bytes) ? bytes : null;
             }
         }
         catch

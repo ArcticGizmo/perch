@@ -2793,6 +2793,30 @@ internal static class HeadlessRenderer
         Capture("feed_story_replay_1x.png", story, "hn", 0, dark: false);
         Capture("feed_story_hostile_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: true);
         Capture("feed_story_hostile_light_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: false);
+        // xkcd with images on (the comic, its hover text as the caption), and off (a stub plus the offer to turn them on).
+        Capture("feed_story_xkcd_1x.png", SampleData.FeedStoryXkcd(showImages: true), "xk", 0, dark: true);
+        Capture("feed_story_xkcd_light_1x.png", SampleData.FeedStoryXkcd(showImages: true), "xk", 0, dark: false);
+        Capture("feed_story_xkcd_off_1x.png", SampleData.FeedStoryXkcd(showImages: false), "xk", 0, dark: true);
+
+        // A stand-in comic (the render never touches the network): white panel, black border, a stick figure.
+        static Bitmap Comic()
+        {
+            var rtb = new RenderTargetBitmap(new PixelSize(360, 220), new Vector(96, 96));
+            using (var ctx = rtb.CreateDrawingContext())
+            {
+                var ink = new Pen(Brushes.Black, 2);
+                ctx.DrawRectangle(Brushes.White, ink, new Rect(1, 1, 358, 218));
+                ctx.DrawEllipse(null, ink, new Point(110, 70), 16, 16);
+                ctx.DrawLine(ink, new Point(110, 86), new Point(110, 150));
+                ctx.DrawLine(ink, new Point(110, 105), new Point(150, 120));
+                ctx.DrawLine(ink, new Point(110, 105), new Point(80, 125));
+                ctx.DrawLine(ink, new Point(110, 150), new Point(90, 195));
+                ctx.DrawLine(ink, new Point(110, 150), new Point(130, 195));
+                ctx.DrawRectangle(null, ink, new Rect(160, 95, 120, 70));
+                ctx.DrawEllipse(null, new Pen(Brushes.Black, 3), new Point(220, 130), 18, 18);
+            }
+            return rtb;
+        }
 
         // Plays `start` (or `play`) and steps forward; for `start`, steps until `play`'s feed is on screen.
         void Capture(string file, Perch.Feeds.FeedsSnapshot snap, string? play, int steps, bool dark, string? start = null, double scroll = 0)
@@ -2801,7 +2825,7 @@ internal static class HeadlessRenderer
             using var host = new FeedsMonitorHost(
                 new Perch.Feeds.FeedsService(new Perch.Feeds.FeedStore(root), new Perch.Feeds.FeedFetcher()), null);
             host.SeedForRender(snap);
-            var w = new FeedStoryWindow(host, _ => null, SessionPalette.For(dark));
+            var w = new FeedStoryWindow(host, _ => null, SessionPalette.For(dark)) { RenderImage = _ => Comic() };
             w.PrepareForRender();
             w.Show();
             w.Play(start ?? play);

@@ -1984,11 +1984,23 @@ public partial class App : Application
             {
                 var w = new FeedStoryWindow(host, _feedIcons.Get);
                 w.EditRequested += _ => OpenSettings("feeds");
+                w.ImagesToggleRequested += SetFeedImages;
                 CenterOnOverlayScreen(w);
                 return w;
             },
             () => _feedStoryWindow = null,
             w => w.Play(subId));
+    }
+
+    // A feed's "Show images" was switched from the story player: save it on the subscription and re-apply, so the
+    // host's next snapshot carries it (the player rebuilds its card) and an open Settings page shows it.
+    private void SetFeedImages(string subId, bool on)
+    {
+        if (_appSettings is not { Feeds: { } feeds } s || feeds.FirstOrDefault(f => f.Id == subId) is not { } sub) return;
+        sub.ShowImages = on;
+        s.Save();
+        _feedsHost?.Apply(s);
+        _settings?.ReloadFeeds();
     }
 
     // Centres a not-yet-shown window on the monitor the overlay is on (else the primary).

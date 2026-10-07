@@ -389,6 +389,26 @@ internal static class SampleData
             "<p>Questions? Find us on <a href=\"https://github.com/AvaloniaUI/Avalonia/discussions\">GitHub Discussions</a>.</p>";
     }
 
+    /// <summary>xkcd, parsed from an Atom document shaped like xkcd.com/atom.xml (the comic is a summary
+    /// <c>&lt;img&gt;</c> whose <c>title</c> is the hover text), with its images switch as given.</summary>
+    public static Perch.Feeds.FeedsSnapshot FeedStoryXkcd(bool showImages)
+    {
+        const string xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\" xml:lang=\"en\">" +
+            "<title>xkcd.com</title><link href=\"https://xkcd.com/\" rel=\"alternate\"/><id>https://xkcd.com/</id>" +
+            "<updated>2026-10-06T00:00:00Z</updated>" +
+            "<entry><title>Feed Reader</title><link href=\"https://xkcd.com/3001/\" rel=\"alternate\"/>" +
+            "<updated>2026-10-06T00:00:00Z</updated><id>https://xkcd.com/3001/</id>" +
+            "<summary type=\"html\">&lt;img src=\"https://imgs.xkcd.com/comics/feed_reader.png\" " +
+            "title=\"I added a ring that lights up when there's news. Now I check the ring instead of the news.\" " +
+            "alt=\"Feed Reader\" /&gt;</summary></entry></feed>";
+        var doc = Perch.Feeds.FeedParser.Parse(xml, new Uri("https://xkcd.com/atom.xml"), DateTime.UtcNow).Doc!;
+        var head = new Perch.Feeds.FeedHead("xk", doc.Title, doc.SiteUrl, null, 1, doc.Entries[0].Updated,
+            doc.Entries[0].Title, doc.Entries[0].Updated, null, true, false, ShowImages: showImages);
+        var story = new Perch.Feeds.StoryFeed("xk", doc.Entries, doc.Entries.Select(e => e.Id).ToHashSet(StringComparer.Ordinal), null);
+        return new Perch.Feeds.FeedsSnapshot([head], [story]);
+    }
+
     /// <summary>One feed built from a hostile Atom document through the real parser, so the render shows what an
     /// attack actually turns into: script and styles gone, dangerous links as plain text, Markdown syntax literal,
     /// a disguised link showing its real host, and path-like links inert.</summary>

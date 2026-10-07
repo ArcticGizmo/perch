@@ -1,6 +1,8 @@
 namespace Perch.Feeds;
 
-/// <summary>One head in the overlay row: what to draw and what the tooltip says.</summary>
+/// <summary>One head in the overlay row: what to draw and what the tooltip says. <see cref="ShowImages"/> is the
+/// subscription's opt-in; <see cref="PrivateHost"/> is set when the subscription itself is on a private network (its
+/// own host may then serve its images, as with its icon).</summary>
 internal sealed record FeedHead(
     string SubId,
     string Title,
@@ -12,7 +14,9 @@ internal sealed record FeedHead(
     DateTime? LatestUtc,
     string? Error,
     bool HasFetched,
-    bool InsecureHttp);
+    bool InsecureHttp,
+    bool ShowImages = false,
+    string? PrivateHost = null);
 
 /// <summary>Everything the UI needs, in display order (feeds with unread entries first, newest unread first;
 /// then the rest in the user's order). <see cref="Stories"/> feeds <see cref="StoryPlan"/>.</summary>
@@ -373,7 +377,9 @@ internal sealed class FeedsService : IDisposable
                     cache is null ? null : _store.IconPath(sub.Id, cache.IconFile),
                     unread.Count, newestUnread, latest?.Title, latest?.Updated,
                     cache?.Error, cache?.Doc is not null,
-                    sub.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase));
+                    sub.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase),
+                    sub.ShowImages,
+                    cache?.IsPrivate == true && Uri.TryCreate(sub.Url, UriKind.Absolute, out var su) ? su.IdnHost : null);
                 var story = new StoryFeed(sub.Id, doc?.Entries ?? [], unread, cache?.Error);
                 rows.Add((i, head, story));
             }

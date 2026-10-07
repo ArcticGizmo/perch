@@ -59,7 +59,14 @@ internal sealed class FeedStoryWindow : Window
 
     private StoryPlan? _plan;
     private List<string> _trayOrder = [];
-    private readonly Dictionary<string, string> _markdown = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<FeedCardPart>> _bodies = new(StringComparer.Ordinal);
+
+    private const int ImageDecodeWidth = 720;   // the card body is ~340 DIP wide: crisp at 200%
+    private const int MaxCachedImages = 40;
+    private readonly Dictionary<Uri, Bitmap?> _imageCache = new();
+    private readonly CancellationTokenSource _closing = new();
+    private FeedFetcher? _fetcher;   // made on the first image, so a feed without images opens no client
+    private bool _shownImages;       // whether the card on screen was built with its feed's images on
     private readonly HashSet<string> _converting = new(StringComparer.Ordinal);
 
     private DispatcherTimer? _anim;
@@ -69,6 +76,13 @@ internal sealed class FeedStoryWindow : Window
 
     /// <summary>The ⋯ menu's (or an error card's) "Edit feed…": the app opens the Feeds settings page.</summary>
     public event Action<string>? EditRequested;
+
+    /// <summary>Turn a feed's images on or off (the ⋯ menu, or a card's "Show images"): the app saves it to the
+    /// subscription, and the host's next snapshot re-renders the card.</summary>
+    public event Action<string, bool>? ImagesToggleRequested;
+
+    /// <summary>Headless-render seam: the image for a source, instead of the network.</summary>
+    internal Func<Uri, Bitmap?>? RenderImage { get; set; }
 
     public FeedStoryWindow(FeedsMonitorHost host, Func<string?, Bitmap?> icon, SessionPalette? palette = null)
     {
@@ -174,6 +188,8 @@ internal sealed class FeedStoryWindow : Window
         {
             _host.Changed -= OnHostChanged;
             _anim?.Stop();
+            _closing.Cancel();
+            _fetcher?.Dispose();
         };
     }
 
@@ -186,7 +202,7 @@ internal sealed class FeedStoryWindow : Window
     {
         var snap = _host.Current;
         _trayOrder = snap.Heads.Select(h => h.SubId).ToList();
-        _markdown.Clear();
+        _bodies.Clear();
         _plan = subId is null ? StoryPlan.ForOverflow(snap.Stories) : StoryPlan.ForHead(snap.Stories, subId);
         ShowCard(0, feedChanged: false);
     }
@@ -239,7 +255,8 @@ internal sealed class FeedStoryWindow : Window
         : _plan.Current.SubId is { Length: > 0 } s ? s
         : _plan.CurrentRun.SubId is { Length: > 0 } r ? r : null;
 
-    private static string CardKey(StoryCard c) => c.SubId + "\n" + c.Entry?.Id;
+    // The body cache key: the entry, and whether its feed shows images (toggling them converts afresh).
+    private string CardKey(StoryCard c) => c.SubId + "\n" + c.Entry?.Id + (ImagesOn(c.SubId) ? "\ni" : "");
 
     // Shows the plan's current card: the card itself, then the chrome; marks it read last (which raises the host's
     // Changed → OnHostChanged, re-rendering the tray's rings).
@@ -250,6 +267,7 @@ internal sealed class FeedStoryWindow : Window
         _bodySlot = null;
         _cardScroll = null;
         _shownKey = card.Kind == StoryCardKind.Entry ? CardKey(card) : null;
+        _shownImages = card.Kind == StoryCardKind.Entry && ImagesOn(card.SubId);
 
         _cardHost.Child = card.Kind switch
         {
@@ -277,6 +295,12 @@ internal sealed class FeedStoryWindow : Window
     {
         if (!IsVisible || _plan is null) return;
         _plan.Merge(_host.Current.Stories);
+        // The feed on screen had its images switched: rebuild the card (the one case the card itself is redone).
+        if (_plan.Current is { Kind: StoryCardKind.Entry } shown && ImagesOn(shown.SubId) != _shownImages)
+        {
+            ShowCard(0, feedChanged: false);
+            return;
+        }
         RenderTray();
         RenderSegments();
         UpdateNav();
@@ -301,26 +325,134 @@ internal sealed class FeedStoryWindow : Window
 
         _bodySlot = new Border();
         var key = CardKey(card);
-        if (_markdown.TryGetValue(key, out var md)) _bodySlot.Child = Body(md);
+        if (_bodies.TryGetValue(key, out var parts)) _bodySlot.Child = Body(parts, card.SubId);
         else
         {
             _bodySlot.Child = Note("Loading…");
             Convert(card);
         }
 
+        var stack = new StackPanel { Margin = new Thickness(20, 18, 20, 20), Children = { title, meta, _bodySlot } };
+        // Images are off for this feed but the post has some: say so, with the switch right there.
+        if (!ImagesOn(card.SubId) && e.ContentHtml?.Contains("<img", StringComparison.OrdinalIgnoreCase) == true)
+            stack.Children.Add(ShowImagesOffer(card.SubId));
+
         _cardScroll = new ScrollViewer
         {
-            Content = new StackPanel { Margin = new Thickness(20, 18, 20, 20), Children = { title, meta, _bodySlot } },
+            Content = stack,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
         return _cardScroll;
     }
 
-    // The converted body, or a stub when the entry carries neither content nor summary. No FileRefContext: feed
-    // content must never arm a local path.
-    private Control Body(string md) => md.Length == 0
-        ? Note("No preview. Open it in the browser to read it.")
-        : MarkdownView.Build(md, _prose);
+    private bool ImagesOn(string subId) => _host.Head(subId)?.ShowImages == true;
+
+    // The converted body: Markdown parts and, for a feed with images on, image parts — or a stub when the entry
+    // carries nothing to show. No FileRefContext: feed content must never arm a local path.
+    private Control Body(IReadOnlyList<FeedCardPart> parts, string subId)
+    {
+        if (parts.Count == 0) return Note("No preview. Open it in the browser to read it.");
+        var privateHost = _host.Head(subId)?.PrivateHost;
+        var stack = new StackPanel();
+        foreach (var part in parts)
+        {
+            if (part.Markdown is { } md) stack.Children.Add(MarkdownView.Build(md, _prose));
+            else if (part.Image is { } img) stack.Children.Add(ImageBlock(img, privateHost));
+        }
+        return stack;
+    }
+
+    private Control ShowImagesOffer(string subId)
+    {
+        var text = new TextBlock
+        {
+            Text = "🖼  This post has images. Show images for this feed", FontSize = 12.5, Foreground = _p.Brand,
+            TextWrapping = TextWrapping.Wrap, Cursor = new Cursor(StandardCursorType.Hand),
+            Margin = new Thickness(MarkdownInset, 4, 0, 0),
+        };
+        ToolTip.SetTip(text, "Loads the pictures in this feed's posts. The image hosts can then see when you read.");
+        text.PointerPressed += (_, e) =>
+        {
+            e.Handled = true;
+            ImagesToggleRequested?.Invoke(subId, true);
+        };
+        return text;
+    }
+
+    // ── Images (a feed the user turned images on for) ───────────────────────────────────────────────────────
+
+    // One image: a placeholder while it loads, then the picture (never wider than the card) and its caption. Loaded
+    // only when its card is shown (no prefetch: fetching an image tells its host you're reading).
+    private Control ImageBlock(FeedImage img, string? privateHost)
+    {
+        var slot = new Border
+        {
+            MinHeight = 48, CornerRadius = new CornerRadius(6), Background = _p.Raised2, HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 120, Child = Note("Loading image…"),
+        };
+        var panel = new StackPanel { Margin = new Thickness(MarkdownInset, 2, 0, 14), Spacing = 6, Children = { slot } };
+        if (img.Caption is { } caption)
+            panel.Children.Add(new SelectableTextBlock
+            {
+                Text = caption, FontSize = 12.5, Foreground = _p.Muted, FontStyle = FontStyle.Italic, TextWrapping = TextWrapping.Wrap,
+            });
+
+        if (_imageCache.TryGetValue(img.Src, out var cached)) ShowImage(slot, img, cached);
+        else LoadImage(img, privateHost, slot);
+        return panel;
+    }
+
+    private void LoadImage(FeedImage img, string? privateHost, Border slot)
+    {
+        if (_renderMode)
+        {
+            ShowImage(slot, img, RenderImage?.Invoke(img.Src));
+            return;
+        }
+        var fetcher = _fetcher ??= new FeedFetcher();
+        var ct = _closing.Token;
+        Task.Run(async () =>
+        {
+            var bytes = await fetcher.FetchImageAsync(img.Src, privateHost, ct);
+            return bytes is null ? null : BoundedBitmap.Load(bytes, ImageDecodeWidth, FeedFetcher.MaxImagePixels);
+        }, ct).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsVisible) return;
+            var bmp = t.IsCompletedSuccessfully ? t.Result : null;
+            if (_imageCache.Count >= MaxCachedImages) _imageCache.Clear();
+            _imageCache[img.Src] = bmp;
+            ShowImage(slot, img, bmp);
+        }));
+    }
+
+    private void ShowImage(Border slot, FeedImage img, Bitmap? bmp)
+    {
+        if (bmp is null)
+        {
+            // Refused (too big, not a raster image), unreachable or undecodable: say so, and offer the browser.
+            var fail = Note($"🖼  {img.Alt ?? "Image"} couldn't be shown. Open it in the browser ↗");
+            fail.Cursor = new Cursor(StandardCursorType.Hand);
+            fail.Margin = new Thickness(10, 8);
+            fail.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                PlatformServices.UrlOpener.Open(img.Src.AbsoluteUri);
+            };
+            slot.Child = fail;
+            return;
+        }
+        var image = new Image
+        {
+            Source = bmp, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        if ((img.Caption ?? img.Alt) is { } tip) ToolTip.SetTip(image, tip);
+        slot.Background = Brushes.Transparent;
+        slot.MinHeight = 0;
+        slot.MinWidth = 0;
+        slot.Child = image;
+        _cardHost.InvalidateArrange();
+    }
 
     private string Meta(FeedEntry e)
     {
@@ -419,37 +551,39 @@ internal sealed class FeedStoryWindow : Window
     {
         if (card.Entry is not { } entry) return;
         var key = CardKey(card);
+        bool images = ImagesOn(card.SubId);
         if (_renderMode)
         {
-            Converted(key, FeedCard.BodyMarkdown(entry));
+            Converted(key, card.SubId, FeedCard.Body(entry, images));
             return;
         }
         if (!_converting.Add(key)) return;   // already on its way; it lands in the slot if still shown
-        Task.Run(() => FeedCard.BodyMarkdown(entry)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        Task.Run(() => FeedCard.Body(entry, images)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             _converting.Remove(key);
             if (!IsVisible) return;
-            Converted(key, t.IsCompletedSuccessfully ? t.Result : "");
+            Converted(key, card.SubId, t.IsCompletedSuccessfully ? t.Result : []);
         }));
     }
 
-    private void Converted(string key, string md)
+    private void Converted(string key, string subId, IReadOnlyList<FeedCardPart> parts)
     {
-        _markdown[key] = md;
+        _bodies[key] = parts;
         if (key == _shownKey && _bodySlot is { } slot)
         {
-            slot.Child = Body(md);
+            slot.Child = Body(parts, subId);
             _cardHost.InvalidateArrange();
         }
     }
 
-    // Converts the next card ahead of time, so › lands on a finished body.
+    // Converts the next card ahead of time, so › lands on a finished body. (Text only: its images wait until it's
+    // shown.)
     private void Prefetch()
     {
         if (_plan is null) return;
         var run = _plan.CurrentRun;
         int i = _plan.CardIndex + 1;
-        if (i < run.Cards.Count && run.Cards[i] is { Kind: StoryCardKind.Entry } c && !_markdown.ContainsKey(CardKey(c)))
+        if (i < run.Cards.Count && run.Cards[i] is { Kind: StoryCardKind.Entry } c && !_bodies.ContainsKey(CardKey(c)))
             Convert(c);
     }
 
@@ -584,6 +718,11 @@ internal sealed class FeedStoryWindow : Window
             items.Add(Item("Mark all feeds read", () => _host.MarkAllRead(null)));
         items.Add(Item("Check now", () => _host.RefreshNow(id), Key.R));
         if (head.SiteUrl is { } site) items.Add(Item("Open website", () => PlatformServices.UrlOpener.Open(site)));
+        var images = Item("Show images", () => ImagesToggleRequested?.Invoke(id, !head.ShowImages));
+        images.ToggleType = MenuItemToggleType.CheckBox;
+        images.IsChecked = head.ShowImages;
+        ToolTip.SetTip(images, "Load the pictures in this feed's posts. The image hosts can then see when you read.");
+        items.Add(images);
         items.Add(new Separator());
         items.Add(Item("Edit feed…", () => EditRequested?.Invoke(id)));
         new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight }.ShowAt(_menu);

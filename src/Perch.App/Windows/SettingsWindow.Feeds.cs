@@ -19,6 +19,17 @@ internal sealed partial class SettingsWindow
     private readonly List<FeedSubscription> _feeds = [];
     private StackPanel _feedsList = null!;
     private Button? _feedsMarkRead, _feedsCheckNow;
+    private StackPanel? _feedSuggestions;
+
+    /// <summary>Re-reads the subscriptions from settings (a feed was changed elsewhere, e.g. its images switched
+    /// from the story player), so this page's copy can't later write the old state back.</summary>
+    public void ReloadFeeds()
+    {
+        if (_feedsList is null) return;
+        _feeds.Clear();
+        foreach (var f in _settings.Feeds ?? []) _feeds.Add(f.Clone());
+        RebuildFeedsList();
+    }
 
     private void BuildFeedsPage(StackPanel page)
     {
@@ -56,6 +67,9 @@ internal sealed partial class SettingsWindow
         addRow.Children.Add(_feedsCheckNow);
         page.Children.Add(addRow);
 
+        _feedSuggestions = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+        page.Children.Add(_feedSuggestions);
+
         page.Children.Add(SettingsUi.Separator());
 
         page.Children.Add(SettingsUi.TitleRow("Check every", BuildFeedsIntervalStepper()));
@@ -65,8 +79,8 @@ internal sealed partial class SettingsWindow
 
         page.Children.Add(SettingsUi.Separator());
         page.Children.Add(SettingsUi.BodyText(
-            "Feed content is shown as plain formatted text: scripts, embedded media and remote images are never " +
-            "loaded, and links open in your browser."));
+            "Feed content is shown as plain formatted text: scripts and embedded media are never loaded, images " +
+            "only for feeds you turn them on for, and links open in your browser."));
 
         RebuildFeedsList();
     }
@@ -85,6 +99,7 @@ internal sealed partial class SettingsWindow
             _feedsMarkRead.IsEnabled = _feeds.Any(f => (_hooks.FeedStatus?.Invoke(f.Id)?.UnreadCount ?? 0) > 0);
         if (_feedsCheckNow is not null)
             _feedsCheckNow.IsEnabled = _settings.ShowFeeds && _feeds.Any(f => f.Enabled);
+        RebuildFeedSuggestions();
         if (_feeds.Count == 0)
         {
             _feedsList.Children.Add(new TextBlock
@@ -164,6 +179,37 @@ internal sealed partial class SettingsWindow
         return grid;
     }
 
+    // "Suggested" one-click adds for feeds not yet followed (FeedSuggestions); the section goes once all are added.
+    private void RebuildFeedSuggestions()
+    {
+        if (_feedSuggestions is null) return;
+        _feedSuggestions.Children.Clear();
+        var open = FeedSuggestions.NotFollowed(_feeds).ToList();
+        if (open.Count == 0) return;
+        _feedSuggestions.Children.Add(SettingsUi.FieldCaption("Suggested"));
+        foreach (var s in open)
+        {
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock { Text = s.Title, FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush });
+            text.Children.Add(new TextBlock { Text = s.Blurb, FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap });
+            var add = SettingsUi.FlatButton("Add");
+            add.VerticalAlignment = VerticalAlignment.Center;
+            add.Margin = new Thickness(8, 0, 0, 0);
+            var suggestion = s;
+            add.Click += (_, _) =>
+            {
+                _feeds.Add(FeedSuggestions.Subscribe(suggestion, DateTime.UtcNow));
+                RebuildFeedsList();
+                RaiseFeedsChanged();
+            };
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            DockPanel.SetDock(add, Dock.Right);
+            row.Children.Add(add);
+            row.Children.Add(text);
+            _feedSuggestions.Children.Add(row);
+        }
+    }
+
     private static Button SmallButton(string glyph, bool enabled, Action click)
     {
         var b = SettingsUi.FlatButton(glyph);
@@ -199,7 +245,8 @@ internal sealed partial class SettingsWindow
             ? $"Latest: {lt}" + (status.LatestUtc is { } at ? $" · {RelativeTime.Ago(now, at)}" : "")
             : "No entries yet";
         string unread = status.UnreadCount > 0 ? $"{status.UnreadCount} new  ·  " : "";
-        return (unread + latest + insecure, insecure.Length > 0);
+        string images = feed.ShowImages ? "  ·  images on" : "";
+        return (unread + latest + images + insecure, insecure.Length > 0);
     }
 
     private void MoveFeed(int index, int delta)
@@ -222,12 +269,14 @@ internal sealed partial class SettingsWindow
             _feeds.Add(new FeedSubscription
             {
                 Url = url.AbsoluteUri, TitleOverride = dlg.TitleOverride, Enabled = true, AddedUtc = DateTime.UtcNow,
+                ShowImages = dlg.ShowImages,
             });
         }
         else
         {
             existing.Url = url.AbsoluteUri;   // same id: a changed URL re-primes in the engine
             existing.TitleOverride = dlg.TitleOverride;
+            existing.ShowImages = dlg.ShowImages;
         }
         RebuildFeedsList();
         RaiseFeedsChanged();

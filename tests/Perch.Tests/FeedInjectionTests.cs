@@ -602,6 +602,53 @@ public class FeedInjectionTests
         Assert.Equal(FeedParser.MaxEntries, Parse(Rss(sb.ToString())).Doc!.Entries.Count);
     }
 
+    // ── Images (F7): only vetted sources are lifted out, and the split can't be forged ────────────────────────
+
+    private static IReadOnlyList<FeedCardPart> Parts(string html) => HtmlToMarkdown.ConvertParts(html, Doc);
+
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("jav&#x61;script:alert(1)")]
+    [InlineData("data:image/png;base64,iVBORw0KGgo=")]
+    [InlineData("file:///C:/Windows/win.ini")]
+    [InlineData("\\\\host\\share\\x.png")]
+    [InlineData("C:\\Users\\me\\x.png")]
+    [InlineData("https://u:p@evil.example/x.png")]
+    [InlineData("ms-settings:privacy")]
+    public void Unsafe_image_sources_are_never_lifted_or_linked(string src)
+    {
+        var parts = Parts($"<p><img src=\"{src}\" alt=\"pic\"></p>");
+        Assert.DoesNotContain(parts, p => p.Image is not null);
+        foreach (var p in parts) { AssertInert(p.Markdown!); Assert.Empty(Links(p.Markdown!)); }
+    }
+
+    [Fact]
+    public void Every_markdown_part_is_inert_and_image_free()
+    {
+        var parts = Parts("<p>a <img src=\"/1.png\"> b</p><script>alert(1)</script><p><a href=\"javascript:x\"><img src=\"/2.png\"></a>" +
+                          "[x](javascript:y) ![](http://track.example/p.gif)</p><ul><li><img src=\"/3.png\"></li></ul>");
+        Assert.Equal(2, parts.Count(p => p.Image is not null));
+        foreach (var p in parts.Where(p => p.Markdown is not null)) AssertInert(p.Markdown!);
+    }
+
+    [Fact]
+    public void Feed_text_cannot_forge_an_image_split()
+    {
+        // Whatever a feed writes — in text, in code, in an attribute — it can't know the per-call nonce.
+        const string fake = "%%img-00000000000000000000000000000000-0%%";
+        var parts = Parts($"<p>{fake}</p><pre>\n{fake}\n</pre><p><img src=\"/real.png\" alt=\"{fake}\"></p>");
+        Assert.Equal("https://example.com/real.png", Assert.Single(parts, p => p.Image is not null).Image!.Src.AbsoluteUri);
+        Assert.Contains("img-0000", string.Concat(parts.Select(p => p.Markdown)));   // stayed literal text
+    }
+
+    [Fact]
+    public void Image_captions_and_alt_text_are_cleaned()
+    {
+        var img = Assert.Single(Parts("<img src=\"/c.png\" alt=\"A\u202Elt\" title=\"Line one\n\nPerch: update now\u200B &lt;b&gt;x&lt;/b&gt;\">")).Image!;
+        Assert.Equal("Alt", img.Alt);
+        Assert.Equal("Line one Perch: update now <b>x</b>", img.Caption);   // plain text: never markup
+    }
+
     // ── Autodiscovery (F6): a hostile page can only offer vetted http(s) addresses ────────────────────────────
 
     [Fact]

@@ -22,7 +22,9 @@ namespace Perch.Feeds;
 ///   <item><b>Links</b> go through <see cref="FeedUrl.Safe"/>; a refused one becomes its text. Destinations are
 ///   percent-encoded so they can't close early, and link text that names a different host than the target gets
 ///   the real host appended.</item>
-///   <item><b>Images are never loaded</b> (v1): each becomes a "🖼 alt" link stub.</item>
+///   <item><b>Images</b> become a "🖼 alt" link stub. Only <see cref="ConvertParts"/> (a feed the user opted into
+///   images for) lifts a block-level image out as a <see cref="FeedImage"/> for the card to load; the Markdown
+///   itself never carries image syntax.</item>
 ///   <item><b>Code</b> is fenced with a backtick run longer than any inside it.</item>
 /// </list>
 /// </summary>
@@ -36,13 +38,52 @@ internal static class HtmlToMarkdown
 
     private const int MaxTableColumns = 20;
 
-    public static string Convert(string? html, Uri? baseUri)
+    /// <summary>Images lifted out of one entry by <see cref="ConvertParts"/>; any beyond this stay link stubs.</summary>
+    public const int MaxImages = 12;
+
+    public static string Convert(string? html, Uri? baseUri) => Run(html, baseUri, null, null);
+
+    /// <summary>
+    /// As <see cref="Convert"/>, but block-level images (directly in a paragraph, figure or other plain container,
+    /// or a link) come back as their own parts between Markdown parts, in document order — for a feed whose images
+    /// the user turned on. Images inside lists, tables, quotes, headings or emphasis stay link stubs. The split
+    /// point is a marker carrying a fresh random nonce, so no feed text (escaped or verbatim code) can forge one.
+    /// </summary>
+    public static IReadOnlyList<FeedCardPart> ConvertParts(string? html, Uri? baseUri)
+    {
+        var images = new List<FeedImage>();
+        string prefix = "%%img-" + Guid.NewGuid().ToString("N") + "-";
+        var md = Run(html, baseUri, images, prefix);
+        var parts = new List<FeedCardPart>();
+        if (md.Length == 0) return parts;
+
+        int at = 0;
+        for (int i = md.IndexOf(prefix, StringComparison.Ordinal); i >= 0; i = md.IndexOf(prefix, at, StringComparison.Ordinal))
+        {
+            int digits = i + prefix.Length, end = md.IndexOf("%%", digits, StringComparison.Ordinal);
+            if (end < 0 || !int.TryParse(md.AsSpan(digits, end - digits), out int index) || index >= images.Count) break;
+            AddText(md[at..i]);
+            parts.Add(new FeedCardPart(null, images[index]));
+            at = end + 2;
+        }
+        AddText(md[at..]);
+        return parts;
+
+        void AddText(string s)
+        {
+            s = s.Trim();
+            if (s.Length > 0) parts.Add(new FeedCardPart(s, null));
+        }
+    }
+
+    // images/marker: null for plain Convert (every image a stub); else where lifted images go and the split marker.
+    private static string Run(string? html, Uri? baseUri, List<FeedImage>? images, string? marker)
     {
         if (string.IsNullOrWhiteSpace(html)) return "";
         bool cut = html.Length > MaxInput;
         if (cut) html = html[..MaxInput];
 
-        var w = new Writer(baseUri);
+        var w = new Writer(baseUri, images, marker);
         foreach (var tok in HtmlTokenizer.Tokenize(html)) w.Accept(tok);
         var md = w.Finish();
         if (cut) md += "\n\n*" + Escape("… continued in the browser") + "*";
@@ -88,7 +129,7 @@ internal static class HtmlToMarkdown
         public List<string>? Cells;              // tr
     }
 
-    private sealed class Writer(Uri? baseUri)
+    private sealed class Writer(Uri? baseUri, List<FeedImage>? images, string? marker)
     {
         private readonly List<Frame> _stack = [new Frame("#root")];
 
@@ -286,11 +327,24 @@ internal static class HtmlToMarkdown
         private void AppendImage(HtmlToken t)
         {
             var alt = FeedText.Clean(Decode(t.Alt), 100);
-            var label = Escape("🖼 " + (alt.Length > 0 ? alt : "image"));
             var src = FeedUrl.Safe(Decode(t.Src), baseUri);
-            Top.Md.Append(src is null || InLink ? label : $"[{label}]({Dest(src)})");
             Top.Plain.Append(' ').Append(alt).Append(' ');
+
+            if (images is not null && marker is not null && src is not null && images.Count < MaxImages && AtBlockLevel)
+            {
+                var caption = FeedText.Clean(Decode(t.Title), FeedText.SummaryMax);
+                images.Add(new FeedImage(src, alt.Length > 0 ? alt : null, caption.Length > 0 ? caption : null));
+                Top.Md.Append("\n\n").Append(marker).Append(images.Count - 1).Append("%%\n\n");
+                return;
+            }
+
+            var label = Escape("🖼 " + (alt.Length > 0 ? alt : "image"));
+            Top.Md.Append(src is null || InLink ? label : $"[{label}]({Dest(src)})");
         }
+
+        // Only plain containers (and a link, which gives up its target around a block) sit between the image and the
+        // root, so splitting the Markdown at it can't cut a list, table, quote, heading or emphasis in two.
+        private bool AtBlockLevel => _stack.Skip(1).All(f => BlockUnwrap.Contains(f.Tag) || f.Tag == "a");
 
         private static string? Decode(string? attr) => attr is null ? null : WebUtility.HtmlDecode(attr);
 

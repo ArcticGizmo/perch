@@ -28,6 +28,7 @@ internal sealed class FeedDialog : Window
 
     private readonly TextBox _urlBox;
     private readonly TextBox _nameBox;
+    private readonly CheckBox _images;
     private readonly TextBlock _urlNote;
     private readonly Button _check;
     private readonly Button _ok;
@@ -47,6 +48,9 @@ internal sealed class FeedDialog : Window
 
     /// <summary>The user's name for the feed, or null to use the feed's own title.</summary>
     public string? TitleOverride => FeedText.Clean(_nameBox.Text, FeedText.FeedTitleMax) is { Length: > 0 } t ? t : null;
+
+    /// <summary>Whether to load the images in this feed's posts.</summary>
+    public bool ShowImages => _images.IsChecked == true;
 
     public FeedDialog(FeedSubscription? existing, IReadOnlyList<FeedSubscription> all)
     {
@@ -98,6 +102,18 @@ internal sealed class FeedDialog : Window
         _nameBox = SettingsUi.ThemedTextBox(existing?.TitleOverride ?? "");
         _nameBox.PlaceholderText = "Use the feed's own title";
 
+        _images = new CheckBox
+        {
+            Content = "Show images in posts", IsChecked = existing?.ShowImages == true, Foreground = Palette.FgBrush,
+            Margin = new Thickness(0, 12, 0, 0),
+        };
+        var imagesNote = new TextBlock
+        {
+            Text = "Off, images show as links. On, Perch loads them when you read a post, so the sites hosting them " +
+                   "can see when you read.",
+            FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(28, 0, 0, 0),
+        };
+
         _ok = SettingsUi.FlatButton("Save");
         _ok.MinWidth = 92;
         _ok.Click += async (_, _) => await SaveAsync();
@@ -123,6 +139,8 @@ internal sealed class FeedDialog : Window
         layout.Children.Add(_preview);
         layout.Children.Add(SettingsUi.FieldCaption("Name (optional)"));
         layout.Children.Add(_nameBox);
+        layout.Children.Add(_images);
+        layout.Children.Add(imagesNote);
         layout.Children.Add(buttons);
         Content = layout;
 

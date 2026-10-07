@@ -4,10 +4,11 @@ internal enum HtmlTokenKind { Text, StartTag, EndTag }
 
 /// <summary>One HTML token. <see cref="Text"/> is raw (entities still encoded) for text tokens; tag names are
 /// lower-case. Attributes are only kept for the few the converter reads (<c>href</c>, <c>src</c>, <c>alt</c>,
-/// <c>start</c>) — the rest are discarded at tokenize time, so nothing downstream can forward them.</summary>
+/// <c>title</c>, <c>start</c>) — the rest are discarded at tokenize time, so nothing downstream can forward them.
+/// (<c>title</c> is an image's caption: XKCD's hover text is the punchline.)</summary>
 internal readonly record struct HtmlToken(
     HtmlTokenKind Kind, string Text, string Name, bool SelfClosing,
-    string? Href = null, string? Src = null, string? Alt = null, string? Start = null);
+    string? Href = null, string? Src = null, string? Alt = null, string? Start = null, string? Title = null);
 
 /// <summary>
 /// A small, tolerant, <b>iterative</b> HTML tokenizer for feed content (docs/feeds-plan.md §3.4.2). It never
@@ -123,7 +124,7 @@ internal static class HtmlTokenizer
 
             yield return new HtmlToken(HtmlTokenKind.StartTag, "", name, selfClosing,
                 attrs.GetValueOrDefault("href"), attrs.GetValueOrDefault("src"),
-                attrs.GetValueOrDefault("alt"), attrs.GetValueOrDefault("start"));
+                attrs.GetValueOrDefault("alt"), attrs.GetValueOrDefault("start"), attrs.GetValueOrDefault("title"));
         }
         if (n > textStart) yield return Text(html, textStart, n);
     }
@@ -131,7 +132,7 @@ internal static class HtmlTokenizer
     private static HtmlToken Text(string html, int start, int end) =>
         new(HtmlTokenKind.Text, html[start..end], "", false);
 
-    private static readonly HashSet<string> ConverterAttributes = new(StringComparer.Ordinal) { "href", "src", "alt", "start" };
+    private static readonly HashSet<string> ConverterAttributes = new(StringComparer.Ordinal) { "href", "src", "alt", "start", "title" };
 
     // Reads attributes from just after the tag name to the closing '>'. Quoted values may contain '>'. Only the
     // attributes in `keep` are kept (by default the converter's); values are raw (entity-decoded later, once).

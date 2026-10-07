@@ -36,6 +36,23 @@ internal static class BoundedBitmap
         }
     }
 
+    /// <summary>As <see cref="Load(string, int?)"/>, for bytes already in memory (a downloaded feed image), under a
+    /// caller-chosen pixel cap. Blocking: call off the UI thread.</summary>
+    public static Bitmap? Load(byte[] bytes, int? maxWidth, long maxPixels = MaxPixels)
+    {
+        try
+        {
+            if (ImageHeader.TryReadSize(new MemoryStream(bytes, writable: false)) is not var (w, h)) return null;
+            if ((long)w * h > maxPixels) return null;
+            using var ms = new MemoryStream(bytes, writable: false);
+            return maxWidth is { } mw && mw < w ? Bitmap.DecodeToWidth(ms, mw) : new Bitmap(ms);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary><see cref="Load"/> on a pool thread.</summary>
     public static Task<Bitmap?> LoadAsync(string path, int? maxWidth = null) => Task.Run(() => Load(path, maxWidth));
 }

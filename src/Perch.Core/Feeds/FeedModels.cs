@@ -12,9 +12,13 @@ internal sealed class FeedSubscription
     public bool Enabled { get; set; } = true;
     public DateTime AddedUtc { get; set; }
 
+    /// <summary>Load the images in this feed's posts (off by default: fetching one tells its host you're reading).
+    /// Off, images are link stubs and nothing but the feed itself is fetched.</summary>
+    public bool ShowImages { get; set; }
+
     public FeedSubscription Clone() => new()
     {
-        Id = Id, Url = Url, TitleOverride = TitleOverride, Enabled = Enabled, AddedUtc = AddedUtc,
+        Id = Id, Url = Url, TitleOverride = TitleOverride, Enabled = Enabled, AddedUtc = AddedUtc, ShowImages = ShowImages,
     };
 }
 
