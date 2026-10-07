@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2025-03-11T10:00:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":"test and look for Foo"}}
+{"type":"assistant","timestamp":"2025-03-11T10:00:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":5,"output_tokens":5},"content":[{"type":"tool_use","id":"ap1","name":"Bash","input":{"command":"dotnet test"}}]}}
+{"type":"assistant","timestamp":"2025-03-11T10:00:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":5,"output_tokens":5},"content":[{"type":"tool_use","id":"ap2","name":"Grep","input":{"pattern":"Foo"}}]}}
+{"type":"user","timestamp":"2025-03-11T10:00:06Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"ap2","content":"Foo.cs"}]}}

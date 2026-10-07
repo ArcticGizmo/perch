@@ -70,11 +70,33 @@ public class TranscriptReaderTests
     }
 
     [Fact]
-    public void GetActivity_ReturnsMostRecentToolCallPhrase()
+    public void GetActivity_CallStillRunning_ReturnsItsPhrase()
     {
         var reader = new TranscriptReader();
-        // The last tool_use in sessA is the Bash "npm test" call; later records carry no tool_use.
-        Assert.Equal("Running: npm test", reader.GetActivity("sessA", Cwd));
+        // The Read returned; the Bash after it has no tool_result yet.
+        Assert.Equal("Running: dotnet build", reader.GetActivity("sessActivityRunning", Cwd));
+    }
+
+    [Fact]
+    public void GetActivity_EveryCallReturned_ReturnsThinking()
+    {
+        var reader = new TranscriptReader();
+        // sessA's last call (Bash "npm test") has its result: naming it would read as still running.
+        Assert.Equal(TranscriptReader.ThinkingActivity, reader.GetActivity("sessA", Cwd));
+    }
+
+    [Fact]
+    public void GetActivity_ParallelCalls_NewestUnreturnedWins()
+    {
+        var reader = new TranscriptReader();
+        // Bash and Grep went out together; the newer Grep returned, the Bash is still going.
+        Assert.Equal("Running: dotnet test", reader.GetActivity("sessActivityParallel", Cwd));
+    }
+
+    [Fact]
+    public void GetActivity_NullWhenMissing()
+    {
+        Assert.Null(new TranscriptReader().GetActivity("no-such-session", Cwd));
     }
 
     [Fact]
