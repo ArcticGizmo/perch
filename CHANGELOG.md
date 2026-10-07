@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.8] - 2026-10-07
+
+- Sessions no longer stuck on "working…" after a mid-turn message (it had finished; it just wasn't telling)
+- Background tasks reporting back show "running", then "done" (not "idle", which was a fib)
+- Activity reads "Thinking…" once a tool call returns
+
+---
+
 ## [v0.5.7] - 2026-10-06
 
 - Perch sessions survive Perch closing (exit, update, crash, reboot alike)
