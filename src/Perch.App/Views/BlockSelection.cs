@@ -131,6 +131,10 @@ internal sealed class BlockSelection
         }
     }
 
+    /// <summary>True while a gesture is in flight or a selection is up — the blocks collected for it must stay in
+    /// the tree, so a virtualizing host holds off dropping content.</summary>
+    public bool IsActive => _pending || _dragging || HasSelection;
+
     /// <summary>Clears the selection (the next gesture starts fresh).</summary>
     public void Clear()
     {

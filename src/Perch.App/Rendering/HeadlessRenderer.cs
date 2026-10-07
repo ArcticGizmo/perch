@@ -2187,6 +2187,7 @@ internal static class HeadlessRenderer
         launcher.Close();
 
         RenderStreaming(outDir, cwd);
+        RenderLongThread(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
             string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null,
@@ -2348,6 +2349,135 @@ internal static class HeadlessRenderer
             for (int i = 0; i < s.Length; i += n) list.Add(s.Substring(i, Math.Min(n, s.Length - i)));
             return list;
         }
+    }
+
+    // A long controlled session (120 agentic turns) in the thread, scrolled to the middle: items far from the
+    // viewport are dehydrated to placeholders and rebuilt as they come near, so the capture must show a fully
+    // drawn thread (no blank gaps). With PERCH_BENCH=1 it also prints how much of the thread is built, the heap
+    // with and without virtualization, and the cost of a streamed delta in a 200-tool turn (each flush used to
+    // rebuild every tool card in the turn).
+    private static void RenderLongThread(string outDir, string cwd)
+    {
+        bool bench = Environment.GetEnvironmentVariable("PERCH_BENCH") == "1";
+        var p = SessionPalette.For(dark: true);
+
+        var (w, thread) = Host(LongConversation(120));
+        thread.Offset = new Vector(0, thread.Extent.Height / 2);
+        Settle(w);
+        if (w.CaptureRenderedFrame() is { } frame)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "session_long_thread_1x.png"));
+            frame.Save(fs);
+        }
+        if (bench)
+        {
+            Console.WriteLine($"long thread: mid-scroll built {Built(thread)}, extent {thread.Extent.Height:N0}");
+            double extent = thread.Extent.Height;
+            thread.JumpToTop();
+            Settle(w);
+            Console.WriteLine($"  after jump to top: built {Built(thread)}, extent {thread.Extent.Height:N0} (was {extent:N0})");
+            thread.JumpToBottom();
+            Settle(w);
+            Console.WriteLine($"  after jump to bottom: built {Built(thread)}");
+        }
+        Close(w, thread);
+        if (!bench) return;
+
+        // Heap held by a bound 120-turn thread at the tail, virtualized vs every item kept.
+        foreach (var on in new[] { true, false })
+        {
+            SessionThreadView.VirtualizationEnabled = on;
+            long before = GC.GetTotalMemory(forceFullCollection: true);
+            var (hw, ht) = Host(LongConversation(120));
+            long held = GC.GetTotalMemory(forceFullCollection: true) - before;
+            Console.WriteLine($"  heap held, virtualization {(on ? "on " : "off")}: {held / 1024.0 / 1024.0:N1} MB, built {Built(ht)}");
+            Close(hw, ht);
+        }
+        SessionThreadView.VirtualizationEnabled = true;
+
+        // One assistant turn of 200 finished tool calls, then text deltas streaming into it: each delta's flush
+        // walks the turn's parts, which must be near-free for the cards that didn't change.
+        var conv = new Perch.Data.Control.SessionConversation();
+        conv.AddUserPrompt("Run the whole migration.");
+        for (int i = 0; i < 200; i++)
+        {
+            conv.Apply(new Perch.Data.Control.ToolUseEvent($"m{i}", "Bash", $"Running: step {i}", $"{{\"command\":\"step {i}\"}}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent($"m{i}", $"step {i} ok\nwrote {i * 3} rows\ntook {i % 9}ms", false));
+        }
+        var (dw, dt) = Host(conv);
+        var ms = new List<double>();
+        for (int i = 0; i < 200; i++)
+        {
+            conv.Apply(new Perch.Data.Control.TextDeltaEvent("word "));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Dispatcher.UIThread.RunJobs();
+            ms.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        Console.WriteLine($"  delta flush in a 200-tool turn: mean {ms.Average():N3} ms, max {ms.Max():N3} ms over {ms.Count} deltas");
+        Close(dw, dt);
+
+        (Window, SessionThreadView) Host(Perch.Data.Control.SessionConversation c)
+        {
+            var t = new SessionThreadView(p) { Cwd = cwd };
+            var win = new Window { Width = 880, Height = 980, Background = p.Surface, Content = t };
+            t.Bind(c);
+            win.Show();
+            Settle(win);
+            return (win, t);
+        }
+
+        static void Settle(Window win)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                win.UpdateLayout();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+        }
+
+        static void Close(Window win, SessionThreadView t)
+        {
+            t.Unbind();
+            win.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        static string Built(SessionThreadView t) => $"{t.BuiltItems.Built}/{t.BuiltItems.Total} items";
+    }
+
+    // A long agentic session: each turn a prompt, a thought, a folded Grep+Read, prose, an edit with its diff, a
+    // test run, and a closing line — the shape that made long controlled sessions heavy.
+    private static Perch.Data.Control.SessionConversation LongConversation(int turns)
+    {
+        const string edit = "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\",\"old_string\":\"var dip = px / scale;\\nreturn Clamp(dip);\",\"new_string\":\"var dip = Math.Round(px / scale);\\nreturn Clamp(dip, bounds);\"}";
+        var read = string.Join("\n", Enumerable.Range(1, 40).Select(i => $"{i,6}\t    var line{i} = Compute(screen, {i});"));
+        var tests = "Passed!  -  Failed: 0, Passed: 2238, Skipped: 1  ·  58s\n\n" +
+                    string.Join("\n", Enumerable.Range(1, 12).Select(i => $"  PlacementMathTests.Case{i} [OK]"));
+        var conv = new Perch.Data.Control.SessionConversation();
+        for (int t = 1; t <= turns; t++)
+        {
+            conv.AddUserPrompt($"Turn {t}: tighten the placement maths for monitor {t % 4} and re-run the tests.");
+            conv.Apply(new Perch.Data.Control.AssistantThinkingEvent(
+                $"Turn {t}: the clamp runs before the DPI conversion, so a shrunken screen pulls the window inward; " +
+                "converting first and clamping against the target bounds keeps the corner distance."));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent($"g{t}", "Grep", "Searching PlacementMath", "{\"pattern\":\"PlacementMath\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent($"g{t}", "6 files", false));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent($"r{t}", "Read", "Reading PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent($"r{t}", read, false));
+            conv.Apply(new Perch.Data.Control.AssistantTextEvent(
+                $"**Turn {t}.** The drift comes from `PlacementMath.Normalize` rounding late. Two changes:\n\n" +
+                "1. Round the DIP offset as soon as it's converted.\n2. Clamp against the target monitor's bounds, not the primary's.\n\n" +
+                "```csharp\nvar dip = Math.Round(px / scale);\nreturn Clamp(dip, bounds);\n```"));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent($"e{t}", "Edit", "Editing PlacementMath.cs", edit));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent($"e{t}", "The file has been updated.", false));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent($"b{t}", "Bash", "Running: dotnet test", "{\"command\":\"dotnet test\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent($"b{t}", tests, false));
+            conv.Apply(new Perch.Data.Control.AssistantTextEvent($"Turn {t} is green — the corner distance now survives a resolution change."));
+            conv.Apply(new Perch.Data.Control.TurnResultEvent(false, "success", 0.01 * t, InputTokens: 1000, OutputTokens: 400, DurationMs: 9000));
+        }
+        return conv;
     }
 
     // ~30 KB of typical assistant prose: headed steps with inline code and file references, a few lists and
