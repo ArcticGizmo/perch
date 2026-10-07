@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.13] - 2026-10-07
+
+- Background shells and monitors run live in the session, with output and Stop
+- Running background work counted on the overlay and in the Roost (idle is not the same as finished)
+- Background tasks finishing show as a quiet line, not XML wearing your name
+- Finished background agents no longer look busy forever
+- Proper tool cards for Monitor, TaskStop and TaskOutput
+
+---
+
 ## [v0.5.12] - 2026-10-07
 
 - Sub-agents running long tests or builds no longer read as idle (they were busy, just quiet about it)
