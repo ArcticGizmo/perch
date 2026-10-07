@@ -67,6 +67,7 @@ internal enum PreviewTarget
     RoostButton,
     RecentSessions,
     GitHubAlerts,
+    BackgroundTasks,
 }
 
 /// <summary>

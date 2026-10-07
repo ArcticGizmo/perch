@@ -27,6 +27,7 @@ internal static class OverlaySettingsGates
         c.SetContextThresholds(s.ContextPressureYellowPercent, s.ContextPressureOrangePercent, s.ContextPressureRedPercent);
         c.SetShowModeBadges(s.ShowPermissionModeBadges);
         c.SetShowTaskProgress(s.ShowTaskProgress);
+        c.SetShowBackgroundTasks(s.ShowBackgroundTasks);
         c.SetShowNoteLine(s.ShowNotes);
         c.SetShowBurnRate(s.ShowBurnRate);
         c.SetShowGitStats(s.ShowGitStats);

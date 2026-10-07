@@ -88,7 +88,15 @@ internal static class SampleData
                 PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)
                 {
                     Checks = [new("build", PrCheckState.Success), new("e2e", PrCheckState.Success)],
-                }),
+                })
+            {
+                // Idle, but a dev server and a log tail are still running: the count is what says so.
+                BackgroundTasks =
+                [
+                    new("bdev1", BackgroundTaskKind.Shell, DateTime.UtcNow.AddMinutes(-42), null, "Start the dev server"),
+                    new("blog1", BackgroundTaskKind.Shell, DateTime.UtcNow.AddMinutes(-40), null, "tail -f logs/app.log"),
+                ],
+            },
             // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
             new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
                 ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
@@ -103,7 +111,11 @@ internal static class SampleData
             // (VS Code), a monochrome one (Cursor), and a JetBrains IDE; the Windsurf sail and the generic
             // "</>" fallback are exercised by the unit tests / render captures.
             new ClaudeSession("8801", "s8", SessionStatus.Running, @"C:\src\ext", "extension", now,
-                IdeHost: new IdeHost(IdeHostKind.VsCode, "Visual Studio Code", "code")),
+                IdeHost: new IdeHost(IdeHostKind.VsCode, "Visual Studio Code", "code"))
+            {
+                // A Monitor watching the build while it works: the row's "❯ 1" background count.
+                BackgroundTasks = [new("bmon1", BackgroundTaskKind.Monitor, DateTime.UtcNow.AddMinutes(-6), null, "build errors")],
+            },
             new ClaudeSession("8802", "s9", SessionStatus.Idle, @"C:\src\agent", "agent", now,
                 IdeHost: new IdeHost(IdeHostKind.Cursor, "Cursor", "cursor"))
             {

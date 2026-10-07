@@ -446,6 +446,17 @@ internal sealed class SessionMonitor : IDisposable
         return earliest;
     }
 
+    // The session's still-running background work. A task launched before this process started belongs to an earlier
+    // run of the session (it was resumed after the CLI died without a clean exit): the CLI took it down with it, so it
+    // doesn't count. Cached by mtime in the reader, so an unchanged transcript costs a stat.
+    private IReadOnlyList<RunningBackgroundTask> RunningBackgroundTasks(string sessionId, string cwd, long startedAtMs)
+    {
+        var running = _transcripts.GetRunningBackgroundTasks(sessionId, cwd);
+        if (running.Count == 0 || startedAtMs <= 0) return running;
+        var started = DateTimeOffset.FromUnixTimeMilliseconds(startedAtMs).UtcDateTime;
+        return running.Where(t => t.StartedUtc is not { } at || at >= started).ToList();
+    }
+
     private ClaudeSession? ReadSession(string filePath, ClaudeConfigDir owner, DateTime now)
     {
         try
@@ -956,6 +967,7 @@ internal sealed class SessionMonitor : IDisposable
                 // thing that can attribute the session. See ClaudeSession.AttributedConfigDir.
                 ReportedConfigDir = reportedConfigDir,
                 ReportedSlug = reportedSlug,
+                BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
             };
 
             if (status == SessionStatus.NeedsAttention

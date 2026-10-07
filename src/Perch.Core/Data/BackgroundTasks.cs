@@ -4,7 +4,7 @@ namespace Perch.Data;
 
 /// <summary>What launched a background task. A Monitor runs as a <c>local_bash</c> task too; only the launching
 /// tool's name tells it apart. See <c>docs/background-tasks-plan.md</c>.</summary>
-internal enum BackgroundTaskKind { Shell, Monitor, Agent }
+public enum BackgroundTaskKind { Shell, Monitor, Agent }
 
 internal enum BackgroundTaskStatus { Running, Completed, Failed, Stopped }
 
@@ -147,8 +147,10 @@ internal static class BackgroundTaskText
 
 /// <summary>A terminal session's still-running background task, as its transcript tells it
 /// (<see cref="TranscriptReader.GetRunningBackgroundTasks"/>): no live feed, just launch and not-yet-ended.
-/// <paramref name="OutputFile"/> is a shell's output path when the launch result named it.</summary>
-internal sealed record RunningBackgroundTask(string TaskId, BackgroundTaskKind Kind, DateTime? StartedUtc, string? OutputFile);
+/// <paramref name="OutputFile"/> is a shell's output path when the launch result named it; <paramref name="Description"/>
+/// is the launch's own description (else its command), when the launching call was in the transcript.</summary>
+public sealed record RunningBackgroundTask(
+    string TaskId, BackgroundTaskKind Kind, DateTime? StartedUtc, string? OutputFile, string? Description = null);
 
 /// <summary>
 /// One piece of background work a session started: a <c>run_in_background</c> shell, a <c>Monitor</c>, or an async

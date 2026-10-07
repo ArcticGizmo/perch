@@ -337,6 +337,9 @@ internal sealed partial class RoostWindow : Window
     /// <summary>Esc on a focused Perch pane with a turn running: interrupt it (session id).</summary>
     public event Action<string>? InterruptRequested;
 
+    /// <summary>A background task's Stop in a Perch pane: (session id, task).</summary>
+    public event Action<string, BackgroundTask>? StopTaskRequested;
+
     /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
     public event Action<string, string>? PromptSubmitted;
 
@@ -646,6 +649,7 @@ internal sealed partial class RoostWindow : Window
                 view.PermissionAnswered += (item, allow, mode) => { if (Sid() is { } s) PermissionAnswered?.Invoke(s, item, allow, mode); };
                 view.QuestionAnswered += (item, answers) => { if (Sid() is { } s) QuestionAnswered?.Invoke(s, item, answers); };
                 view.InterruptRequested += _ => { if (Sid() is { } s) InterruptRequested?.Invoke(s); };
+                view.StopTaskRequested += (_, t) => { if (Sid() is { } s) StopTaskRequested?.Invoke(s, t); };
                 view.PromptSubmitted += OnPromptSubmitted;
                 AttachDragSource(view.Header, key, isTab: false);
                 _views[pane.Key] = view;

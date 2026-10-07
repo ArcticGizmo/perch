@@ -1,7 +1,8 @@
 # Background tasks (shells, monitors, async agents) — design & checkpoint plan
 
-Status: **P0–P2 done** (2026-10-07), on branch `background-tasks` (cut from `main`). P0+P1 are unit-tested against real
-captures; P2 is render-verified (`render` → `session_bgtasks*_1x.png`). Stop and the live tail are owed a live check.
+Status: **P0–P3 done** (2026-10-07), on branch `background-tasks` (cut from `main`). P0+P1 are unit-tested against real
+captures; P2+P3 are render-verified (`render` → `session_bgtasks*_1x.png`, `overlay_1x.png`). Owed: a live check of
+Stop, the output tail and the overlay count against real sessions.
 
 ## The ask
 
@@ -149,5 +150,17 @@ against the shell's `.output` trailer so a task orphaned by a dead CLI doesn't c
   `PerchSession.StopTask` sends `stop_task`. `BackgroundTaskOutput` (path inference + tail) and `BackgroundTaskText`
   (shared wording) live in Core. Monitor, TaskStop and TaskOutput get proper tool summaries and glyphs.
   - Owed: a live check of Stop + the tail against a real session. Stop isn't offered in the Roost's pane yet (P3).
-- **P3 — overlay + Roost.** Count glyph and status text, fed by the fold for terminal sessions.
-- **P4 — polish.** Stop from a chip's menu, and a Monitor event list on its card.
+- **P3 — overlay + Roost.** ✅ `ClaudeSession.BackgroundTasks` comes from the transcript fold for every session
+  (controlled ones write transcripts too). `SessionMonitor` drops any task launched before the session's process
+  started (`startedAt`), so a task orphaned by a CLI that died without a clean exit doesn't count. That replaces the
+  `.output`-trailer cross-check first planned. The fold also keeps each launch's description for the tooltip. The
+  overlay row draws "❯ N" (shells + Monitors; agents already have sub-rows) in the theme's sub-agent hue, which
+  already means background work. Its hover lists each task with its age. It's gated by a new **Background tasks**
+  setting (`AppSettings.ShowBackgroundTasks`, on by default, registry id `background-tasks`). The Roost pill reads
+  "Idle · 2 in background", and the rail shows "❯ 2" on an idle row. A Perch pane's thread offers Stop too
+  (`SessionPane.StopTaskRequested` → `RoostWindow` → `PerchSession.StopTask`).
+  - Seen while rendering, not caused by this work: the kitchen-sink sample row (every glyph on) already truncates
+    its name to nothing and overlaps "-37" with the "work" chip at 1×. The new count adds ~30px when on.
+- **P4 — polish (optional).** A Monitor's full event list on its card (it shows the last event and a count today),
+  and Monitor events in a *live* controlled session, which stream-json doesn't echo (only the transcript and the
+  `.output` file have them).

@@ -29,6 +29,12 @@ internal static class SettingsRegistry
             PreviewTarget.TaskProgress, nameof(AppSettings.ShowTaskProgress),
             s => s.ShowTaskProgress, (s, v) => s.ShowTaskProgress = v),
 
+        Toggle("background-tasks", "Background tasks",
+            "A count of a session's background shells and monitors, so an idle session with a dev server or watcher still running doesn't look finished.",
+            SettingSurface.SessionRow, ["background", "shell", "monitor", "server", "watch", "running", "task", "count"],
+            PreviewTarget.BackgroundTasks, nameof(AppSettings.ShowBackgroundTasks),
+            s => s.ShowBackgroundTasks, (s, v) => s.ShowBackgroundTasks = v),
+
         Toggle("context-pressure", "Context pressure",
             "Thermometer glyph showing how full a session's context window is.",
             SettingSurface.SessionRow,

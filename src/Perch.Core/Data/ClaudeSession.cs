@@ -208,6 +208,16 @@ public record ClaudeSession(
     /// <summary>Running sub-agents under this session; never null.</summary>
     public IReadOnlyList<SubAgent> SubAgents { get; init; } = SubAgents ?? [];
 
+    /// <summary>Background work still running under this session: <c>run_in_background</c> shells, Monitors and
+    /// async agents, from its transcript (<see cref="TranscriptReader.GetRunningBackgroundTasks"/>); never null.
+    /// Deliberately not a "busy" signal: a background dev server can run for hours, so it never holds the done
+    /// alert. The overlay shows it as a count. See <c>docs/background-tasks-plan.md</c>.</summary>
+    public IReadOnlyList<RunningBackgroundTask> BackgroundTasks { get; init; } = [];
+
+    /// <summary>Running background shells and Monitors: the overlay's count. Async agents are left out, because the
+    /// sub-agent rows already show them.</summary>
+    public int BackgroundShellCount => BackgroundTasks.Count(t => t.Kind != BackgroundTaskKind.Agent);
+
     /// <summary>Web Artifacts this session has published to claude.ai; never null. See
     /// <see cref="TranscriptReader.GetArtifacts"/>.</summary>
     public IReadOnlyList<Artifact> Artifacts { get; init; } = Artifacts ?? [];

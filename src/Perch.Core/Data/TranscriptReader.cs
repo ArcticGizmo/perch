@@ -256,6 +256,8 @@ internal sealed class TranscriptReader
     private sealed class BackgroundState
     {
         public readonly Dictionary<string, RunningBackgroundTask> Running = new(StringComparer.Ordinal);   // by task id
+        // A background launch's own description (or command), by tool-use id, until its result names the task.
+        public readonly Dictionary<string, string> Pending = new(StringComparer.Ordinal);
     }
 
     private static readonly Regex NotificationTaskId = new(@"<task-id>([^<]+)</task-id>", RegexOptions.Compiled);
@@ -275,15 +277,27 @@ internal sealed class TranscriptReader
         if (line.Contains("\"type\":\"cost-state\""))
         {
             s.Running.Clear();   // the CLI exited cleanly; its background work went with it
+            s.Pending.Clear();
             return;
         }
-        if (!line.Contains("backgroundTaskId") && !line.Contains("timeoutMs") && !line.Contains("isAsync"))
+        bool launchCall = line.Contains("run_in_background") || line.Contains("\"name\":\"Monitor\"");
+        if (!launchCall && !line.Contains("backgroundTaskId") && !line.Contains("timeoutMs") && !line.Contains("isAsync"))
             return;
         JsonNode? node;
         try { node = JsonNode.Parse(line); }
         catch { return; }
+        if (launchCall && TranscriptJson.AsString(node?["type"]) == "assistant")
+        {
+            NoteBackgroundLaunchCalls(s, node);
+            return;
+        }
         if (node?["toolUseResult"] is not JsonObject r)
             return;
+        string? description = null;
+        if (TranscriptJson.ContentArray(node) is { } results)
+            foreach (var block in results)
+                if (TranscriptJson.AsString(block?["tool_use_id"]) is { } useId && s.Pending.Remove(useId, out var d))
+                    description = d;
         var at = TranscriptJson.ParseTimestamp(TranscriptJson.AsString(node["timestamp"]));
         RunningBackgroundTask? task = null;
         if (TranscriptJson.AsString(r["backgroundTaskId"]) is { Length: > 0 } shell)
@@ -292,15 +306,39 @@ internal sealed class TranscriptReader
             if (TranscriptJson.ContentArray(node) is { } content)
                 foreach (var block in content)
                     output ??= BackgroundTaskOutput.FromLaunchResult(TranscriptJson.AsString(block?["content"]));
-            task = new RunningBackgroundTask(shell, BackgroundTaskKind.Shell, at, output);
+            task = new RunningBackgroundTask(shell, BackgroundTaskKind.Shell, at, output, description);
         }
         else if (TranscriptJson.AsString(r["taskId"]) is { Length: > 0 } monitor && r["timeoutMs"] is not null)
-            task = new RunningBackgroundTask(monitor, BackgroundTaskKind.Monitor, at, null);
+            task = new RunningBackgroundTask(monitor, BackgroundTaskKind.Monitor, at, null, description);
         else if (r["isAsync"] is JsonValue v && v.TryGetValue<bool>(out var isAsync) && isAsync
                  && TranscriptJson.AsString(r["agentId"]) is { Length: > 0 } agent)
-            task = new RunningBackgroundTask(agent, BackgroundTaskKind.Agent, at, null);
+            task = new RunningBackgroundTask(agent, BackgroundTaskKind.Agent, at, null, description);
         if (task is not null)
             s.Running[task.TaskId] = task;
+    }
+
+    // An assistant record's background launches: remember each one's description (else its command) until the result
+    // that names its task arrives. Bounded: a launch whose result never lands is dropped once many are pending.
+    private static void NoteBackgroundLaunchCalls(BackgroundState s, JsonNode? node)
+    {
+        if (TranscriptJson.ContentArray(node) is not { } blocks)
+            return;
+        foreach (var block in blocks)
+        {
+            if (TranscriptJson.BlockType(block) != "tool_use" || TranscriptJson.AsString(block?["id"]) is not { } id)
+                continue;
+            var input = block?["input"];
+            bool background = TranscriptJson.AsString(block?["name"]) == "Monitor"
+                || (input?["run_in_background"] is JsonValue bg && bg.TryGetValue<bool>(out var on) && on);
+            if (!background)
+                continue;
+            var label = TranscriptJson.AsString(input?["description"]) is { Length: > 0 } d ? d
+                      : TranscriptJson.AsString(input?["command"]);
+            if (label is null)
+                continue;
+            if (s.Pending.Count >= 64) s.Pending.Clear();
+            s.Pending[id] = ToolSummary.Clip(label);
+        }
     }
 
     /// <summary>

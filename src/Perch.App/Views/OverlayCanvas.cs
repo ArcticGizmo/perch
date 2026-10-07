@@ -765,6 +765,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showContextPressure = true;
     private bool _showContextGreenSegment;
     private bool _showTaskProgress = true;
+    private bool _showBackgroundTasks = true;
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
     private bool _showConfigDirLabels = true;
@@ -1338,6 +1339,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide the count of a session's running background shells/Monitors. Display only.</summary>
+    public void SetShowBackgroundTasks(bool show)
+    {
+        if (_showBackgroundTasks == show) return;
+        _showBackgroundTasks = show;
+        if (!show) HideActiveTip();
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the live token burn-rate label. Display only; the rate is still computed.</summary>
     public void SetShowBurnRate(bool show)
     {
@@ -1454,6 +1464,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _thermoRects = new();
     private readonly Dictionary<int, Rect> _warnRects = new();
     private readonly Dictionary<int, Rect> _taskRects = new();
+    private readonly Dictionary<int, Rect> _bgTaskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
     private readonly Dictionary<int, Rect> _noteRects = new();
     // The origin (IDE-host) glyph's hit-rect + the host's display name, captured at paint time so a dwell
@@ -1757,7 +1768,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1991,6 +2002,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _thermoRects.Clear();
                 _warnRects.Clear();
                 _taskRects.Clear();
+                _bgTaskRects.Clear();
                 _metricsRects.Clear();
                 _noteRects.Clear();
                 _originRects.Clear();
@@ -3040,6 +3052,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         double taskW = hasTasks ? OverlayDraw.MeasureWidth(taskLabel, StatusSize) + 8 : 0;
 
+        // Background shells/Monitors still running (docs/background-tasks-plan.md): "❯ 2" in the sub-agent hue, which
+        // already means "background work". It never holds the done alert, so on an idle row it's the only sign.
+        int bgCount = _showBackgroundTasks ? session.BackgroundShellCount : 0;
+        string bgLabel = bgCount > 0 ? BackgroundTaskLabel(bgCount) : "";
+        double bgW = bgCount > 0 ? OverlayDraw.MeasureWidth(bgLabel, StatusSize) + 8 : 0;
+
         _sessionMetrics.TryGetValue(session.Pid, out var sessMetrics);
         bool showMetrics = _showSessionMetrics && sessMetrics.ProcessCount > 0;
         double metricsW = showMetrics ? MetricsBarWidth : 0;
@@ -3065,7 +3083,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
+                         - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -3146,20 +3164,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 taskX, nameMidY);
             _taskRects[rowIndex] = new Rect(taskX, nameMidY - 9, taskW, 18);
         }
+        if (bgCount > 0)
+        {
+            double bgX = statusX - thermoW - badgeW - taskW - bgW;
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(bgLabel, StatusSize, SubAgentBrush), bgX, nameMidY);
+            _bgTaskRects[rowIndex] = new Rect(bgX, nameMidY - 9, bgW, 18);
+        }
         if (showMetrics)
         {
-            double metricsX = statusX - thermoW - badgeW - taskW - metricsW;
+            double metricsX = statusX - thermoW - badgeW - taskW - bgW - metricsW;
             DrawMetricsBars(ctx, sessMetrics, metricsX, nameMidY);
             _metricsRects[rowIndex] = new Rect(metricsX, nameMidY - 9, metricsW, 18);
         }
         if (showBurn)
         {
-            double burnX = statusX - thermoW - badgeW - taskW - metricsW - burnW;
+            double burnX = statusX - thermoW - badgeW - taskW - bgW - metricsW - burnW;
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(burnLabel, StatusSize, BurnBrush), burnX, nameMidY);
         }
         if (showDir)
         {
-            double dirX = statusX - thermoW - badgeW - taskW - metricsW - burnW - dirW;
+            double dirX = statusX - thermoW - badgeW - taskW - bgW - metricsW - burnW - dirW;
             DrawDirChip(ctx, dirX, nameMidY, dirLabel!, dirW);
             _dirRects[rowIndex] = new Rect(dirX, nameMidY - 9, Math.Max(0, dirW - 4), 18);
         }
@@ -4303,6 +4327,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestThermoIcon(p) is var th && th >= 0 ? (TipKind.Thermo, th) :
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
+            HitRect(_bgTaskRects, p) is var bt && bt >= 0 ? (TipKind.BackgroundTasks, bt) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
@@ -4344,6 +4369,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Thermo:  ShowThermoTooltip(_tipRow);  break;
             case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
+            case TipKind.BackgroundTasks: ShowBackgroundTasksTooltip(_tipRow); break;
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
@@ -6014,6 +6040,28 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             sb.Append(glyph).Append(' ').Append(label);
         }
         Tooltip().ShowText(sb.ToString(), ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    // The overlay row's background-task label, cached per count so a paint allocates no string.
+    private static readonly string[] BackgroundLabels = Enumerable.Range(0, 10).Select(n => $"❯ {n}").ToArray();
+    private static string BackgroundTaskLabel(int n) => n < BackgroundLabels.Length ? BackgroundLabels[n] : $"❯ {n}";
+
+    // One line per running background shell/Monitor: its glyph, name and how long it has been running.
+    private void ShowBackgroundTasksTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } s) return;
+        if (!_bgTaskRects.TryGetValue(row, out var r)) return;
+        var now = DateTime.UtcNow;
+        var lines = new List<string> { s.BackgroundShellCount == 1 ? "1 running in the background" : $"{s.BackgroundShellCount} running in the background" };
+        foreach (var t in s.BackgroundTasks.Where(t => t.Kind != BackgroundTaskKind.Agent))
+        {
+            var name = t.Description is { Length: > 0 } d ? d : t.TaskId;
+            if (name.Length > 56) name = name[..55].TrimEnd() + "…";
+            var glyph = t.Kind == BackgroundTaskKind.Monitor ? "◉" : "❯";
+            var took = t.StartedUtc is { } at ? "  ·  " + BackgroundTaskText.Elapsed(now - at) : "";
+            lines.Add($"{glyph} {name}{took}");
+        }
+        Tooltip().ShowText(string.Join('\n', lines), ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowMetricsTooltip(int row)

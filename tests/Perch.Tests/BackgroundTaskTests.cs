@@ -198,6 +198,7 @@ public class BackgroundTaskTests
             var running = reader.RunningBackgroundTasksAt(path);
             Assert.Equal(["b7imn475i", "bbm65f6ep"], running.Select(t => t.TaskId).Order());
             Assert.All(running, t => Assert.Equal(BackgroundTaskKind.Shell, t.Kind));
+            Assert.Equal("Delay then exit with code 3", running.Single(t => t.TaskId == "bbm65f6ep").Description);
             Assert.EndsWith("bbm65f6ep.output", running.Single(t => t.TaskId == "bbm65f6ep").OutputFile);
 
             File.AppendAllLines(path, lines[(launched + 1)..(firstEnd + 1)]);
