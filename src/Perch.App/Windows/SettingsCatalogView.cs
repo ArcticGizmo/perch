@@ -369,6 +369,14 @@ internal sealed class SettingsCatalogView : StackPanel
             return place;
         }
 
+        if (d.Id == "feed-subscriptions")
+        {
+            var feeds = SettingsUi.FlatButton("Manage feeds  →");
+            feeds.HorizontalAlignment = HorizontalAlignment.Left;
+            feeds.Click += (_, _) => Navigate?.Invoke("feeds");
+            return feeds;
+        }
+
         var btn = SettingsUi.FlatButton("Manage quick links  →");
         btn.HorizontalAlignment = HorizontalAlignment.Left;
         btn.Click += (_, _) => Navigate?.Invoke("quicklinks");
@@ -500,7 +508,8 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.RoostButton     => ("◫ Roost",     Palette.Accent,  Color.FromRgb(38, 49, 74)),
             PreviewTarget.RecentSessions  => ("◷ Recent",    Palette.Orange, Color.FromRgb(48, 40, 30)),
             PreviewTarget.GitHubAlerts    => ("2 PRs need you", Palette.Yellow, Color.FromRgb(45, 42, 28)),
-            _                            => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
+            PreviewTarget.Feeds           => ("◉ ◉ ◎ 3 new", Palette.Accent,  Color.FromRgb(38, 49, 74)),
+            _                           => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
         };
 
         // No single glyph (notifications, behaviour toggles) — no preview chip at all, rather than an empty

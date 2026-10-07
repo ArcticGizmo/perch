@@ -68,6 +68,7 @@ internal enum PreviewTarget
     RecentSessions,
     GitHubAlerts,
     BackgroundTasks,
+    Feeds,
 }
 
 /// <summary>

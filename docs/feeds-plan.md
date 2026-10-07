@@ -21,6 +21,33 @@ Pulled forward from F3: `FeedSchedule` and `FeedsService` live in Core, so sched
 failure handling are tested end to end without the UI. F3's `FeedsMonitorHost` shrinks to a `DispatcherTimer`
 that calls `TickAsync` and pushes `Snapshot()` to the canvas.
 
+**F2 built** (on `feeds`). It adds:
+
+- **`AppSettings`**: `Feeds`, `ShowFeeds` (off), `FeedsIntervalMinutes` (30) and `NotifyOnFeedEntry` (off).
+- **Registry descriptors**:
+  - `feed-subscriptions`, a List entry whose "Manage feeds →" card links to the page. It's used instead of a
+    `NotSettings` exemption, so search finds it.
+  - `feeds` and `feeds-interval` under Integrations.
+  - `feeds-notify` under Notifications.
+  - A new `PreviewTarget.Feeds`.
+- **The Settings Feeds page** (`SettingsWindow.Feeds.cs`; `SettingsWindow` is now `partial`). Rows carry
+  enable, ↑/↓, Edit and Remove. The URL is trimmed from the left, and a live status line shows "N new · Latest: …
+  · 2h ago", the error, "Not checked yet" or "Paused", with a not-secure marker for http. Below the list are a
+  5–240 min interval stepper in 5-minute steps and a notify toggle.
+- **`FeedDialog`**: checks through the fenced fetcher off the UI thread, and previews the title, icon, entry
+  count and latest entry. It warns on http, refuses duplicates and gives hints for web pages, RSS, 404 and 401/403.
+  A failed check makes the button "Save anyway".
+- **`FeedAddress`** (Core, tested): input normalization (no scheme means https; `feed:` is mapped), duplicate
+  detection and failure hints.
+
+`FeedsMonitorHost` (App) was pulled forward from F3. It's a 5-second `DispatcherTimer` over
+`FeedsService.TickAsync`, skipped while locked, with debounced off-thread read saves. It's applied idempotently
+from `ApplyDisplaySettings`, so with Feeds on the engine already polls and the Settings page shows live status.
+There's no overlay row yet; that's F3.
+
+The headless render now has `feed_dialog_{ok,webpage,http,duplicate}_1x.png`, all eyeballed. **The Settings
+page itself isn't render-verified** (the renderer has no Settings-window harness); check it in the running app.
+
 **Deviations from the draft**
 
 - **Read-marker pruning** is retention-based (30 days after an entry leaves the feed, hard cap 2,000). It no

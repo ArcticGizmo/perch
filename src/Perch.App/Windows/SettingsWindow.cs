@@ -119,6 +119,14 @@ internal sealed class SettingsHooks
 
     /// <summary>Open the developer puppet-account testing tool (shown only when the debug flag is set).</summary>
     public Action? OpenSocialDebug;
+
+    /// <summary>Re-read the feed subscriptions + ShowFeeds/FeedsIntervalMinutes into the feeds engine (start,
+    /// stop, reschedule). Raised by the Feeds page and the feeds catalogue cards.</summary>
+    public Action? FeedsChanged;
+
+    /// <summary>The feeds engine's latest view of one subscription (title, last error, latest entry) for the
+    /// Feeds page's status lines; null before its first check or while feeds are off.</summary>
+    public Func<string, Perch.Feeds.FeedHead?>? FeedStatus;
 }
 
 /// <summary>
@@ -129,7 +137,7 @@ internal sealed class SettingsHooks
 /// <see cref="AppSettings"/> and applies changes live through <see cref="SettingsHooks"/> so the overlay
 /// and monitors stay in sync.
 /// </summary>
-internal sealed class SettingsWindow : Window
+internal sealed partial class SettingsWindow : Window
 {
     private const double NavWidth = 178;
 
@@ -227,6 +235,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "social",       "Social",          BuildSocialPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
+        AddPage(nav, "feeds",        "Feeds",           BuildFeedsPage);
         AddPage(nav, "configdirs",   "Config directories", BuildConfigDirsPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
@@ -694,6 +703,9 @@ internal sealed class SettingsWindow : Window
             item.Foreground = sel ? Palette.TitleBrush : Palette.MutedBrush;
             item.BorderBrush = sel ? Palette.AccentBrush : Brushes.Transparent;
         }
+
+        // The feed status lines come from the live engine; refresh them each time the page is shown.
+        if (key == "feeds") RefreshFeedStatus();
 
         // Scan for recordable sessions only when the Export page is first opened — it walks ~/.claude, so
         // there's no reason to pay for it on every Settings open.

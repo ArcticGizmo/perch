@@ -100,6 +100,7 @@ public partial class App : Application
     private Services.TodoMonitorHost? _todoHost;
     // GitHub alerts: the poller behind the overlay's one-line GitHub strip, and the reused list window it opens.
     private Services.GitHubAlertsMonitorHost? _gitHubHost;
+    private Services.FeedsMonitorHost? _feedsHost;
     private GitHubAlertsWindow? _gitHubWindow;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
@@ -193,6 +194,7 @@ public partial class App : Application
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
                 _gitHubHost?.Dispose();
+                _feedsHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -502,6 +504,11 @@ public partial class App : Application
             _gitHubHost = new Services.GitHubAlertsMonitorHost(
                 GitHubAlertsSeenStore.Load(), strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
             _overlay.Canvas.GitHubAlertsRequested += OpenGitHubAlerts;
+            // Feeds: the engine behind the overlay's story-heads row (started/stopped from ApplyDisplaySettings per
+            // ShowFeeds). Nothing is fetched while it's off. See docs/feeds-plan.md.
+            _feedsHost = new Services.FeedsMonitorHost(
+                new Perch.Feeds.FeedsService(Perch.Feeds.FeedStore.Default(), new Perch.Feeds.FeedFetcher()), _sessionLock);
+            _feedsHost.Changed += () => _settings?.RefreshFeedStatus();
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
@@ -1052,6 +1059,9 @@ public partial class App : Application
             if (s.ShowGitHubAlerts) gitHubHost.Start();
             else gitHubHost.Stop();
         }
+
+        // Feeds: subscriptions + interval + on/off into the engine (idempotent; off fetches nothing).
+        _feedsHost?.Apply(s);
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
@@ -3237,6 +3247,8 @@ public partial class App : Application
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,
             OpenSocialDebug = OpenSocialDebug,
+            FeedsChanged = () => _feedsHost?.Apply(settings),
+            FeedStatus = id => _feedsHost?.Head(id),
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

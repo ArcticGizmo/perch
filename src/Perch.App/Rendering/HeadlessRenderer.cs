@@ -325,6 +325,7 @@ internal static class HeadlessRenderer
         GitHubProbe("overlay_github_error_1x.png",
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
+        RenderFeedDialog(outDir);
 
         // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
         // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
@@ -2696,6 +2697,36 @@ internal static class HeadlessRenderer
             host.SeedForRender(SampleData.GitHubAlerts());
             var w = new GitHubAlertsWindow(host);
             w.SetNeedsYouOnlyForRender(needsYouOnly, search);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The Add feed dialog after a check: a good feed, a web page given by mistake (with its hint), plain http (the
+    // warning), and an address already followed. Seeded directly, so nothing touches the network.
+    private static void RenderFeedDialog(string outDir)
+    {
+        var existing = new List<Perch.Feeds.FeedSubscription>
+        {
+            new() { Id = "taken", Url = "https://github.com/AvaloniaUI/Avalonia/releases.atom" },
+        };
+        Capture("feed_dialog_ok_1x.png", "https://github.com/dotnet/runtime/releases.atom", SampleData.FeedDoc(), null);
+        Capture("feed_dialog_webpage_1x.png", "https://blog.example.com/", null, "Not a feed (looks like a web page)");
+        Capture("feed_dialog_http_1x.png", "http://intranet.example/news.atom", SampleData.FeedDoc(), null);
+        Capture("feed_dialog_duplicate_1x.png", "https://github.com/AvaloniaUI/Avalonia/releases.atom", null, null);
+
+        void Capture(string file, string url, Perch.Feeds.FeedDoc? doc, string? error)
+        {
+            var w = new FeedDialog(new Perch.Feeds.FeedSubscription { Id = "edit", Url = url }, existing);
+            w.SeedForRender(doc, error);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

@@ -264,8 +264,8 @@ internal sealed class FeedsService : IDisposable
         return arrivals;
     }
 
-    // The feed's own icon/logo, else the site's /favicon.ico.
-    private static Uri? IconCandidate(FeedDoc doc, Uri? finalUrl)
+    /// <summary>The icon to fetch for a feed: its own icon/logo, else the site's <c>/favicon.ico</c>.</summary>
+    internal static Uri? IconCandidate(FeedDoc doc, Uri? finalUrl)
     {
         if (doc.IconUrl is not null) return FeedUrl.Safe(doc.IconUrl, null);
         var site = FeedUrl.Safe(doc.SiteUrl, null) ?? finalUrl;

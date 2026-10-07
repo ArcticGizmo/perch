@@ -303,6 +303,17 @@ internal static class SampleData
         new("t-3", "Cut the next release", "Fri", Overdue: false),
     ];
 
+    /// <summary>A parsed feed for the feed dialog / row / story renders: a releases feed with a few entries.</summary>
+    public static Perch.Feeds.FeedDoc FeedDoc()
+    {
+        var now = DateTime.UtcNow;
+        Perch.Feeds.FeedEntry E(string id, string title, double hoursAgo) =>
+            new(id, title, $"https://github.com/dotnet/runtime/releases/tag/{id}", "dotnet-bot", null,
+                now.AddHours(-hoursAgo), $"<p>Release notes for <strong>{title}</strong>.</p>", null, $"Release notes for {title}.");
+        return new Perch.Feeds.FeedDoc("Release notes from runtime", "https://github.com/dotnet/runtime/releases", null, now,
+            [E("v10.0.3", ".NET 10.0.3", 2), E("v10.0.2", ".NET 10.0.2", 26), E("v10.0.1", ".NET 10.0.1", 300)]);
+    }
+
     /// <summary>A GitHub alerts poll covering every reason the classifier can raise across three repos, plus PRs that
     /// need nothing — so the strip, the window's "Needs you" view and its "All open" view all have something to show.
     /// The viewer is "me"; times are relative to now so the "updated …" labels read naturally.</summary>
