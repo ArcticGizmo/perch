@@ -8,8 +8,10 @@ namespace Perch.Tests;
 /// Replays real <c>claude -p --output-format stream-json</c> stdout (captured from 2.1.282, scrubbed) through
 /// <see cref="StreamJsonParser"/> into <see cref="SessionConversation"/>, the path the controller's pump takes.
 /// Hand-built events can't express wire details such as a sub-agent's <c>parent_tool_use_id</c>; these can.
-/// Fixture lines are CLI records, plus <c>{"perch":"prompt"}</c> where Perch sent a prompt and
-/// <c>{"perch":"expect"}</c> checkpoints on the turn state at that point in the stream.
+/// Fixture lines are CLI records, plus <c>{"perch":"prompt"}</c> where Perch sent a prompt,
+/// <c>{"perch":"interrupt"}</c> where it sent an interrupt, and <c>{"perch":"expect"}</c> checkpoints on the turn
+/// state at that point in the stream. The interrupt fixtures were captured from 2.1.291 with an 8s quiet window
+/// after the interrupt's result: the CLI emitted nothing in it, mid-tool or mid-stream.
 /// </summary>
 public class StreamJsonReplayTests
 {
@@ -17,6 +19,8 @@ public class StreamJsonReplayTests
     [InlineData("absorbed-mid-turn-prompt.jsonl")]
     [InlineData("queued-prompts-own-turn.jsonl")]
     [InlineData("background-agent-after-result.jsonl")]
+    [InlineData("interrupt-mid-tool.jsonl")]
+    [InlineData("interrupt-mid-text.jsonl")]
     public void Replay_MatchesExpectedTurnState(string fixture)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "stream-json", fixture);
@@ -31,6 +35,9 @@ public class StreamJsonReplayTests
             {
                 case "prompt":
                     conv.AddUserPrompt(node["text"]!.GetValue<string>());
+                    break;
+                case "interrupt":
+                    conv.NoteInterrupt();   // what the window does alongside the controller's interrupt request
                     break;
                 case "expect":
                     checkpoints++;
