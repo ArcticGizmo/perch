@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.14] - 2026-10-07
+
+- `perch` in PowerShell or cmd hands the prompt back cleanly (it was there; the cursor just didn't know)
+- `perch --help` and `perch --version`, which no longer open a session
+- `perch` says when it's starting the tray, not only when it's already running
+- CLI output survives redirects (`perch configdirs > file` was writing nothing, very confidently)
+
+---
+
 ## [v0.5.13] - 2026-10-07
 
 - Background shells and monitors run live in the session, with output and Stop

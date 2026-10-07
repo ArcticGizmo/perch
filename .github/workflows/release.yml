@@ -68,6 +68,11 @@ jobs:
       - name: Publish perch-hook (NativeAOT)
         run: dotnet publish src/Perch.Hook/Perch.Hook.csproj -c Release -r win-x64 -p:Version=${{ steps.version.outputs.VERSION }} -o publish/
 
+      # perch.com is the console front door for perch.exe (cmd/PowerShell resolve `perch` to it and wait, so CLI
+      # output lands before the prompt). The project renames its binary to perch.com on publish.
+      - name: Publish perch.com (NativeAOT)
+        run: dotnet publish src/Perch.Cli/Perch.Cli.csproj -c Release -r win-x64 -p:Version=${{ steps.version.outputs.VERSION }} -o publish/
+
       - name: Pack with Velopack
         run: dotnet vpk pack --packId Perch --packTitle "Perch" --packVersion ${{ steps.version.outputs.VERSION }} --packDir publish/ --mainExe perch.exe --outputDir releases/
 

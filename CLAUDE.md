@@ -29,6 +29,12 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   hooks (self-managed in `~/.claude/settings.json`; see `Perch.Data.ClaudeUserSettings` +
   `Perch.App/Services/HookInstaller`). It writes the session sidecars the tray watches and launches/
   detects the tray by the process name **`perch`**. (This replaced the old marketplace plugin.)
+- `src/Perch.Cli/` — **`perch.com`**, a tiny NativeAOT console shim published next to `perch.exe` (the
+  `devenv.com` pattern). `perch.exe` is GUI-subsystem, so cmd/PowerShell don't wait for it and its output lands
+  after the prompt; they resolve a bare `perch` to `perch.com` first (PATHEXT), which just runs the sibling
+  `perch.exe` with the same args/console and waits. All CLI logic stays in `perch.exe` (`--help`/`--version` text
+  in `Perch.Data.Control.CliUsage`). Git Bash still resolves `perch.exe`. Anything that launches the tray must
+  name `perch.exe` explicitly, never the bare `perch` (that would be the waiting shim).
 - `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`), writing
   `src/Perch.App/Assets/icon.{png,ico}` and `landing-icon.png`.
 - `install.ps1` — the Windows one-liner installer (`irm …/install.ps1 | iex`), served straight from

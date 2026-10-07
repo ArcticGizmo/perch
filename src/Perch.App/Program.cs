@@ -36,6 +36,17 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // `perch --help` / `perch --version` print and exit — never a tray, never a session (a bare terminal
+        // `perch` opens one, and an unrecognised flag used to fall through to exactly that).
+        if (Perch.Data.Control.CliUsage.IsHelp(args) || Perch.Data.Control.CliUsage.IsVersion(args))
+        {
+            AttachParentConsole();
+            Console.WriteLine(Perch.Data.Control.CliUsage.IsHelp(args)
+                ? Perch.Data.Control.CliUsage.Help(Perch.Data.AppInfo.Version)
+                : Perch.Data.Control.CliUsage.VersionLine(Perch.Data.AppInfo.Version));
+            return 0;
+        }
+
         // `perch render <outDir> [themeId]` dumps views to PNG (headless) for visual verification, under
         // the given colour theme (default Midnight) — so a preset can be eyeballed / diffed per theme.
         if (args.Length > 0 && args[0] == "render")
@@ -276,7 +287,7 @@ internal static class Program
     // in-process if the relaunch can't be started.
     private static int DetachTray(Perch.Data.Control.SessionOpenIntent? intent)
     {
-        AttachParentConsole(); // so a relaunch failure is visible; nothing is printed on success
+        AttachParentConsole(); // so the terminal sees what happened (perch.com waits for us, so it lands before the prompt)
         var exe = Environment.ProcessPath;
         if (exe is null)   // no image path to relaunch — run in the foreground rather than fail the launch
         {
@@ -309,6 +320,7 @@ internal static class Program
             _instanceMutex = null;
 
             Process.Start(psi);
+            Console.WriteLine(intent is null ? "Starting Perch." : "Starting Perch and opening the session.");
             return 0;
         }
         catch (Exception ex)
@@ -348,12 +360,20 @@ internal static class Program
     // streams onto it, so `perch <cli-subcommand>` output is actually visible. A GUI-subsystem process
     // isn't wired to an interactive console for stdio (only when its output is redirected to a pipe/file),
     // which is why the CLI subcommands looked silent. A no-op off Windows or when there's no parent
-    // console (e.g. double-clicked), where output simply goes nowhere as before.
+    // console (e.g. double-clicked), where output simply goes nowhere as before. A stream that's already
+    // redirected to a file or pipe (`perch --help | more`, or perch.com's captured output) keeps that target:
+    // AttachConsole repoints the standard handles at the console, so a redirected one is put back afterwards
+    // (for this writer and for anything that opens stdout itself, like StatuslineCli).
     private static void AttachParentConsole()
     {
 #if WINDOWS
+        var redirectedOut = RedirectedHandle(NativeConsole.STD_OUTPUT_HANDLE);
+        var redirectedErr = RedirectedHandle(NativeConsole.STD_ERROR_HANDLE);
         const int ATTACH_PARENT_PROCESS = -1;
-        if (!NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS))
+        bool attached = NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS);
+        if (redirectedOut != IntPtr.Zero) NativeConsole.SetStdHandle(NativeConsole.STD_OUTPUT_HANDLE, redirectedOut);
+        if (redirectedErr != IntPtr.Zero) NativeConsole.SetStdHandle(NativeConsole.STD_ERROR_HANDLE, redirectedErr);
+        if (!attached && redirectedOut == IntPtr.Zero && redirectedErr == IntPtr.Zero)
             return;
         try
         {
@@ -365,10 +385,23 @@ internal static class Program
     }
 
 #if WINDOWS
+    // The standard handle when it's redirected to a file (DISK) or a pipe, else zero.
+    private static IntPtr RedirectedHandle(int which)
+    {
+        var handle = NativeConsole.GetStdHandle(which);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return IntPtr.Zero;
+        uint type = NativeConsole.GetFileType(handle) & 0x7FFF; // drop FILE_TYPE_REMOTE
+        return type is NativeConsole.FILE_TYPE_DISK or NativeConsole.FILE_TYPE_PIPE ? handle : IntPtr.Zero;
+    }
+#endif
+
+#if WINDOWS
     private static class NativeConsole
     {
         public const int STD_INPUT_HANDLE = -10;
         public const int STD_OUTPUT_HANDLE = -11;
+        public const int STD_ERROR_HANDLE = -12;
+        public const uint FILE_TYPE_DISK = 0x0001;
         public const uint FILE_TYPE_CHAR = 0x0002;
         public const uint FILE_TYPE_PIPE = 0x0003;
 
@@ -380,6 +413,9 @@ internal static class Program
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         public static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetStdHandle(int nStdHandle, IntPtr hHandle);
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         public static extern uint GetFileType(IntPtr hFile);
