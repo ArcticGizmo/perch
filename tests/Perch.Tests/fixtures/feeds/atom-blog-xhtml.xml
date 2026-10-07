@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://blog.example/">
+  <title type="html">Jane&amp;#8217;s &lt;em&gt;blog&lt;/em&gt;</title>
+  <link href="/" />
+  <author><name>Jane Doe</name></author>
+  <logo>/logo.png</logo>
+  <updated>2026-10-01T08:00:00Z</updated>
+  <entry>
+    <title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">Tables &amp; <b>lists</b></div></title>
+    <link href="posts/tables" />
+    <id>urn:uuid:60a76c80-d399-11d9-b93c-0003939e0af6</id>
+    <published>2026-09-30T08:00:00Z</published>
+    <updated>2026-10-01T08:00:00Z</updated>
+    <summary>A short tour.</summary>
+    <content type="xhtml" xml:base="posts/">
+      <div xmlns="http://www.w3.org/1999/xhtml">
+        <p>Read the <a href="part-2">second part</a> first. 1 &lt; 2.</p>
+        <table><tr><th>Name</th><th>Size</th></tr><tr><td>a</td><td>1</td></tr></table>
+        <ol start="3"><li>three</li><li>four</li></ol>
+        <img src="/img/chart.png" alt="Sales chart"/>
+        <pre>int x = 1;
+if (x &lt; 2) { }</pre>
+      </div>
+    </content>
+  </entry>
+  <entry>
+    <title>No id, text content</title>
+    <link rel="related" href="https://elsewhere.example/" />
+    <link href="https://blog.example/posts/plain" />
+    <updated>2026-09-01T08:00:00Z</updated>
+    <content type="text">Line one
+still one.
+
+Paragraph two &lt;b&gt;not bold&lt;/b&gt;.</content>
+  </entry>
+  <entry>
+    <id>urn:x:3</id>
+    <title>Out of line</title>
+    <updated>not a date</updated>
+    <published>2026-08-01T00:00:00Z</published>
+    <content src="https://media.example/video.mp4" type="video/mp4"/>
+  </entry>
+</feed>

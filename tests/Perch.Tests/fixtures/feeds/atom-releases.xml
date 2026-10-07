@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/example/widget/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/example/widget/releases"/>
+  <link type="application/atom+xml" rel="self" href="https://github.com/example/widget/releases.atom"/>
+  <title>Release notes from widget</title>
+  <updated>2026-10-05T09:30:00Z</updated>
+  <icon>/favicon.ico</icon>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v2.4.0</id>
+    <updated>2026-10-05T09:30:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/example/widget/releases/tag/v2.4.0"/>
+    <title>v2.4.0</title>
+    <content type="html">&lt;h2&gt;What&amp;#39;s new&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Faster &lt;code&gt;render()&lt;/code&gt; by 30%&lt;/li&gt;
+&lt;li&gt;See &lt;a href="/example/widget/pull/42"&gt;#42&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;</content>
+    <author>
+      <name>octocat</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.example/u/1?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v2.3.1</id>
+    <updated>2026-09-20T14:00:00+02:00</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/example/widget/releases/tag/v2.3.1"/>
+    <title>v2.3.1</title>
+    <content type="html">&lt;p&gt;Bug fixes.&lt;/p&gt;</content>
+    <author>
+      <name>hubot</name>
+    </author>
+  </entry>
+</feed>
