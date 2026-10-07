@@ -842,9 +842,10 @@ internal sealed class SessionThreadView : ScrollViewer
                     case TextPart t when existing is StreamingProse sp:
                         if (t.IsStreaming) sp.Poke(); else sp.Finalize(t.Text);
                         break;
+                    // Every flush walks every part of the turn, so this must be a no-op for an unchanged card —
+                    // a long agentic turn has hundreds, and rebuilding them all per streamed delta thrashed the GC.
                     case ToolCallPart tool when view.Tools.TryGetValue(tool, out var card):
-                        card.Update(tool);
-                        if (view.Groups.TryGetValue(tool, out var g)) g.Refresh();   // fold summary tracks status
+                        if (card.Update(tool) && view.Groups.TryGetValue(tool, out var g)) g.Refresh();   // fold summary tracks status
                         break;
                 }
                 continue;
@@ -1194,8 +1195,14 @@ internal sealed class SessionThreadView : ScrollViewer
         private readonly TextBlock _chevron;   // ▸/▾ affordance in the header, shown only when expandable
         private readonly Border _headerBorder;
         private Control? _diffPanel;   // the rendered diff, built lazily and reused across status updates
+        private readonly JsonNode? _input;   // the parsed input (immutable once the call lands), parsed once
         private ToolCallPart _part;
         private bool _expanded;
+        // What the body was last built from; Update is a no-op while all three still match.
+        private ToolCallStatus? _shownStatus;
+        private string? _shownResult;
+        private bool _shownExpanded;
+        private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
         public Border Root { get; }
 
@@ -1205,7 +1212,8 @@ internal sealed class SessionThreadView : ScrollViewer
             _p = p;
             _part = part;
 
-            _diffLines = EditDiff.Build(part.ToolName, ParseOrNull(part.InputJson));
+            _input = ParseOrNull(part.InputJson);
+            _diffLines = EditDiff.Build(part.ToolName, _input);
             // An edit's diff shows by default; other detail stays closed. Compact density (a Roost pane) keeps
             // every card collapsed — the pane is a glance, the full window is for reading diffs.
             _expanded = !compact && _diffLines is { Count: > 0 };
@@ -1304,9 +1312,17 @@ internal sealed class SessionThreadView : ScrollViewer
             Update(part);
         }
 
-        public void Update(ToolCallPart part)
+        /// <summary>Re-renders the card from <paramref name="part"/>; returns false (doing nothing) when its status,
+        /// result and expanded state are what the card already shows.</summary>
+        public bool Update(ToolCallPart part)
         {
+            if (ReferenceEquals(part, _part) && part.Status == _shownStatus
+                && ReferenceEquals(part.ResultText, _shownResult) && _expanded == _shownExpanded)
+                return false;
             _part = part;
+            _shownStatus = part.Status;
+            _shownResult = part.ResultText;
+            _shownExpanded = _expanded;
             var (brush, label) = part.Status switch
             {
                 ToolCallStatus.Done   => (_p.Ok, "done"),
@@ -1320,7 +1336,7 @@ internal sealed class SessionThreadView : ScrollViewer
             bool failed = part.Status == ToolCallStatus.Failed;
             bool hasDiff = _diffLines is { Count: > 0 };
             bool known = ToolSummary.IsKnown(part.ToolName);
-            var input = ParseOrNull(part.InputJson);
+            var input = _input;
             string full = part.ResultText;
             // The collapsed one-liner: a per-tool summary where a count reads better ("Read 42 lines",
             // "12 files"), else the first line of the output.
@@ -1336,7 +1352,7 @@ internal sealed class SessionThreadView : ScrollViewer
             _expandable = hasDiff || moreResult || !known || command is { Length: > 60 };
             _chevron.IsVisible = _expandable;
             _chevron.Text = _expanded ? "▾" : "▸";
-            _headerBorder.Cursor = _expandable ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            _headerBorder.Cursor = _expandable ? HandCursor : Cursor.Default;
             bool showExpanded = _expandable && _expanded;
             _bodyStack.Children.Clear();
 
@@ -1364,6 +1380,7 @@ internal sealed class SessionThreadView : ScrollViewer
                 _bodyStack.Children.Add(MonoText(collapsed, failed));
             }
             _out.IsVisible = _bodyStack.Children.Count > 0;
+            return true;
         }
 
         // A single-line summary of a tool result for the collapsed card: its first non-blank line, clipped.
