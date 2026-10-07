@@ -502,6 +502,33 @@ public class SessionConversationTests
         Assert.Equal(1, raised);
     }
 
+    // A background task (run_in_background Bash, or an async agent) finishing after the turn's result: the CLI hands
+    // its result back in a turn of its own, with nothing sent from Perch and nothing queued. That turn must read busy
+    // — StateChanged is what publishes the overlay's status — and its result settles it, which is the overlay's
+    // busy→idle "done". Before the reopen it stayed idle throughout, so the row read "idle" and no "done" came.
+    [Fact]
+    public void BackgroundTaskHandBack_ReopensTurnAndRaisesStateChanged()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("run the build in the background");
+        conv.Apply(new ToolUseEvent("t1", "PowerShell", "Running: dotnet build"));
+        conv.Apply(new ToolResultEvent("t1", "Command running in background with ID: bcek9ulsc", false));
+        conv.Apply(new AssistantTextEvent("started it"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+        Assert.False(conv.MayHaveQueuedTurn);
+        int raised = 0;
+        conv.StateChanged += () => raised++;
+
+        conv.Apply(new ToolUseEvent("t2", "PowerShell", "Running: git remote -v"));
+        Assert.True(conv.TurnActive);
+        Assert.True(raised > 0);
+
+        conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+        Assert.True(conv.IsSettled);
+    }
+
     [Fact]
     public void SessionEnded_ClearsPossiblyQueuedTurn()
     {
