@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    perch.com: the console front door for perch.exe on Windows (the devenv.com / devenv.exe pattern).
+
+    perch.exe is a GUI-subsystem app, so an interactive cmd or PowerShell hands the prompt straight back when it
+    starts, and anything it then prints ("Opening in Perch.", help, version) lands after the prompt, which leaves
+    the cursor looking stuck. A console app is waited on. cmd and PowerShell resolve a bare `perch` to perch.com
+    first because PATHEXT lists .COM before .EXE, and both files live in the install dir already on PATH.
+
+    The shim only runs perch.exe with the same arguments and console, waits, and returns its exit code. Every
+    CLI decision stays in perch.exe. Publishing renames the binary to perch.com (a PE image runs whatever its
+    extension); publish.bat / release.yml publish it into the same dir as perch.exe so Velopack packs them together.
+    NativeAOT for the same reason as perch-hook: it sits in front of every terminal `perch`.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>perch-cli</AssemblyName>
+    <RootNamespace>Perch.Cli</RootNamespace>
+
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StackTraceSupport>false</StackTraceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+
+  <!-- Publish as perch.com (Windows only; nothing else ships this shim). -->
+  <Target Name="PublishAsPerchCom" AfterTargets="Publish" Condition="Exists('$(PublishDir)$(AssemblyName).exe')">
+    <Delete Files="$(PublishDir)perch.com" />
+    <Move SourceFiles="$(PublishDir)$(AssemblyName).exe" DestinationFiles="$(PublishDir)perch.com" />
+    <Delete Files="$(PublishDir)$(AssemblyName).pdb" />
+  </Target>
+</Project>

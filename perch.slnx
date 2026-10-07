@@ -5,6 +5,7 @@
     <Project Path="src/Perch.Platform.Mac/Perch.Platform.Mac.csproj" />
     <Project Path="src/Perch.App/Perch.App.csproj" />
     <Project Path="src/Perch.Hook/Perch.Hook.csproj" />
+    <Project Path="src/Perch.Cli/Perch.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Perch.Tests/Perch.Tests.csproj" />

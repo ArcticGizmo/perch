@@ -51,6 +51,25 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo Publishing perch.com (NativeAOT) ...
+
+:: perch.com is the console front door for perch.exe: cmd/PowerShell resolve a bare `perch` to it (PATHEXT puts
+:: .COM first) and wait for it, so CLI output lands before the prompt. The project renames its binary to perch.com
+:: on publish. Same AOT-or-single-file fallback as perch-hook above.
+dotnet publish src\Perch.Cli\Perch.Cli.csproj -c Release -r win-x64 -p:Version=%VERSION% -o publish\
+
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo NativeAOT publish failed - falling back to a self-contained single-file perch.com.
+    echo.
+    dotnet publish src\Perch.Cli\Perch.Cli.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false -p:EnableCompressionInSingleFile=true -p:Version=%VERSION% -o publish\
+)
+
+if %ERRORLEVEL% neq 0 (
+    echo perch.com publish failed.
+    exit /b %ERRORLEVEL%
+)
+
 echo Packaging ...
 
 :: vpk is a local tool pinned in .config\dotnet-tools.json (to the app's Velopack library version), so a
