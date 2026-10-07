@@ -69,9 +69,32 @@ internal sealed class SessionThreadView : ScrollViewer
         public bool CardOnly;
     }
 
-    // Every user-prompt row in order, so "jump to previous prompt" can walk upward through them; plus the cached
-    // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change).
-    private readonly List<Control> _userRows = new();
+    // Virtualization: an item far outside the viewport is dehydrated — its controls dropped and its wrapper
+    // pinned to the height it had — and rebuilt from the model when it scrolls back near. Every item can be
+    // rebuilt from the conversation at any time (Bind does exactly that), so the only view state worth keeping
+    // across a rebuild is what the user opened or closed: _expandState holds it, keyed by the model object (a
+    // ToolCallPart for a card, a GroupKey for a fold, a ThinkingPart for a thought). The bands are in DIPs:
+    // items within HydrateMargin of the viewport are built, and those past DropMargin are dropped — the gap
+    // between them keeps an item near the edge from flapping.
+    private readonly Dictionary<object, bool> _expandState = new();
+    private SessionConversation? _expandOwner;
+    private bool _realizeQueued;
+    private const double MinHydrateMargin = 600, MinDropMargin = 2400;
+
+    /// <summary>Render bench only: off builds every item and keeps it, so the bench can compare against it.</summary>
+    internal static bool VirtualizationEnabled = true;
+
+    /// <summary>Render bench only: how many items have their controls built, of how many in the column.</summary>
+    internal (int Built, int Total) BuiltItems => (_wraps.Values.Count(w => w.Child is not null), _wraps.Count);
+
+    // A tool fold's key in _expandState: its first call (a distinct type so it can't collide with that call's
+    // own card entry).
+    private sealed record GroupKey(ToolCallPart First);
+
+    // Every user-prompt wrapper in order, so "jump to previous prompt" can walk upward through them; plus the cached
+    // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change). Wrappers,
+    // not rows, because a wrapper keeps its place (and height) while its item is dehydrated.
+    private readonly List<Border> _userWraps = new();
     private bool _atBottom = true;
     private bool _atTop = true;
     private bool _hasPromptAbove;
@@ -184,6 +207,7 @@ internal sealed class SessionThreadView : ScrollViewer
         ScrollChanged += (_, e) =>
         {
             RecomputeScrollState();   // keep the floating jump buttons in sync with every scroll/growth
+            QueueRealize();           // build what scrolled near, drop what scrolled far
             // A reflow (extent changed — expand/collapse, streaming) moves match rectangles; repaint them.
             if (e.ExtentDelta.Y != 0) { if (_matches.Count > 0) RefreshHighlightLayer(); return; }
             if (e.OffsetDelta.Y == 0) return;
@@ -219,8 +243,9 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>Points the view at a conversation (materialising what it already holds) and follows it.</summary>
     public void Bind(SessionConversation conversation)
     {
-        Unbind();
+        Unbind(keepExpandState: ReferenceEquals(conversation, _expandOwner));   // a rebuild (reset, restyle) keeps what was open
         _conv = conversation;
+        _expandOwner = conversation;
         // Unbind cleared the column. A compact (Roost) thread builds its newest items now and the older ones in
         // background batches.
         var items = conversation.Items;
@@ -239,9 +264,16 @@ internal sealed class SessionThreadView : ScrollViewer
     /// (and any Roost pane showing it) by design, so a window that closes or re-points, or a pane that drops
     /// its view, MUST call this — otherwise the conversation's events keep the whole chat tree alive and
     /// processing deltas behind a view nobody can see.</summary>
-    public void Unbind()
+    public void Unbind() => Unbind(keepExpandState: false);
+
+    private void Unbind(bool keepExpandState)
     {
-        _bindGen++;   // drops any pending backlog batch
+        if (!keepExpandState)
+        {
+            _expandState.Clear();
+            _expandOwner = null;
+        }
+        _bindGen++;   // drops any pending backlog batch and offset correction
         _backlog = 0;
         if (_conv is { } c)
         {
@@ -252,7 +284,7 @@ internal sealed class SessionThreadView : ScrollViewer
         }
         _pendingSync.Clear();
         _activityShown = false;   // the row goes with the column; Bind re-adds it if the turn is live
-        _userRows.Clear();
+        _userWraps.Clear();
         _stack.Children.Clear();   // detaching stops any streaming block's frame timer
         _views.Clear();
         _wraps.Clear();
@@ -393,8 +425,8 @@ internal sealed class SessionThreadView : ScrollViewer
     private void PrependNext(SessionConversation conv)
     {
         var item = conv.Items[--_backlog];
-        var root = AddItem(item, at: 0);
-        if (item is UserMessageItem) _userRows.Insert(0, root);
+        var wrap = AddItem(item, at: 0);
+        if (item is UserMessageItem) _userWraps.Insert(0, wrap);
     }
 
     private void ScrollToEndSoon() =>
@@ -413,7 +445,7 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>Scroll to the very top of the thread (the "jump to top" button).</summary>
     public void JumpToTop()
     {
-        FlushBacklog();
+        FlushBacklog();   // placeholders keep their height, so only never-built items need building first
         _stickToBottom = false;
         Offset = new Vector(Offset.X, 0);
         RecomputeScrollState();
@@ -425,11 +457,10 @@ internal sealed class SessionThreadView : ScrollViewer
     {
         // The closest prompt below = the one with the least content-top still below the viewport top.
         double bestTop = double.PositiveInfinity;
-        foreach (var row in _userRows)
+        foreach (var wrap in _userWraps)
         {
-            if (row.TranslatePoint(new Point(0, 0), this) is not { } p) continue;
-            if (p.Y <= PromptAboveEpsilon) continue;             // at/above the viewport top — not "below"
-            double top = Offset.Y + p.Y;                          // p is viewport-relative; +Offset → content Y
+            if (RowTop(wrap) is not { } top) continue;
+            if (top - Offset.Y <= PromptAboveEpsilon) continue;   // at/above the viewport top — not "below"
             if (top < bestTop) bestTop = top;
         }
         if (double.IsPositiveInfinity(bestTop)) return;
@@ -446,11 +477,10 @@ internal sealed class SessionThreadView : ScrollViewer
         FlushBacklog();
         // The closest prompt above = the one with the greatest content-top still above the viewport top.
         double bestTop = double.NegativeInfinity;
-        foreach (var row in _userRows)
+        foreach (var wrap in _userWraps)
         {
-            if (row.TranslatePoint(new Point(0, 0), this) is not { } p) continue;
-            if (p.Y >= -PromptAboveEpsilon) continue;             // at/below the viewport top — not "above"
-            double top = Offset.Y + p.Y;                          // p is viewport-relative; +Offset → content Y
+            if (RowTop(wrap) is not { } top) continue;
+            if (top - Offset.Y >= -PromptAboveEpsilon) continue;  // at/below the viewport top — not "above"
             if (top > bestTop) bestTop = top;
         }
         if (double.IsNegativeInfinity(bestTop)) return;
@@ -468,11 +498,12 @@ internal sealed class SessionThreadView : ScrollViewer
         bool atTop = Offset.Y <= 8;
         bool above = false, below = false;
         if (Viewport.Height > 0)
-            foreach (var row in _userRows)
-                if (row.TranslatePoint(new Point(0, 0), this) is { } p)
+            foreach (var wrap in _userWraps)
+                if (RowTop(wrap) is { } top)
                 {
-                    if (p.Y < -PromptAboveEpsilon) above = true;
-                    else if (p.Y > PromptAboveEpsilon) below = true;
+                    double y = top - Offset.Y;   // viewport-relative
+                    if (y < -PromptAboveEpsilon) above = true;
+                    else if (y > PromptAboveEpsilon) below = true;
                 }
 
         if (atBottom == _atBottom && atTop == _atTop && above == _hasPromptAbove && below == _hasPromptBelow) return;
@@ -486,35 +517,143 @@ internal sealed class SessionThreadView : ScrollViewer
     // ── Items ────────────────────────────────────────────────────────────────────
 
     // Builds an item's view and adds it at the end of the column, or at index <paramref name="at"/> (the
-    // backlog prepending older items). Returns the item's root.
-    private Control AddItem(ConversationItem item, int at = -1)
+    // backlog prepending older items). Returns the item's wrapper.
+    private Border AddItem(ConversationItem item, int at = -1)
     {
-        ItemView view = item switch
-        {
-            UserMessageItem u      => new ItemView { Root = BuildUser(u) },
-            AssistantMessageItem a => BuildAssistant(a),
-            PermissionItem p       => new ItemView { Root = Row(BuildPermission(p), null, null) },
-            NoteItem n             => new ItemView { Root = Row(BuildNote(n), null, null) },
-            CompactionItem cm      => new ItemView { Root = Row(BuildCompaction(cm), null, null) },
-            _                      => new ItemView { Root = new Panel() },
-        };
-        _views[item] = view;
-        // Every item sits in a highlight wrapper (inert until Ctrl+F lights it up). The 1px transparent border
-        // is always present so toggling the outline on a match never shifts the layout.
+        // Every item sits in a wrapper that outlives its controls: the Ctrl+F highlight target (inert until a
+        // match lights it; the 1px transparent border is always present so the outline never shifts layout), and
+        // the fixed-height placeholder that holds the item's place while it's dehydrated. Tag = the item.
         var wrap = new Border
         {
-            Child = view.Root, CornerRadius = new CornerRadius(8),
+            Tag = item, CornerRadius = new CornerRadius(8),
             BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent,
         };
         _wraps[item] = wrap;
+        Hydrate(item, wrap);
         if (at < 0)
         {
             _stack.Children.Add(wrap);
-            if (item is UserMessageItem) _userRows.Add(view.Root);
+            if (item is UserMessageItem) _userWraps.Add(wrap);
         }
         else _stack.Children.Insert(at, wrap);
-        Dispatcher.UIThread.Post(RecomputeScrollState, DispatcherPriority.Background);
-        return view.Root;
+        QueueRealize();
+        return wrap;
+    }
+
+    private ItemView BuildView(ConversationItem item) => item switch
+    {
+        UserMessageItem u      => new ItemView { Root = BuildUser(u) },
+        AssistantMessageItem a => BuildAssistant(a),
+        PermissionItem p       => new ItemView { Root = Row(BuildPermission(p), null, null) },
+        NoteItem n             => new ItemView { Root = Row(BuildNote(n), null, null) },
+        CompactionItem cm      => new ItemView { Root = Row(BuildCompaction(cm), null, null) },
+        _                      => new ItemView { Root = new Panel() },
+    };
+
+    // (Re)builds an item's controls from the model into its wrapper and lets the wrapper size to them again.
+    private void Hydrate(ConversationItem item, Border wrap)
+    {
+        var view = BuildView(item);
+        _views[item] = view;
+        wrap.Child = view.Root;
+        wrap.Height = double.NaN;
+    }
+
+    // Drops an item's controls, pinning its wrapper to the height it was laid out at so nothing around it moves.
+    // Detaching stops anything the controls were driving (a compaction card's timer). Updates that land while
+    // dehydrated find no view and are skipped; the rebuild reads the model as it is by then.
+    private void Dehydrate(ConversationItem item, Border wrap)
+    {
+        double height = wrap.Bounds.Height;
+        _views.Remove(item);
+        if (item is CompactionItem cm) _compactions.Remove(cm);
+        wrap.Child = null;
+        wrap.Height = height;
+    }
+
+    // Whether an item may be dropped: nothing the user is in the middle of (an unanswered card, focus in it, a
+    // selection or find results that hold its text blocks), and nothing still moving — the tail item, a live
+    // stream (a rebuilt StreamingProse would re-type the whole reply), a running compaction, a queued sync.
+    private bool CanDehydrate(ConversationItem item, Border wrap, ConversationItem? last) =>
+        !ReferenceEquals(item, last)
+        && !_pendingSync.Contains(item)
+        && !wrap.IsKeyboardFocusWithin
+        && item switch
+        {
+            PermissionItem p       => p.Resolution != PermissionResolution.Pending,
+            CompactionItem cm      => cm.IsDone,
+            AssistantMessageItem a => !a.Parts.Any(part => part is TextPart { IsStreaming: true }),
+            _                      => true,
+        };
+
+    // A prompt row's top in the scrolled content's coordinates (what Offset measures), or null before it's laid
+    // out. Read from the wrapper's bounds — valid for a placeholder too, and far cheaper per scroll event than
+    // TranslatePoint. The +border lands on the row itself, inside the wrapper's 1px highlight border.
+    private double? RowTop(Border wrap) =>
+        wrap.Bounds.Height > 0 ? _stack.Bounds.Y + wrap.Bounds.Y + wrap.BorderThickness.Top : null;
+
+    // One coalesced realize pass per layout burst (a Bind adding hundreds of items queues one, not hundreds). At
+    // Loaded priority, so it runs once layout has settled the bounds it reads, ahead of anything idle.
+    private void QueueRealize()
+    {
+        if (_realizeQueued) return;
+        _realizeQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _realizeQueued = false;
+            Realize();
+            RecomputeScrollState();
+        }, DispatcherPriority.Loaded);
+    }
+
+    // Builds every placeholder within HydrateMargin of the viewport and drops every eligible item beyond
+    // DropMargin. A placeholder rebuilt above the viewport may come back a different height (the width changed
+    // while it was away); the offset moves by that much so what's on screen stays put.
+    private void Realize()
+    {
+        if (!VirtualizationEnabled || _conv is not { } conv || Viewport.Height <= 0) return;
+        double vh = Viewport.Height, top = Offset.Y, bottom = top + vh;
+        double keep = Math.Max(vh, MinHydrateMargin), drop = Math.Max(vh * 3, MinDropMargin);
+        bool mayDrop = _matches.Count == 0 && !_selection.IsActive;
+        var last = conv.Items.Count > 0 ? conv.Items[^1] : null;
+        double origin = _stack.Bounds.Y, aboveGrowth = 0;
+
+        foreach (var child in _stack.Children)
+        {
+            if (child is not Border { Tag: ConversationItem item } wrap) continue;
+            var b = wrap.Bounds;
+            if (b.Height <= 0) continue;   // not laid out yet; the pass its layout queues will see it
+            double y0 = origin + b.Y, y1 = y0 + b.Height;
+            if (wrap.Child is null)
+            {
+                if (y1 < top - keep || y0 > bottom + keep) continue;
+                Hydrate(item, wrap);
+                if (y1 <= top)
+                {
+                    wrap.Measure(new Size(b.Width, double.PositiveInfinity));
+                    aboveGrowth += wrap.DesiredSize.Height - b.Height;
+                }
+            }
+            else if (mayDrop && (y1 < top - drop || y0 > bottom + drop) && CanDehydrate(item, wrap, last))
+                Dehydrate(item, wrap);
+        }
+
+        if (Math.Abs(aboveGrowth) <= 0.5) return;
+        if (_stickToBottom) { ScrollToEndSoon(); return; }   // following the tail: stay on it
+        int gen = _bindGen;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (gen == _bindGen) Offset = new Vector(Offset.X, Offset.Y + aboveGrowth);
+        }, DispatcherPriority.Loaded);
+    }
+
+    // Rebuilds every dehydrated item and settles layout — before anything that walks the rendered text (find).
+    private void HydrateAll()
+    {
+        bool any = false;
+        foreach (var (item, wrap) in _wraps)
+            if (wrap.Child is null) { Hydrate(item, wrap); any = true; }
+        if (any) UpdateLayout();
     }
 
     private void UpdateItem(ConversationItem item)
@@ -554,6 +693,7 @@ internal sealed class SessionThreadView : ScrollViewer
         ClearSearch();
         if (_conv is null || string.IsNullOrWhiteSpace(query)) return 0;
         FlushBacklog();
+        HydrateAll();   // the walk reads rendered text; nothing is dropped again while matches are up
 
         foreach (var item in _conv.Items)
         {
@@ -601,6 +741,7 @@ internal sealed class SessionThreadView : ScrollViewer
         _highlightLayer.Children.Clear();
         _matches.Clear();
         _matchCurrent = -1;
+        QueueRealize();   // find hydrated everything; let the far items go again
     }
 
     // Repaint the overlay: every match dim, the current one brighter. Rectangles are computed from each match's
@@ -842,9 +983,10 @@ internal sealed class SessionThreadView : ScrollViewer
                     case TextPart t when existing is StreamingProse sp:
                         if (t.IsStreaming) sp.Poke(); else sp.Finalize(t.Text);
                         break;
+                    // Every flush walks every part of the turn, so this must be a no-op for an unchanged card —
+                    // a long agentic turn has hundreds, and rebuilding them all per streamed delta thrashed the GC.
                     case ToolCallPart tool when view.Tools.TryGetValue(tool, out var card):
-                        card.Update(tool);
-                        if (view.Groups.TryGetValue(tool, out var g)) g.Refresh();   // fold summary tracks status
+                        if (card.Update(tool) && view.Groups.TryGetValue(tool, out var g)) g.Refresh();   // fold summary tracks status
                         break;
                 }
                 continue;
@@ -855,12 +997,12 @@ internal sealed class SessionThreadView : ScrollViewer
             if (part is ToolCallPart tp && IsFoldable(tp.ToolName))
             {
                 var card = new ToolCard(_p, tp, Cwd,
-                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), Compact);
+                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact);
                 view.Tools[tp] = card;
                 var group = view.OpenGroup;
                 if (group is null)
                 {
-                    group = new ToolGroup(_p);
+                    group = new ToolGroup(_p, new GroupKey(tp), _expandState);
                     view.OpenGroup = group;
                     body.Children.Add(group.Root);
                 }
@@ -882,7 +1024,7 @@ internal sealed class SessionThreadView : ScrollViewer
                     break;
                 case ToolCallPart tool:
                     var card = new ToolCard(_p, tool, Cwd,
-                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), Compact);
+                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact);
                     view.Tools[tool] = card;
                     c = card.Root;
                     break;
@@ -1132,7 +1274,8 @@ internal sealed class SessionThreadView : ScrollViewer
     // Collapsible thinking disclosure: a one-line summary, the full thought on click.
     private Control BuildThinking(ThinkingPart th)
     {
-        var chevron = new TextBlock { Text = "▸", Foreground = _p.Faint, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        bool open = _expandState.TryGetValue(th, out var o) && o;   // survives a rebuild
+        var chevron = new TextBlock { Text = open ? "▾" : "▸", Foreground = _p.Faint, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         var header = new Border
         {
             Padding = new Thickness(13, 9), Cursor = new Cursor(StandardCursorType.Hand), Background = Brushes.Transparent,
@@ -1152,7 +1295,7 @@ internal sealed class SessionThreadView : ScrollViewer
         };
         var bodyText = new Border
         {
-            Padding = new Thickness(34, 2, 15, 13), IsVisible = false,
+            Padding = new Thickness(34, 2, 15, 13), IsVisible = open,
             Child = new SelectableTextBlock
             {
                 Text = th.Text, FontStyle = FontStyle.Italic, Foreground = _p.Muted, FontSize = 13.5,
@@ -1163,6 +1306,7 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
             bodyText.IsVisible = !bodyText.IsVisible;
+            _expandState[th] = bodyText.IsVisible;
             chevron.Text = bodyText.IsVisible ? "▾" : "▸";
         };
         return new Border
@@ -1194,21 +1338,29 @@ internal sealed class SessionThreadView : ScrollViewer
         private readonly TextBlock _chevron;   // ▸/▾ affordance in the header, shown only when expandable
         private readonly Border _headerBorder;
         private Control? _diffPanel;   // the rendered diff, built lazily and reused across status updates
+        private readonly JsonNode? _input;   // the parsed input (immutable once the call lands), parsed once
         private ToolCallPart _part;
         private bool _expanded;
+        // What the body was last built from; Update is a no-op while all three still match.
+        private ToolCallStatus? _shownStatus;
+        private string? _shownResult;
+        private bool _shownExpanded;
+        private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
         public Border Root { get; }
 
         public ToolCard(SessionPalette p, ToolCallPart part, string cwd,
-            Action<string> openFile, Action<string> viewDiff, bool compact = false)
+            Action<string> openFile, Action<string> viewDiff, Dictionary<object, bool> expandState, bool compact = false)
         {
             _p = p;
             _part = part;
 
-            _diffLines = EditDiff.Build(part.ToolName, ParseOrNull(part.InputJson));
+            _input = ParseOrNull(part.InputJson);
+            _diffLines = EditDiff.Build(part.ToolName, _input);
             // An edit's diff shows by default; other detail stays closed. Compact density (a Roost pane) keeps
-            // every card collapsed — the pane is a glance, the full window is for reading diffs.
-            _expanded = !compact && _diffLines is { Count: > 0 };
+            // every card collapsed — the pane is a glance, the full window is for reading diffs. A card the user
+            // toggled keeps that across a rebuild (virtualization, a reset).
+            _expanded = expandState.TryGetValue(part, out var toggled) ? toggled : !compact && _diffLines is { Count: > 0 };
 
             var icon = new Border
             {
@@ -1285,6 +1437,7 @@ internal sealed class SessionThreadView : ScrollViewer
             {
                 if (e.InitialPressMouseButton != MouseButton.Left || !_expandable) return;
                 _expanded = !_expanded;
+                expandState[_part] = _expanded;
                 Update(_part);
             };
 
@@ -1304,9 +1457,17 @@ internal sealed class SessionThreadView : ScrollViewer
             Update(part);
         }
 
-        public void Update(ToolCallPart part)
+        /// <summary>Re-renders the card from <paramref name="part"/>; returns false (doing nothing) when its status,
+        /// result and expanded state are what the card already shows.</summary>
+        public bool Update(ToolCallPart part)
         {
+            if (ReferenceEquals(part, _part) && part.Status == _shownStatus
+                && ReferenceEquals(part.ResultText, _shownResult) && _expanded == _shownExpanded)
+                return false;
             _part = part;
+            _shownStatus = part.Status;
+            _shownResult = part.ResultText;
+            _shownExpanded = _expanded;
             var (brush, label) = part.Status switch
             {
                 ToolCallStatus.Done   => (_p.Ok, "done"),
@@ -1320,7 +1481,7 @@ internal sealed class SessionThreadView : ScrollViewer
             bool failed = part.Status == ToolCallStatus.Failed;
             bool hasDiff = _diffLines is { Count: > 0 };
             bool known = ToolSummary.IsKnown(part.ToolName);
-            var input = ParseOrNull(part.InputJson);
+            var input = _input;
             string full = part.ResultText;
             // The collapsed one-liner: a per-tool summary where a count reads better ("Read 42 lines",
             // "12 files"), else the first line of the output.
@@ -1336,7 +1497,7 @@ internal sealed class SessionThreadView : ScrollViewer
             _expandable = hasDiff || moreResult || !known || command is { Length: > 60 };
             _chevron.IsVisible = _expandable;
             _chevron.Text = _expanded ? "▾" : "▸";
-            _headerBorder.Cursor = _expandable ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            _headerBorder.Cursor = _expandable ? HandCursor : Cursor.Default;
             bool showExpanded = _expandable && _expanded;
             _bodyStack.Children.Clear();
 
@@ -1364,6 +1525,7 @@ internal sealed class SessionThreadView : ScrollViewer
                 _bodyStack.Children.Add(MonoText(collapsed, failed));
             }
             _out.IsVisible = _bodyStack.Children.Count > 0;
+            return true;
         }
 
         // A single-line summary of a tool result for the collapsed card: its first non-blank line, clipped.
@@ -1521,12 +1683,13 @@ internal sealed class SessionThreadView : ScrollViewer
 
         public Border Root { get; }
 
-        public ToolGroup(SessionPalette p)
+        public ToolGroup(SessionPalette p, GroupKey key, Dictionary<object, bool> expandState)
         {
             _p = p;
+            _expanded = expandState.TryGetValue(key, out var open) && open;   // survives a rebuild
             _chevron = new TextBlock
             {
-                Text = "▸", Foreground = p.Faint, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                Text = _expanded ? "▾" : "▸", Foreground = p.Faint, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
             };
             _label = new TextBlock
             {
@@ -1542,11 +1705,12 @@ internal sealed class SessionThreadView : ScrollViewer
                     Children = { _chevron, _label },
                 },
             };
-            _body = new StackPanel { IsVisible = false, Margin = new Thickness(0, 4, 0, 0) };
+            _body = new StackPanel { IsVisible = _expanded, Margin = new Thickness(0, 4, 0, 0) };
             header.PointerReleased += (_, e) =>
             {
                 if (e.InitialPressMouseButton != MouseButton.Left) return;
                 _expanded = !_expanded;
+                expandState[key] = _expanded;
                 _body.IsVisible = _expanded;
                 _chevron.Text = _expanded ? "▾" : "▸";
             };
