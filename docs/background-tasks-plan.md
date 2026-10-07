@@ -126,6 +126,12 @@ event in history is a quiet "Monitor 'X': event 1" line.
 Terminal sessions get theirs from a transcript fold (generalising `TranscriptReader.StepAsyncAgent`), cross-checked
 against the shell's `.output` trailer so a task orphaned by a dead CLI doesn't count forever.
 
+### D6. Colour
+
+Background shells and Monitors are **blue**: a new semantic theme role, `Theme.BackgroundTask` (blue-500 dark,
+blue-600 light), used for the card's running status, the session window's chips and the overlay count. Sub-agents
+stay purple. Like the other glyph hues it can be edited in the theme designer ("Background").
+
 ## Checkpoints
 
 - **P0 — spike.** ✅ Formats above, fixtures captured, `stop_task` found.
@@ -144,7 +150,7 @@ against the shell's `.output` trailer so a task orphaned by a dead CLI doesn't c
   That tail is a bounded 8 KB read off the UI thread every 2s while the card is on screen and the task runs, plus one
   last read after it ends. The card has **■ Stop**, **Open output** and **Copy path**. An async agent's card skips
   the tail, because its output file is a JSONL transcript, and shows `task_progress` instead. `TaskNoticeItem`
-  renders as a centred ✓/✗/■/◉ line. The RUNNING row gains an amber chip per running shell or Monitor
+  renders as a centred ✓/✗/■/◉ line. The RUNNING row gains a blue chip per running shell or Monitor
   (`SessionWindow.Tasks.cs`) with a ticking elapsed time and its own ■. Clicking a chip reveals and expands the
   launch card, in place of the separate output tab first planned: the card already holds the tail and Stop.
   `PerchSession.StopTask` sends `stop_task`. `BackgroundTaskOutput` (path inference + tail) and `BackgroundTaskText`
@@ -154,8 +160,8 @@ against the shell's `.output` trailer so a task orphaned by a dead CLI doesn't c
   (controlled ones write transcripts too). `SessionMonitor` drops any task launched before the session's process
   started (`startedAt`), so a task orphaned by a CLI that died without a clean exit doesn't count. That replaces the
   `.output`-trailer cross-check first planned. The fold also keeps each launch's description for the tooltip. The
-  overlay row draws "❯ N" (shells + Monitors; agents already have sub-rows) in the theme's sub-agent hue, which
-  already means background work. Its hover lists each task with its age. It's gated by a new **Background tasks**
+  overlay row draws "❯ N" (shells + Monitors; agents already have sub-rows) in a new blue theme role,
+  `BackgroundTask`, kept distinct from the purple sub-agents. Its hover lists each task with its age. It's gated by a new **Background tasks**
   setting (`AppSettings.ShowBackgroundTasks`, on by default, registry id `background-tasks`). The Roost pill reads
   "Idle · 2 in background", and the rail shows "❯ 2" on an idle row. A Perch pane's thread offers Stop too
   (`SessionPane.StopTaskRequested` → `RoostWindow` → `PerchSession.StopTask`).

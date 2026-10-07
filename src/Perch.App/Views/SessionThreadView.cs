@@ -1653,7 +1653,7 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             var brush = t.Status switch
             {
-                BackgroundTaskStatus.Running   => _p.Await,
+                BackgroundTaskStatus.Running   => _p.Bg,   // background work is blue (agents are purple)
                 BackgroundTaskStatus.Completed => _p.Ok,
                 BackgroundTaskStatus.Failed    => _p.Err,
                 _                              => _p.Faint,

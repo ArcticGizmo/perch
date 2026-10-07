@@ -133,6 +133,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IPen   SepPen         = new Pen(Palette.SeparatorBrush, 1);
     private static Color SubAgentColor  => Palette.Active.SubAgent.ToColor();
     private static readonly IBrush SubAgentBrush  = Palette.SubAgentBrush;
+    private static readonly IBrush BackgroundTaskBrush = Palette.BackgroundTaskBrush;
     private static readonly IPen   TreeLinePen    = new Pen(Palette.TreeLineBrush, 1);
     private static readonly IBrush BotBrush       = Palette.TeamGrayBrush;
     private static Color MailColor      => Palette.Active.Teal.ToColor();
@@ -3052,8 +3053,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         double taskW = hasTasks ? OverlayDraw.MeasureWidth(taskLabel, StatusSize) + 8 : 0;
 
-        // Background shells/Monitors still running (docs/background-tasks-plan.md): "❯ 2" in the sub-agent hue, which
-        // already means "background work". It never holds the done alert, so on an idle row it's the only sign.
+        // Background shells/Monitors still running (docs/background-tasks-plan.md): "❯ 2" in the theme's blue
+        // BackgroundTask hue (agents are purple). It never holds the done alert, so on an idle row it's the only sign.
         int bgCount = _showBackgroundTasks ? session.BackgroundShellCount : 0;
         string bgLabel = bgCount > 0 ? BackgroundTaskLabel(bgCount) : "";
         double bgW = bgCount > 0 ? OverlayDraw.MeasureWidth(bgLabel, StatusSize) + 8 : 0;
@@ -3167,7 +3168,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (bgCount > 0)
         {
             double bgX = statusX - thermoW - badgeW - taskW - bgW;
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(bgLabel, StatusSize, SubAgentBrush), bgX, nameMidY);
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(bgLabel, StatusSize, BackgroundTaskBrush), bgX, nameMidY);
             _bgTaskRects[rowIndex] = new Rect(bgX, nameMidY - 9, bgW, 18);
         }
         if (showMetrics)

@@ -51,6 +51,7 @@ public static class Themes
         Burn            = FixedColors.SemanticDark.Burn,
         TeamGray        = FixedColors.SemanticDark.TeamGray,
         ModeAcceptEdits = FixedColors.SemanticDark.ModeAcceptEdits,
+        BackgroundTask  = FixedColors.SemanticDark.BackgroundTask,
     };
 
     /// <summary>
@@ -244,6 +245,7 @@ public static class Themes
         Burn            = FixedColors.SemanticLight.Burn,
         TeamGray        = FixedColors.SemanticLight.TeamGray,
         ModeAcceptEdits = FixedColors.SemanticLight.ModeAcceptEdits,
+        BackgroundTask  = FixedColors.SemanticLight.BackgroundTask,
     };
 
     /// <summary>Every built-in theme, in display order. Custom themes are appended by the UI.</summary>

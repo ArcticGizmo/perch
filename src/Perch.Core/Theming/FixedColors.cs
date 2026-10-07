@@ -70,6 +70,7 @@ public sealed record FixedColors
         Burn            = new(125, 185, 232),
         TeamGray        = new(148, 163, 184),
         ModeAcceptEdits = new(167, 139, 250),
+        BackgroundTask  = new(59, 130, 246),   // blue-500: background shells/monitors, beside the purple agents
     };
 
     /// <summary>The light default seed for the themeable semantic hues — darker, more-saturated variants
@@ -88,6 +89,7 @@ public sealed record FixedColors
         Burn            = new(29, 78, 216),     // blue-700
         TeamGray        = new(71, 85, 105),    // slate-600
         ModeAcceptEdits = new(109, 40, 217),   // violet-700
+        BackgroundTask  = new(37, 99, 235),    // blue-600
     };
 }
 
@@ -120,4 +122,6 @@ public sealed record SemanticColors
     public required Rgb TeamGray { get; init; }
     /// <summary>The "Accept edits" permission-mode badge (blue-purple).</summary>
     public required Rgb ModeAcceptEdits { get; init; }
+    /// <summary>Background shells / Monitors (blue), distinct from the purple sub-agents.</summary>
+    public required Rgb BackgroundTask { get; init; }
 }

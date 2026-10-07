@@ -12,7 +12,7 @@ using Perch.Data.Control;
 namespace Perch.Avalonia.Windows;
 
 // Background shells and Monitors (docs/background-tasks-plan.md), shown beside the sub-agent chips in the RUNNING row
-// above the composer: one amber chip per running task with its glyph, name and elapsed time (a Monitor also counts its
+// above the composer: one blue chip per running task with its glyph, name and elapsed time (a Monitor also counts its
 // events). A click brings the card that launched it into view, expanded to its live output; the chip's ■ stops it
 // while the session is live. Async agents aren't repeated here: the sub-agent chips already show them. Fed by the
 // conversation's own task tracker, so it follows the stream directly, with a 1s tick for the elapsed labels.
@@ -78,7 +78,7 @@ internal sealed partial class SessionWindow
     {
         var glyph = new TextBlock
         {
-            FontSize = 12, Foreground = _p.Await, VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 12, Foreground = _p.Bg, VerticalAlignment = VerticalAlignment.Center,
         };
         var label = new TextBlock
         {
@@ -107,11 +107,11 @@ internal sealed partial class SessionWindow
         {
             Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center,
             Children = { glyph, label, status, stop },
-        }, _p.AwaitWash, _p.AwaitLine);
+        }, _p.BgWash, _p.BgLine);
         chip.Margin = new Thickness(0, 2, 8, 2);
         chip.Cursor = new Cursor(StandardCursorType.Hand);
-        chip.PointerEntered += (_, _) => chip.BorderBrush = _p.Await;
-        chip.PointerExited += (_, _) => chip.BorderBrush = _p.AwaitLine;
+        chip.PointerEntered += (_, _) => chip.BorderBrush = _p.Bg;
+        chip.PointerExited += (_, _) => chip.BorderBrush = _p.BgLine;
         chip.OnLeftClick(() => { CloseAgentView(); _thread.RevealBackgroundTask(taskId); });
         chip.Tag = glyph;
         return new TaskChip(chip, label, status, stop);

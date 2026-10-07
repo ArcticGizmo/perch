@@ -64,6 +64,7 @@ public static class Palette
         ErrorBrush.Color       = t.StatusError.ToColor();
         WarnBrush.Color        = t.StatusWarn.ToColor();
         SubAgentBrush.Color    = t.SubAgent.ToColor();
+        BackgroundTaskBrush.Color = t.BackgroundTask.ToColor();
         TealBrush.Color        = t.Teal.ToColor();
         BurnBrush.Color        = t.Burn.ToColor();
         TeamGrayBrush.Color    = t.TeamGray.ToColor();
@@ -196,6 +197,8 @@ public static class Palette
     public static readonly SolidColorBrush ErrorBrush     = new(Themes.Midnight.StatusError.ToColor());
     public static readonly SolidColorBrush WarnBrush      = new(Themes.Midnight.StatusWarn.ToColor());
     public static readonly SolidColorBrush SubAgentBrush  = new(Themes.Midnight.SubAgent.ToColor());
+    /// <summary>Background shells / Monitors (the theme's <c>BackgroundTask</c> role).</summary>
+    public static readonly SolidColorBrush BackgroundTaskBrush = new(Themes.Midnight.BackgroundTask.ToColor());
     public static readonly SolidColorBrush TealBrush      = new(Themes.Midnight.Teal.ToColor());
     public static readonly SolidColorBrush BurnBrush      = new(Themes.Midnight.Burn.ToColor());
     public static readonly SolidColorBrush TeamGrayBrush  = new(Themes.Midnight.TeamGray.ToColor());
