@@ -41,14 +41,28 @@ internal static class StreamJsonParser
             "control_request"  => ParseControlRequest(root),
             "control_response" => ParseControlResponse(root),
             "result"           => ParseResult(root),
+            "attachment"       => ParseQueuedNotification(root),
             _                  => [],
         };
+
+    // A <task-notification> that arrived while Claude was mid-turn is absorbed into that turn as a queued_command
+    // attachment (transcript only), not delivered as a user record of its own. Same notification, other path.
+    private static IReadOnlyList<SessionEvent> ParseQueuedNotification(JsonNode root)
+    {
+        var a = root["attachment"];
+        if (TranscriptJson.AsString(a?["type"]) != "queued_command"
+            || TranscriptJson.AsString(a?["commandMode"]) != "task-notification") return [];
+        return TaskNotification.Parse(TranscriptJson.AsString(a?["prompt"])) is { } n
+            ? [new TaskNotificationEvent(n, Delivered: true, TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"])))]
+            : [];
+    }
 
     private static IReadOnlyList<SessionEvent> ParseSystem(JsonNode root)
     {
         var subtype = TranscriptJson.AsString(root["subtype"]);
         if (subtype == "status") return ParseStatus(root);
         if (subtype == "compact_boundary") return ParseCompactBoundary(root);
+        if (ParseTaskRecord(subtype, root) is { } task) return [task];
         if (subtype != "init") return [];
         var commands = (root["slash_commands"] as JsonArray)?
             .Select(c => TranscriptJson.AsString(c))
@@ -178,8 +192,61 @@ internal static class StreamJsonParser
         return events;
     }
 
+    // The background-task records (docs/background-tasks-plan.md). Null for any other subtype.
+    private static SessionEvent? ParseTaskRecord(string? subtype, JsonNode root)
+    {
+        var id = TranscriptJson.AsString(root["task_id"]);
+        switch (subtype)
+        {
+            case "task_started" when id is { Length: > 0 }:
+                return new TaskStartedEvent(id,
+                    TranscriptJson.AsString(root["tool_use_id"]),
+                    TranscriptJson.AsString(root["task_type"]),
+                    TranscriptJson.AsString(root["description"]),
+                    AsBool(root["is_backgrounded"]),
+                    AsBool(root["owned_by_subagent"]));
+            case "task_progress" when id is { Length: > 0 }:
+                return new TaskProgressEvent(id, TranscriptJson.AsString(root["description"]));
+            case "task_updated" when id is { Length: > 0 }:
+            {
+                var patch = root["patch"];
+                long end = TranscriptJson.AsLong(patch?["end_time"]);
+                return new TaskUpdatedEvent(id, TranscriptJson.AsString(patch?["status"]),
+                    end > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(end).UtcDateTime : null);
+            }
+            case "task_notification" when id is { Length: > 0 }:
+                return new TaskNotificationEvent(new TaskNotification(id,
+                    TranscriptJson.AsString(root["tool_use_id"]),
+                    TranscriptJson.AsString(root["status"]),
+                    TranscriptJson.AsString(root["output_file"]),
+                    TranscriptJson.AsString(root["summary"])), Delivered: false);
+            case "background_tasks_changed":
+                return new BackgroundTasksChangedEvent((root["tasks"] as JsonArray ?? [])
+                    .Select(t => (Id: TranscriptJson.AsString(t?["task_id"]) ?? "",
+                                  Type: TranscriptJson.AsString(t?["task_type"]),
+                                  Desc: TranscriptJson.AsString(t?["description"])))
+                    .Where(t => t.Id.Length > 0)
+                    .ToList());
+            default:
+                return null;
+        }
+    }
+
+    private static bool AsBool(JsonNode? n)
+    {
+        try { return n?.GetValue<bool>() ?? false; }
+        catch { return false; }
+    }
+
     private static IReadOnlyList<SessionEvent> ParseToolResults(JsonNode root)
     {
+        // A delivered <task-notification> (transcript only: stream-json doesn't echo user records) is a user
+        // record with plain string content. It ends a background task, or carries a Monitor event.
+        if (TranscriptJson.AsString(root["message"]?["content"]) is { } text)
+            return TaskNotification.Parse(text) is { } n
+                ? [new TaskNotificationEvent(n, Delivered: true, TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"])))]
+                : [];
+
         var blocks = TranscriptJson.ContentArray(root);
         if (blocks is null) return [];
         var events = new List<SessionEvent>();
@@ -189,9 +256,26 @@ internal static class StreamJsonParser
             events.Add(new ToolResultEvent(
                 TranscriptJson.AsString(block?["tool_use_id"]) ?? "",
                 ResultTextOf(block?["content"]),
-                block?["is_error"]?.GetValue<bool>() ?? false));
+                block?["is_error"]?.GetValue<bool>() ?? false,
+                LaunchOf(root)));
         }
         return events;
+    }
+
+    // The background task a tool result reports starting, from its structured result (stream-json's
+    // tool_use_result, the transcript's toolUseResult). A record carries one tool_result in practice.
+    private static BackgroundLaunch? LaunchOf(JsonNode root)
+    {
+        var r = root["tool_use_result"] ?? root["toolUseResult"];
+        if (r is not JsonObject) return null;
+        var at = TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"]));
+        if (TranscriptJson.AsString(r["backgroundTaskId"]) is { Length: > 0 } shell)
+            return new BackgroundLaunch(shell, BackgroundTaskKind.Shell, At: at);
+        if (TranscriptJson.AsString(r["taskId"]) is { Length: > 0 } monitor && r["timeoutMs"] is not null)
+            return new BackgroundLaunch(monitor, BackgroundTaskKind.Monitor, AsBool(r["persistent"]), at);
+        if (AsBool(r["isAsync"]) && TranscriptJson.AsString(r["agentId"]) is { Length: > 0 } agent)
+            return new BackgroundLaunch(agent, BackgroundTaskKind.Agent, At: at);
+        return null;
     }
 
     // A single tool result can be very large (a Read of a 15k-char file), but a thread holds thousands of

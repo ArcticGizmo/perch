@@ -102,6 +102,19 @@ internal sealed class ToolCallPart(string toolUseId, string toolName, string sum
     /// <summary>The tool's result as text (capped at ~8k chars), or empty until it lands. The card shows a
     /// one-line summary of it collapsed and the whole thing on expand.</summary>
     public string ResultText { get; internal set; } = "";
+    /// <summary>The background task this call started (a <c>run_in_background</c> shell, a Monitor, an async agent),
+    /// looked up in <see cref="SessionConversation.BackgroundTasks"/>. Null for an ordinary call.</summary>
+    public string? BackgroundTaskId { get; internal set; }
+}
+
+/// <summary>A background task ended (or a Monitor delivered an event): a quiet one-line notice in the thread, never
+/// the user bubble the raw <c>&lt;task-notification&gt;</c> would otherwise make. <see cref="Task"/> is live, so the
+/// view can read its current status/exit code; <see cref="EventText"/> is set for a Monitor event.</summary>
+internal sealed class TaskNoticeItem(BackgroundTask task, string? eventText = null) : ConversationItem
+{
+    public BackgroundTask Task { get; } = task;
+    public string? EventText { get; } = eventText;
+    public bool IsEvent => EventText is not null;
 }
 
 internal enum PermissionResolution { Pending, Allowed, Denied, Expired }
@@ -135,6 +148,20 @@ internal sealed class SessionConversation
 {
     private readonly List<ConversationItem> _items = new();
     private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _toolCalls = new();
+    // Launch cards of background tasks, by task id, so a task's progress re-syncs the card that started it.
+    private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _launchCards = new();
+
+    public SessionConversation()
+    {
+        BackgroundTasks.Changed += OnBackgroundTaskChanged;
+    }
+
+    /// <summary>The session's background work (shells, monitors, async agents), from the stream's <c>task_*</c>
+    /// records or the transcript's launches + notifications. See <c>docs/background-tasks-plan.md</c>.</summary>
+    public BackgroundTaskTracker BackgroundTasks { get; } = new();
+
+    /// <summary>A background task started, progressed or ended. Raised after the launch card re-synced.</summary>
+    public event Action<BackgroundTask>? BackgroundTaskChanged;
 
     // The session id a history load is for, so an image-bearing user line can resolve its cached image files
     // (~/.claude/image-cache/{sessionId}/{N}.ext). Set on the scratch conversation in LoadHistory; null live.
@@ -276,6 +303,8 @@ internal sealed class SessionConversation
                 var part = new ToolCallPart(tool.ToolUseId, tool.ToolName, tool.Summary, tool.InputJson);
                 owner.Add(part);
                 if (tool.ToolUseId.Length > 0) _toolCalls[tool.ToolUseId] = (owner, part);
+                if (CanLaunchBackground(tool.ToolName))
+                    BackgroundTasks.NoteToolUse(tool.ToolUseId, tool.ToolName, LaunchDescription(tool.InputJson));
                 Changed?.Invoke(owner, ConversationChange.Updated);
                 break;
             }
@@ -285,8 +314,37 @@ internal sealed class SessionConversation
                 {
                     call.Part.Status = result.IsError ? ToolCallStatus.Failed : ToolCallStatus.Done;
                     call.Part.ResultText = result.Text;
+                    if (result.Launch is { } launch)
+                    {
+                        call.Part.BackgroundTaskId = launch.TaskId;
+                        _launchCards[launch.TaskId] = call;
+                        BackgroundTasks.Launched(result.ToolUseId, launch.TaskId, launch.Kind, launch.At, launch.Persistent);
+                    }
                     Changed?.Invoke(call.Owner, ConversationChange.Updated);
                 }
+                break;
+
+            case TaskStartedEvent started:
+                BackgroundTasks.Started(started.TaskId, started.ToolUseId, started.TaskType, started.Description,
+                    started.IsBackgrounded, started.OwnedBySubagent);
+                break;
+
+            case TaskProgressEvent progress:
+                BackgroundTasks.Progressed(progress.TaskId, progress.Description);
+                break;
+
+            case TaskUpdatedEvent updated:
+                BackgroundTasks.Updated(updated.TaskId, updated.Status, updated.EndUtc);
+                break;
+
+            case BackgroundTasksChangedEvent changed:
+                BackgroundTasks.Reconcile(changed.Tasks);
+                break;
+
+            case TaskNotificationEvent notified:
+                // A task ending (once) or a Monitor event becomes a quiet notice. Never a user bubble.
+                if (BackgroundTasks.Notified(notified.Notification, notified.At, notified.Delivered) is { } task)
+                    Append(new TaskNoticeItem(task, notified.Notification.IsEvent ? notified.Notification.EventText : null));
                 break;
 
             case PermissionRequestEvent request:
@@ -444,6 +502,10 @@ internal sealed class SessionConversation
             }
         foreach (var (_, part) in scratch._toolCalls.Values)
             if (part.Status == ToolCallStatus.Running) part.Status = ToolCallStatus.Done;   // result not recorded
+        // The history's background tasks belonged to the earlier process, so none still runs. Adopt them so the
+        // history's launch cards and notices resolve their task ids here.
+        scratch.BackgroundTasks.FinalizeHistory();
+        BackgroundTasks.Adopt(scratch.BackgroundTasks);
 
         if (scratch._items.Count == 0) return 0;
         _items.InsertRange(0, scratch._items);
@@ -494,6 +556,7 @@ internal sealed class SessionConversation
                 FreezeStreaming(a);
                 a.IsComplete = true;
             }
+        BackgroundTasks.FinalizeHistory();
         // A closed transcript has no live turn — settle the bookkeeping so the view shows no "working" row.
         TurnActive = false;
         QueuedPrompts = 0;
@@ -580,9 +643,35 @@ internal sealed class SessionConversation
         if (trimmed.StartsWith("<command-name>", StringComparison.Ordinal)
             || trimmed.StartsWith("<local-command-stdout>", StringComparison.Ordinal)
             || trimmed.StartsWith("<local-command-caveat>", StringComparison.Ordinal)
-            || trimmed.StartsWith("<system-reminder>", StringComparison.Ordinal))
+            || trimmed.StartsWith("<system-reminder>", StringComparison.Ordinal)
+            // A background task's notification is delivered as a plain user record (no isMeta). It becomes a
+            // TaskNoticeItem via StreamJsonParser instead.
+            || trimmed.StartsWith("<task-notification>", StringComparison.Ordinal))
             return null;
         return text;
+    }
+
+    // The tools whose call can start background work; only their inputs are parsed for a description.
+    private static bool CanLaunchBackground(string toolName) =>
+        toolName is "Bash" or "PowerShell" or "Monitor" or "Agent" or "Task";
+
+    // The launch's own description ("Run the dev server"), else its command, for naming the task before the CLI does.
+    private static string? LaunchDescription(string inputJson)
+    {
+        try
+        {
+            var input = System.Text.Json.Nodes.JsonNode.Parse(inputJson);
+            return TranscriptJson.AsString(input?["description"]) is { Length: > 0 } d ? d
+                 : TranscriptJson.AsString(input?["command"]);
+        }
+        catch { return null; }
+    }
+
+    // A task changed: re-sync the card that launched it (its live status) and tell the window (chips, counts).
+    private void OnBackgroundTaskChanged(BackgroundTask task)
+    {
+        if (_launchCards.TryGetValue(task.TaskId, out var card)) Changed?.Invoke(card.Owner, ConversationChange.Updated);
+        BackgroundTaskChanged?.Invoke(task);
     }
 
     /// <summary>Every user prompt in the thread, oldest first, for the composer's ↑/↓ input-history recall.
@@ -647,6 +736,7 @@ internal sealed class SessionConversation
     {
         _items.Clear();
         _toolCalls.Clear();
+        _launchCards.Clear();   // the tasks keep running in the same process; only their cards are gone
         PendingPermission = null;
         TurnActive = false;
         QueuedPrompts = 0;
@@ -704,6 +794,7 @@ internal sealed class SessionConversation
         TurnActive = false;
         QueuedPrompts = 0;
         MayHaveQueuedTurn = false;
+        BackgroundTasks.SessionEnded();   // the CLI's background work dies with it
         Append(new NoteItem(
             exitCode == 0 ? "session ended" : $"claude exited ({exitCode}) {stderrTail}".TrimEnd(),
             exitCode == 0 ? NoteKind.Info : NoteKind.Error));
