@@ -59,8 +59,9 @@ internal sealed class TranscriptReader
     private const int LoopWindow = 10;
 
     /// <summary>
-    /// Returns a friendly phrase describing the latest tool call in the session's transcript,
-    /// or <c>null</c> if the transcript can't be located/read or holds no tool call.
+    /// Returns a friendly phrase describing the newest tool call in the session's transcript that hasn't returned,
+    /// <see cref="ThinkingActivity"/> when every call has, or <c>null</c> if the transcript can't be located/read
+    /// or holds no tool call.
     /// </summary>
     public string? GetActivity(string sessionId, string cwd)
     {
@@ -927,15 +928,21 @@ internal sealed class TranscriptReader
         return null;
     }
 
+    /// <summary>What <see cref="GetActivity"/> says once every tool call has returned: the model is working on the
+    /// results, and naming the last call would read as if it were still running.</summary>
+    internal const string ThinkingActivity = "Thinking…";
+
     private static string? Parse(string path)
     {
-        // Lines are chronological, so the last tool_use we see is the most recent. Track only the
-        // friendly phrase, overwriting as newer tool calls appear.
-        string? latest = null;
+        // Lines are chronological. Each tool_use waits for the tool_result naming its id (in a later user record);
+        // the phrase is the newest call still waiting, so a parallel call that's still going outlasts a newer one
+        // that already returned. With none waiting, the model is thinking about what came back.
+        var pending = new List<(string? Id, string Phrase)>();
+        bool anyCall = false;
 
         foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
         {
-            // Cheap pre-filter: only assistant lines carrying a tool_use are worth parsing.
+            // Cheap pre-filter: tool_use and tool_result lines both contain "tool_use" (the latter in tool_use_id).
             if (!line.Contains("tool_use"))
                 continue;
 
@@ -946,12 +953,19 @@ internal sealed class TranscriptReader
 
                 foreach (var block in content)
                 {
-                    if (TranscriptJson.BlockType(block) != "tool_use")
-                        continue;
-                    var name = block!["name"]?.GetValue<string>();
-                    if (string.IsNullOrEmpty(name))
-                        continue;
-                    latest = ToolSummary.Describe(name, block["input"]);
+                    var type = TranscriptJson.BlockType(block);
+                    if (type == "tool_use")
+                    {
+                        var name = block!["name"]?.GetValue<string>();
+                        if (string.IsNullOrEmpty(name))
+                            continue;
+                        anyCall = true;
+                        pending.Add((block["id"]?.GetValue<string>(), ToolSummary.Describe(name, block["input"])));
+                    }
+                    else if (type == "tool_result" && block!["tool_use_id"]?.GetValue<string>() is { } id)
+                    {
+                        pending.RemoveAll(p => p.Id == id);
+                    }
                 }
             }
             catch
@@ -960,7 +974,7 @@ internal sealed class TranscriptReader
             }
         }
 
-        return latest;
+        return pending.Count > 0 ? pending[^1].Phrase : anyCall ? ThinkingActivity : null;
     }
 
     private static StuckMetrics ParseStuck(string path)
