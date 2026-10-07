@@ -58,7 +58,6 @@ public class FeedAddressTests
 
     [Theory]
     [InlineData("Not a feed (looks like a web page)", "web page")]
-    [InlineData("RSS feeds aren't supported yet", "Atom")]
     [InlineData("404 Not Found", "address")]
     [InlineData("403 Forbidden", "signing in")]
     [InlineData("Refused: x points at a private network address", "local network")]

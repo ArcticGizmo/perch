@@ -2751,11 +2751,20 @@ internal static class HeadlessRenderer
         Capture("feed_dialog_webpage_1x.png", "https://blog.example.com/", null, "Not a feed (looks like a web page)");
         Capture("feed_dialog_http_1x.png", "http://intranet.example/news.atom", SampleData.FeedDoc(), null);
         Capture("feed_dialog_duplicate_1x.png", "https://github.com/AvaloniaUI/Avalonia/releases.atom", null, null);
+        // A web page that advertises feeds (autodiscovery): each is offered with "Use this feed".
+        Capture("feed_dialog_discovered_1x.png", "https://devblogs.microsoft.com/dotnet/", null,
+            "Not a feed (looks like a web page)",
+            [
+                new(new Uri("https://devblogs.microsoft.com/dotnet/feed/"), ".NET Blog", "RSS"),
+                new(new Uri("https://devblogs.microsoft.com/dotnet/comments/feed/"), ".NET Blog » Comments Feed", "RSS"),
+                new(new Uri("https://devblogs.microsoft.com/dotnet/feed/atom/"), null, "Atom"),
+            ]);
 
-        void Capture(string file, string url, Perch.Feeds.FeedDoc? doc, string? error)
+        void Capture(string file, string url, Perch.Feeds.FeedDoc? doc, string? error,
+            IReadOnlyList<Perch.Feeds.FeedCandidate>? discovered = null)
         {
             var w = new FeedDialog(new Perch.Feeds.FeedSubscription { Id = "edit", Url = url }, existing);
-            w.SeedForRender(doc, error);
+            w.SeedForRender(doc, error, discovered);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

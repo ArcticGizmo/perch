@@ -55,10 +55,8 @@ internal static class FeedAddress
     {
         null => null,
         _ when error.Contains("web page", StringComparison.OrdinalIgnoreCase) =>
-            "That address is a web page, not a feed. Look for an \"Atom\" or \"Feed\" link on the site, or try " +
-            "adding /atom.xml or /feed to the address.",
-        _ when error.Contains("RSS", StringComparison.Ordinal) =>
-            "RSS support is coming. Many sites offer an Atom version too — try /atom.xml or ?feed=atom.",
+            "That address is a web page, not a feed, and it doesn't advertise one. Look for an \"RSS\", \"Atom\" or " +
+            "\"Feed\" link on the site, or try adding /feed or /atom.xml to the address.",
         _ when error.StartsWith("404", StringComparison.Ordinal) => "Check the address — the server says there's nothing there.",
         _ when error.StartsWith("401", StringComparison.Ordinal) || error.StartsWith("403", StringComparison.Ordinal) =>
             "This feed needs signing in, which isn't supported yet.",

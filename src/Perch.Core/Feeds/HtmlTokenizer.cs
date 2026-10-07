@@ -131,11 +131,14 @@ internal static class HtmlTokenizer
     private static HtmlToken Text(string html, int start, int end) =>
         new(HtmlTokenKind.Text, html[start..end], "", false);
 
+    private static readonly HashSet<string> ConverterAttributes = new(StringComparer.Ordinal) { "href", "src", "alt", "start" };
+
     // Reads attributes from just after the tag name to the closing '>'. Quoted values may contain '>'. Only the
-    // attributes the converter uses are kept; values are raw (entity-decoded later, once).
-    private static bool TryReadAttributes(string html, int p, out int tagEnd, out bool selfClosing,
-        out Dictionary<string, string> attrs)
+    // attributes in `keep` are kept (by default the converter's); values are raw (entity-decoded later, once).
+    internal static bool TryReadAttributes(string html, int p, out int tagEnd, out bool selfClosing,
+        out Dictionary<string, string> attrs, IReadOnlySet<string>? keep = null)
     {
+        keep ??= ConverterAttributes;
         attrs = new Dictionary<string, string>(StringComparer.Ordinal);
         selfClosing = false;
         tagEnd = -1;
@@ -171,7 +174,7 @@ internal static class HtmlTokenizer
                     value = html[vs..p];
                 }
             }
-            if (an is "href" or "src" or "alt" or "start" && !attrs.ContainsKey(an)) attrs[an] = value;
+            if (keep.Contains(an) && !attrs.ContainsKey(an)) attrs[an] = value;
         }
         return false;
     }

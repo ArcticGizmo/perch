@@ -9,7 +9,8 @@ internal enum FeedFetchStatus { Ok, NotModified, Error }
 
 /// <summary>The outcome of one feed fetch. <see cref="FinalUrl"/> is where the document actually came from (after
 /// redirects) — the base its relative links resolve against. <see cref="IsPrivate"/> records that the user's own
-/// subscription URL points into a private network (so its same-host icon may be fetched too).</summary>
+/// subscription URL points into a private network (so its same-host icon may be fetched too). When the address
+/// turned out to be a web page, <see cref="Discovered"/> lists the feeds it advertises (<see cref="FeedDiscovery"/>).</summary>
 internal sealed record FeedFetchResult(
     FeedFetchStatus Status,
     FeedDoc? Doc = null,
@@ -18,7 +19,8 @@ internal sealed record FeedFetchResult(
     DateTimeOffset? LastModified = null,
     TimeSpan? RetryAfter = null,
     Uri? FinalUrl = null,
-    bool IsPrivate = false);
+    bool IsPrivate = false,
+    IReadOnlyList<FeedCandidate>? Discovered = null);
 
 /// <summary>Thrown by the fenced connect when a feed-caused request would reach a non-public address.</summary>
 internal sealed class FeedFenceException(string host)
@@ -180,7 +182,13 @@ internal sealed class FeedFetcher : IDisposable
                 if (body is null) return new(FeedFetchStatus.Error, Error: "Feed is too large", IsPrivate: isPrivate);
 
                 var parsed = FeedParser.Parse(new MemoryStream(body), final, nowUtc);
-                if (parsed.Doc is null) return new(FeedFetchStatus.Error, Error: parsed.Error, FinalUrl: final, IsPrivate: isPrivate);
+                if (parsed.Doc is null)
+                {
+                    var discovered = parsed.Error?.Contains("web page", StringComparison.Ordinal) == true
+                        ? await DiscoverAsync(body, final, isPrivate, ct) : null;
+                    return new(FeedFetchStatus.Error, Error: parsed.Error, FinalUrl: final, IsPrivate: isPrivate,
+                        Discovered: discovered);
+                }
 
                 return new(FeedFetchStatus.Ok, parsed.Doc,
                     ETag: resp.Headers.ETag?.ToString() is { Length: <= 256 } tag ? tag : null,
@@ -192,6 +200,19 @@ internal sealed class FeedFetcher : IDisposable
         {
             return new(FeedFetchStatus.Error, Error: Describe(e, ct), IsPrivate: isPrivate);
         }
+    }
+
+    // The feeds a web page advertises. A public page may not steer the user into their own network: a candidate
+    // whose host resolves to a private address is dropped unless the page itself was private (a self-hosted site
+    // pointing at its own feed is fine). No candidate is fetched here; the user picks one and it's checked normally.
+    private async Task<IReadOnlyList<FeedCandidate>> DiscoverAsync(byte[] body, Uri page, bool pageIsPrivate, CancellationToken ct)
+    {
+        var found = FeedDiscovery.Find(System.Text.Encoding.UTF8.GetString(body), page);
+        if (pageIsPrivate || found.Count == 0) return found;
+        var kept = new List<FeedCandidate>();
+        foreach (var c in found)
+            if (!await IsPrivateHostAsync(c.Url, ct)) kept.Add(c);
+        return kept;
     }
 
     /// <summary>

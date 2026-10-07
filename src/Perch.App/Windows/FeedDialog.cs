@@ -36,6 +36,7 @@ internal sealed class FeedDialog : Window
     private readonly TextBlock _previewTitle;
     private readonly TextBlock _previewDetail;
     private readonly TextBlock _previewHint;
+    private readonly StackPanel _candidates = new() { Spacing = 6, Margin = new Thickness(0, 8, 0, 0), IsVisible = false };
 
     private string? _checkedUrl;   // the address the last check ran against
     private bool _checkOk, _checking;
@@ -61,7 +62,7 @@ internal sealed class FeedDialog : Window
         Background = Palette.FormBgBrush;
 
         _urlBox = SettingsUi.ThemedTextBox(existing?.Url ?? "");
-        _urlBox.PlaceholderText = "https://example.com/atom.xml";
+        _urlBox.PlaceholderText = "https://example.com/feed";
         _check = SettingsUi.FlatButton("Check");
         _check.Margin = new Thickness(8, 0, 0, 0);
         _check.Click += async (_, _) => await CheckAsync();
@@ -83,6 +84,7 @@ internal sealed class FeedDialog : Window
         previewText.Children.Add(_previewTitle);
         previewText.Children.Add(_previewDetail);
         previewText.Children.Add(_previewHint);
+        previewText.Children.Add(_candidates);
         var previewRow = new DockPanel();
         DockPanel.SetDock(_icon, Dock.Left);
         previewRow.Children.Add(_icon);
@@ -112,7 +114,8 @@ internal sealed class FeedDialog : Window
 
         var layout = new StackPanel { Margin = new Thickness(16) };
         layout.Children.Add(SettingsUi.BodyText(
-            "Paste the address of an Atom feed. Perch checks it before saving. Feeds you add start quiet — " +
+            "Paste the address of an Atom or RSS feed, or of a site that has one. Perch checks it before saving. " +
+            "Feeds you add start quiet — " +
             "only entries published after this light up."));
         layout.Children.Add(SettingsUi.FieldCaption("Feed address"));
         layout.Children.Add(urlRow);
@@ -251,12 +254,55 @@ internal sealed class FeedDialog : Window
             ShowPreview("✓  " + d.Title, detail, null, warn: false);
             _nameBox.PlaceholderText = d.Title;
         }
+        else if (result.Discovered is { Count: > 0 } found)
+        {
+            _icon.IsVisible = false;
+            ShowDiscovered(found);
+        }
         else
         {
             _icon.IsVisible = false;
             ShowPreview("Couldn't use this address", result.Error ?? "Unknown error", FeedAddress.HintFor(result.Error), warn: true);
         }
         OnUrlChanged();
+    }
+
+    // The address was a web page that advertises feeds: offer each one. Choosing one puts its address in the box and
+    // checks it like any other — the page is untrusted, so nothing is followed without that check.
+    private void ShowDiscovered(IReadOnlyList<FeedCandidate> found)
+    {
+        ShowPreview("This is a web page, not a feed",
+            found.Count == 1 ? "It links to a feed:" : $"It links to {found.Count} feeds. Pick one:", null, warn: false);
+        _candidates.Children.Clear();
+        foreach (var c in found)
+        {
+            var name = new TextBlock
+            {
+                Text = (c.Title ?? FeedUrl.DisplayHost(c.Url)) + "  ·  " + c.Format, FontSize = 12.5,
+                FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush, TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            // An address keeps its end legible (the path-trimming rule).
+            var address = new TextBlock
+            {
+                Text = c.Url.AbsoluteUri, FontSize = 11.5, Foreground = Palette.MutedBrush,
+                TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+            };
+            var use = SettingsUi.FlatButton("Use this feed");
+            use.VerticalAlignment = VerticalAlignment.Center;
+            use.Margin = new Thickness(8, 0, 0, 0);
+            var url = c.Url.AbsoluteUri;
+            use.Click += async (_, _) =>
+            {
+                _urlBox.Text = url;   // OnUrlChanged hides this list (the old check no longer applies)
+                await CheckAsync();
+            };
+            var row = new DockPanel();
+            DockPanel.SetDock(use, Dock.Right);
+            row.Children.Add(use);
+            row.Children.Add(new StackPanel { Children = { name, address }, VerticalAlignment = VerticalAlignment.Center });
+            _candidates.Children.Add(row);
+        }
+        _candidates.IsVisible = true;
     }
 
     private void ShowPreview(string title, string detail, string? hint, bool warn)
@@ -268,16 +314,22 @@ internal sealed class FeedDialog : Window
         _previewDetail.IsVisible = detail.Length > 0;
         _previewHint.Text = hint ?? "";
         _previewHint.IsVisible = hint is not null;
+        _candidates.IsVisible = false;
     }
 
     /// <summary>Headless-render seam: show a finished check without the network.</summary>
-    internal void SeedForRender(FeedDoc? doc, string? error)
+    internal void SeedForRender(FeedDoc? doc, string? error, IReadOnlyList<FeedCandidate>? discovered = null)
     {
         _seeded = true;
         var url = FeedAddress.Parse(_urlBox.Text).Url;
         _checkedUrl = doc is null && error is null ? null : url?.AbsoluteUri;   // neither: never checked
         _checkOk = doc is not null;
-        if (doc is null && error is null)
+        if (discovered is { Count: > 0 })
+        {
+            _icon.IsVisible = false;
+            ShowDiscovered(discovered);
+        }
+        else if (doc is null && error is null)
         {
             _preview.IsVisible = false;   // nothing checked: just the address validation
         }

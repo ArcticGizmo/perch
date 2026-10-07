@@ -522,4 +522,119 @@ public class FeedInjectionTests
         var r = Parse(Atom(sb.ToString()));
         Assert.Equal(FeedParser.MaxEntries, r.Doc!.Entries.Count);
     }
+
+    // ── RSS (F6): the same defences behind the second format ──────────────────────────────────────────────────
+
+    private static string Rss(string items, string channelHead = "<title>T</title><link>https://example.com/</link>") =>
+        "<?xml version=\"1.0\"?><rss version=\"2.0\" xmlns:content=\"http://purl.org/rss/1.0/modules/content/\">" +
+        "<channel>" + channelHead + items + "</channel></rss>";
+
+    [Fact]
+    public void Rss_with_a_doctype_is_refused()
+    {
+        var r = Parse("<?xml version=\"1.0\"?><!DOCTYPE rss [<!ENTITY x SYSTEM \"file:///C:/Windows/win.ini\">]>" +
+                      "<rss version=\"2.0\"><channel><title>&x;</title></channel></rss>");
+        Assert.Null(r.Doc);
+        Assert.Contains("DOCTYPE", r.Error);
+    }
+
+    [Fact]
+    public void Rss_links_and_permalink_guids_go_through_the_gate()
+    {
+        var r = Parse(Rss(
+            "<item><title>a</title><link>javascript:alert(1)</link><guid>vbscript:x</guid></item>" +
+            "<item><title>b</title><guid>file:///C:/Windows/System32/calc.exe</guid></item>" +
+            "<item><title>c</title><link>https://u:p@evil.example/</link></item>"));
+        Assert.All(r.Doc!.Entries, e => Assert.Null(e.Url));
+    }
+
+    [Fact]
+    public void Rss_feed_level_urls_go_through_the_gate()
+    {
+        var r = Parse(Rss("", "<title>T</title><link>javascript:alert(1)</link><image><url>\\\\host\\share\\i.png</url></image>"));
+        Assert.Null(r.Doc!.SiteUrl);
+        Assert.Null(r.Doc.IconUrl);
+    }
+
+    [Fact]
+    public void Rss_content_renders_inert()
+    {
+        var r = Parse(Rss("<item><title>t</title><link>https://example.com/p</link>" +
+            "<description>&lt;script&gt;alert(1)&lt;/script&gt;&lt;a href=\"jav&amp;#x61;script:x\"&gt;go&lt;/a&gt;</description>" +
+            "<content:encoded><![CDATA[<iframe src=\"https://evil.example\"></iframe><a href=\"C:\\Windows\\calc.exe\">run</a> [x](javascript:y)]]></content:encoded>" +
+            "</item>"));
+        var e = r.Doc!.Entries.Single();
+        var md = FeedCard.BodyMarkdown(e);
+        AssertInert(md);
+        Assert.Empty(Links(md));
+        Assert.DoesNotContain("alert", e.SummaryText);
+        Assert.Contains("[x](javascript:y)", Visible(md));   // Markdown syntax stays literal text
+    }
+
+    [Fact]
+    public void Rss_text_fields_are_clean()
+    {
+        var r = Parse(Rss("<item><title>&lt;b&gt;Real&lt;/b&gt;\u202E title\n\nPerch: update</title>" +
+                          "<author>x@y.example (Eve\u200B\nPerch says)</author><link>https://example.com/1</link></item>",
+            "<title>Feed\u2066 name</title><link>https://example.com/</link>"));
+        Assert.Equal("Feed name", r.Doc!.Title);
+        var e = r.Doc.Entries.Single();
+        Assert.Equal("Real title Perch: update", e.Title);
+        Assert.Equal("Eve Perch says", e.Author);
+    }
+
+    [Fact]
+    public void Rss_xml_base_cannot_smuggle_a_dangerous_scheme()
+    {
+        var r = Parse(Rss("<item xml:base=\"javascript:alert(1)//\"><title>t</title><link>x</link>" +
+                          "<description>&lt;a href=\"calc.exe\"&gt;c&lt;/a&gt;</description></item>"));
+        var e = r.Doc!.Entries.Single();
+        Assert.Null(e.Url);
+        Assert.Null(e.ContentBase);
+        Assert.Empty(Links(FeedCard.BodyMarkdown(e)));
+    }
+
+    [Fact]
+    public void Rss_item_flood_is_bounded()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 5000; i++) sb.Append($"<item><guid>g{i}</guid><title>t{i}</title></item>");
+        Assert.Equal(FeedParser.MaxEntries, Parse(Rss(sb.ToString())).Doc!.Entries.Count);
+    }
+
+    // ── Autodiscovery (F6): a hostile page can only offer vetted http(s) addresses ────────────────────────────
+
+    [Fact]
+    public void Discovery_only_offers_safe_feed_links()
+    {
+        var html = "<html><head>" +
+            "<link rel=\"alternate\" type=\"application/rss+xml\" href=\"javascript:alert(1)\">" +
+            "<link rel=\"alternate\" type=\"application/atom+xml\" href=\"file:///C:/feed.xml\">" +
+            "<link rel=\"alternate\" type=\"application/atom+xml\" href=\"https://u:p@evil.example/f\">" +
+            "<link rel=\"alternate\" type=\"text/html\" href=\"https://example.com/other\">" +
+            "<link rel=\"stylesheet alternate\" type=\"application/rss+xml\" href=\"https://example.com/css\">" +
+            "<link rel=\"alternate\" type=\"application/rss+xml\" title=\"Real\u202E\nfeed\" href=\"/feed\">" +
+            "</head></html>";
+        var found = FeedDiscovery.Find(html, new Uri("https://example.com/blog/"));
+        var c = Assert.Single(found);
+        Assert.Equal("https://example.com/feed", c.Url.AbsoluteUri);
+        Assert.Equal("Real feed", c.Title);
+    }
+
+    [Fact]
+    public void Discovery_drops_private_feeds_offered_by_a_public_page()
+    {
+        var page = new RouteHandler().On("https://public.example/", _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<!DOCTYPE html><html><head>" +
+                "<link rel=\"alternate\" type=\"application/rss+xml\" href=\"http://192.168.1.1/admin.xml\">" +
+                "<link rel=\"alternate\" type=\"application/rss+xml\" href=\"https://router.example/feed\">" +
+                "<link rel=\"alternate\" type=\"application/rss+xml\" href=\"https://public.example/feed\">" +
+                "</head><body></body></html>", Encoding.UTF8, "text/html"),
+        });
+        using var f = new FeedFetcher(page, page, FeedTestSupport.Resolver(new() { ["router.example"] = ["10.0.0.1"] }));
+        var r = f.FetchFeedAsync(new Uri("https://public.example/"), null, null, Now, default).GetAwaiter().GetResult();
+        Assert.Equal(FeedFetchStatus.Error, r.Status);
+        Assert.Equal(["https://public.example/feed"], r.Discovered!.Select(c => c.Url.AbsoluteUri));
+    }
 }

@@ -8,7 +8,8 @@ namespace Perch.Feeds;
 
 /// <summary>
 /// Reads a feed document into the normalized <see cref="FeedDoc"/> (docs/feeds-plan.md §3.1, §3.4.1). Atom 1.0
-/// today; RSS joins in F6 behind the same entry point. Pure (the clock is passed in) and throw-free: anything
+/// here; RSS 2.0/0.9x and RSS 1.0 (RDF) in <c>FeedParser.Rss.cs</c>, behind the same entry point and the same
+/// hardened read. Pure (the clock is passed in) and throw-free: anything
 /// that isn't a well-formed, acceptable feed comes back as <see cref="FeedParseResult.Fail"/> with a short reason
 /// fit to show the user.
 ///
@@ -18,7 +19,7 @@ namespace Perch.Feeds;
 /// hands out is <see cref="FeedText"/>-clean and every URL <see cref="FeedUrl"/>-vetted; only
 /// <see cref="FeedEntry.ContentHtml"/> stays raw, for <see cref="HtmlToMarkdown"/> at render time.</para>
 /// </summary>
-internal static class FeedParser
+internal static partial class FeedParser
 {
     public const int MaxBytes = 4 * 1024 * 1024;
     public const int MaxDepth = 64;
@@ -109,9 +110,10 @@ internal static class FeedParser
         var root = doc.Root;
         if (root is null) return FeedParseResult.Fail("Not a feed");
         if (root.Name == AtomNs + "feed") return ParseAtom(root, documentUrl, nowUtc);
+        if (root.Name.LocalName == "rss") return ParseRss(root, documentUrl, nowUtc);
+        if (root.Name == RdfNs + "RDF") return ParseRdf(root, documentUrl, nowUtc);
         return root.Name.LocalName switch
         {
-            "rss" or "RDF" => FeedParseResult.Fail("RSS feeds aren't supported yet"),
             "html" => FeedParseResult.Fail("Not a feed (looks like a web page)"),
             "feed" => FeedParseResult.Fail("Not a feed (unsupported Atom version)"),
             _ => FeedParseResult.Fail("Not a feed"),
@@ -133,27 +135,40 @@ internal static class FeedParser
         DateTime? updated = Date(feed.Element(AtomNs + "updated"), nowUtc);
         string? feedAuthor = AuthorName(feed);
 
+        var entries = Entries(feed.Elements(AtomNs + "entry"), e => ParseEntry(e, documentUrl, feedAuthor, nowUtc));
+        return FeedParseResult.Ok(new FeedDoc(title, site, icon, updated, entries));
+    }
+
+    // Shared by every format: parse up to MaxEntriesScanned items, skipping any that throw (one bad entry never
+    // costs the rest of the feed), then dedupe by id (first wins), newest first, capped at MaxEntries. The sort is
+    // stable, so undated items keep their document order.
+    private static List<FeedEntry> Entries(IEnumerable<XElement> items, Func<XElement, FeedEntry?> parse)
+    {
         var entries = new List<FeedEntry>();
         int scanned = 0;
-        foreach (var e in feed.Elements(AtomNs + "entry"))
+        foreach (var e in items)
         {
             if (++scanned > MaxEntriesScanned) break;
             try
             {
-                if (ParseEntry(e, documentUrl, feedAuthor, nowUtc) is { } entry) entries.Add(entry);
+                if (parse(e) is { } entry) entries.Add(entry);
             }
             catch
             {
-                // One bad entry never costs the rest of the feed.
             }
         }
-
-        var kept = entries
-            .GroupBy(x => x.Id).Select(g => g.First())   // duplicate ids: first wins
+        return entries
+            .GroupBy(x => x.Id).Select(g => g.First())
             .OrderByDescending(x => x.Updated)
             .Take(MaxEntries)
             .ToList();
-        return FeedParseResult.Ok(new FeedDoc(title, site, icon, updated, kept));
+    }
+
+    private static string EntryId(string? raw, string? url, string title, DateTime updated)
+    {
+        string id = (raw ?? "").Trim();
+        if (id.Length == 0) id = url ?? Hash(title + "|" + updated.ToString("O", CultureInfo.InvariantCulture));
+        return id.Length > MaxIdLength ? Hash(id) : id;
     }
 
     private static FeedEntry? ParseEntry(XElement e, Uri documentUrl, string? feedAuthor, DateTime nowUtc)
@@ -164,9 +179,7 @@ internal static class FeedParser
         DateTime? published = Date(e.Element(AtomNs + "published"), nowUtc);
         DateTime updated = Date(e.Element(AtomNs + "updated"), nowUtc) ?? published ?? nowUtc;
 
-        string id = (e.Element(AtomNs + "id")?.Value ?? "").Trim();
-        if (id.Length == 0) id = url ?? Hash(title + "|" + updated.ToString("O", CultureInfo.InvariantCulture));
-        if (id.Length > MaxIdLength) id = Hash(id);
+        string id = EntryId(e.Element(AtomNs + "id")?.Value, url, title, updated);
 
         string? author = AuthorName(e) ?? feedAuthor;
 
@@ -308,18 +321,19 @@ internal static class FeedParser
             ? current : null;
     }
 
-    // RFC 3339 (Atom's format) or anything else DateTimeOffset reads invariantly. A date more than a day in the
-    // future is clamped to now, so a feed can't pin an entry to the top of the story forever.
+    // RFC 3339 (Atom's format), RFC 822 as RSS writes it (tolerantly, see Rfc822), or anything else DateTimeOffset
+    // reads invariantly. A date more than a day in the future is clamped to now, so a feed can't pin an entry to
+    // the top of the story forever; one before 1990 is junk.
     private static DateTime? Date(XElement? el, DateTime nowUtc)
     {
         var s = el?.Value.Trim();
-        if (string.IsNullOrEmpty(s)) return null;
-        if (!DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
+        if (string.IsNullOrEmpty(s) || s.Length > 100) return null;
+        DateTime? utc = Rfc822(s);
+        if (utc is null && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
                 DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out var dto))
-            return null;
-        var utc = dto.UtcDateTime;
-        if (utc.Year < 1990) return null;
-        return utc > nowUtc.AddDays(1) ? nowUtc : utc;
+            utc = dto.UtcDateTime;
+        if (utc is not { } d || d.Year < 1990) return null;
+        return d > nowUtc.AddDays(1) ? nowUtc : d;
     }
 
     private static string Hash(string s) =>

@@ -156,7 +156,8 @@ public class AtomParserTests
     }
 
     [Theory]
-    [InlineData("<rss version=\"2.0\"><channel/></rss>", "RSS")]
+    [InlineData("<rss version=\"2.0\"></rss>", "no channel")]
+    [InlineData("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>", "isn't RSS")]
     [InlineData("<feed xmlns=\"http://purl.org/atom/ns#\"/>", "unsupported Atom")]
     [InlineData("<html><body>hi</body></html>", "web page")]
     public void Unsupported_documents_say_why(string xml, string reason) =>

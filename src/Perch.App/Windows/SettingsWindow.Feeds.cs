@@ -24,7 +24,7 @@ internal sealed partial class SettingsWindow
     {
         page.Children.Add(SettingsUi.SectionTitle("Feeds"));
         page.Children.Add(SettingsUi.BodyText(
-            "Follow Atom feeds — release notes, blogs, status pages. They show as a row of story-style heads on " +
+            "Follow Atom and RSS feeds — release notes, blogs, status pages. They show as a row of story-style heads on " +
             "the overlay: a head's ring lights up when its feed has something you haven't seen, and clicking it " +
             "plays the new entries. Feeds you add start quiet — only what's published after that lights up."));
 

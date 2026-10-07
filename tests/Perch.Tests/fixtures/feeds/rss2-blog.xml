@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+	<title>Widget Weekly &amp;amp; Friends</title>
+	<atom:link href="https://blog.example/feed/" rel="self" type="application/rss+xml" />
+	<link>https://blog.example/</link>
+	<description>Notes from the widget team</description>
+	<lastBuildDate>Mon, 05 Oct 2026 09:30:00 +0000</lastBuildDate>
+	<image>
+		<url>https://blog.example/icon-32.png</url>
+		<title>Widget Weekly</title>
+		<link>https://blog.example/</link>
+	</image>
+	<item>
+		<title>Widget 3.0 is out</title>
+		<link>https://blog.example/2026/10/widget-3/</link>
+		<dc:creator><![CDATA[Jane Doe]]></dc:creator>
+		<pubDate>Mon, 05 Oct 2026 09:00:00 +0000</pubDate>
+		<guid isPermaLink="false">https://blog.example/?p=301</guid>
+		<description><![CDATA[<p>Short summary of 3.0 &#8230;</p>]]></description>
+		<content:encoded><![CDATA[<p>The <strong>full</strong> story, with a <a href="/docs/upgrade">relative link</a>.</p>]]></content:encoded>
+	</item>
+	<item>
+		<title>Wrong weekday, two-digit year, named zone</title>
+		<link>https://blog.example/2026/10/odd-date/</link>
+		<author>bob@blog.example (Bob Smith)</author>
+		<pubDate>Fri, 4 Oct 26 8:15 EDT</pubDate>
+		<description>Plain &lt;em&gt;escaped&lt;/em&gt; HTML description.</description>
+	</item>
+	<item>
+		<title>Permalink guid, no link</title>
+		<guid>https://blog.example/2026/09/permalink/</guid>
+		<pubDate>Sat, 26 Sep 2026 23:59:59 GMT</pubDate>
+	</item>
+	<item>
+		<description>An item with no title and an unparseable date.</description>
+		<guid isPermaLink="false">tag:blog.example,2026:untitled</guid>
+		<pubDate>sometime last week</pubDate>
+	</item>
+</channel>
+</rss>

@@ -104,6 +104,36 @@ The render probe is `overlay_feeds*`.
 
 Tests are `FeedNoticeTests` (batching, the summary, caps and status hints).
 
+**F6 built** (on `feeds`). It adds:
+
+- **RSS** in `FeedParser.Rss.cs`. It covers RSS 2.0 and 0.9x (including 0.91 items placed beside the channel)
+  and RSS 1.0 / 0.90 (RDF), all into the same `FeedDoc`. It uses the same hardened read, cleaners and URL gate.
+  It shares the entry-finishing path with Atom: skip bad items, dedupe by id, newest first, cap 100. Mapping:
+  - **Id:** `guid`, else `rdf:about`, else the link, else a hash.
+  - **Link:** `link`, else a permalink `guid`.
+  - **Content:** `content:encoded`, else `description`.
+  - **Author:** `dc:creator`, else the name in "email (Name)".
+  - **Title:** read as HTML and stripped once.
+  - **Base:** relative links resolve against the channel's site link.
+- **`FeedParser.Rfc822`**, a tolerant date parser. It accepts wrong or missing weekdays, 1–2 digit days, 2-digit
+  years, times without seconds, named zones (GMT/EST/CEST…), ±hhmm or ±hh:mm offsets, a missing zone (UTC) and
+  month-first dates. It returns null for anything else, which then falls through to the ISO path.
+- **Autodiscovery.** `FeedDiscovery` scans an HTML page for `<link rel="alternate">` tags of the Atom, RSS and
+  RDF types. It only reads tags, skips comments and honours the first `<base href>`. Each address is
+  entity-decoded once and then goes through `FeedUrl.Safe`. Titles are cleaned, and the list is capped at 8.
+  - When a check finds a web page, `FeedFetcher` attaches the candidates as `FeedFetchResult.Discovered`. It
+    **drops any whose host resolves to a private address unless the page itself was private**, so a public page
+    can't steer you into your own network.
+  - The add dialog lists them with "Use this feed". That puts the address in the box and runs the normal check;
+    nothing is followed unchecked.
+- The "RSS not supported" error and hint are gone, and the copy now says "Atom and RSS".
+
+Tests: `RssParserTests` (with fixtures `rss2-blog.xml` and `rss1-rdf.xml`), `FeedDiscoveryTests`, and an RSS +
+discovery section in `FeedInjectionTests`. That section covers DOCTYPE refusal, links and permalink guids
+through the gate, feed-level URLs, inert content, clean text, xml:base poisoning, item floods, unsafe discovered
+links, and private candidates dropped. The private-candidate filter was mutation-checked. The new render probe is
+`feed_dialog_discovered`.
+
 **Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
 YouTube channel feed) and an interactive pass over the keys, slides, tray switching and read-on-show in the
 running app. None of it has been run live.
