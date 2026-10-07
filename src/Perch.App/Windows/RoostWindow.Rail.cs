@@ -332,6 +332,7 @@ internal sealed partial class RoostWindow
             : pane.Ended ? "ended"
             : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
             : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
+            : s.BackgroundShellCount > 0 ? $"❯ {s.BackgroundShellCount}"   // idle, but shells/monitors still run
             : "";
         if (v.Elapsed.Text != elapsed) v.Elapsed.Text = elapsed;
         v.Bar.Background = inActive ? _p.Brand : Brushes.Transparent;

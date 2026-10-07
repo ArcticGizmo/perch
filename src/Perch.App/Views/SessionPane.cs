@@ -274,6 +274,9 @@ internal sealed class SessionPane : Border
     /// <summary>Esc in the composer with a turn running (pane key).</summary>
     public event Action<string>? InterruptRequested;
 
+    /// <summary>A background task's Stop was clicked in this (controlled, live) pane's thread: (pane key, task).</summary>
+    public event Action<string, BackgroundTask>? StopTaskRequested;
+
     /// <summary>Points the pane at its latest roster snapshot and feed; refreshes header, chrome and body.</summary>
     public void Update(RoostPane pane, RoostFeed? feed)
     {
@@ -372,7 +375,7 @@ internal sealed class SessionPane : Border
         var s = pane.Session;
         if (pane.Dormant is { } dormant) return DormantPillText(dormant);
         if (pane.EndedAt is { } ended) return $"Ended {Ago(ended)}";
-        return s.Status switch
+        var status = s.Status switch
         {
             SessionStatus.AwaitingInput => s.AwaitingElapsedLabel() is { } w ? $"Needs your input · {w}" : "Needs your input",
             SessionStatus.ApiError => s.ApiFailure is { Status: > 0 } f ? $"API error · {f.Status}" : "API error",
@@ -380,6 +383,8 @@ internal sealed class SessionPane : Border
             SessionStatus.Running => s.RunningElapsedLabel() is { } r ? $"Working · {r}" : "Working",
             _ => "Idle",
         };
+        // Background shells/Monitors never make a session "working", so say they're there (background-tasks plan).
+        return s.BackgroundShellCount is > 0 and var n ? $"{status} · {n} in background" : status;
     }
 
     /// <summary>A dormant pane's pill: why it's here and when it stopped.</summary>
@@ -547,7 +552,13 @@ internal sealed class SessionPane : Border
             }
             return;
         }
-        _thread = new SessionThreadView(_p, compact: true) { Cwd = _pane?.Session.Cwd ?? "" };
+        _thread = new SessionThreadView(_p, compact: true)
+        {
+            Cwd = _pane?.Session.Cwd ?? "",
+            // Stop is offered only where Perch drives the process; a terminal session's tail is read-only.
+            CanStopTasks = feed.IsControlled && _pane is { Ended: false, Dormant: null },
+        };
+        _thread.StopTaskRequested += t => StopTaskRequested?.Invoke(Key, t);
         _thread.PermissionAnswered += (item, allow, mode) => PermissionAnswered?.Invoke(item, allow, mode);
         _thread.QuestionAnswered += (item, answers) => QuestionAnswered?.Invoke(item, answers);
         _thread.Bind(feed.Conversation);

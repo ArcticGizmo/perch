@@ -375,6 +375,10 @@ internal sealed class SubAgentReader
         public string? LastToolName;
         public JsonNode? LastToolInput;
         public List<string>? Launched;  // Task/Agent tool_use ids this transcript has spawned
+        // The id of a SubagentHandback call that ended the agent's work, while nothing new has arrived since.
+        // Newer Claude Code has a sub-agent deliver its report through that tool, so its transcript ends on the
+        // call's tool_result (a user record) and would otherwise read as "awaiting the model" = working.
+        public string? HandbackId;
     }
 
     private static void StepClassify(ClassifyState s, string line)
@@ -393,12 +397,17 @@ internal sealed class SubAgentReader
         {
             s.SawTurn = true;
             s.LastWasUser = true;
+            // Only the handback's own result keeps the agent finished; anything else (a SendMessage resuming it,
+            // an injected reminder) means it's been given more to do.
+            if (s.HandbackId is { } handback && !IsResultFor(node, handback))
+                s.HandbackId = null;
         }
         else if (type == "assistant")
         {
             s.SawTurn = true;
             s.LastWasUser = false;
             s.LastAssistantHadToolUse = false;
+            s.HandbackId = null;
             if (TranscriptJson.ContentArray(node) is { } content)
             {
                 foreach (var block in content)
@@ -413,19 +422,28 @@ internal sealed class SubAgentReader
                         if (s.LastToolName is "Agent" or "Task"
                             && block["id"]?.GetValue<string>() is { } spawnId)
                             (s.Launched ??= new List<string>()).Add(spawnId);
+                        if (s.LastToolName == "SubagentHandback")
+                            s.HandbackId = block["id"]?.GetValue<string>() ?? "";
                     }
                 }
             }
         }
     }
 
+    // True when a user record is (only) the tool_result answering tool call `toolUseId`.
+    private static bool IsResultFor(JsonNode? node, string toolUseId) =>
+        TranscriptJson.ContentArray(node) is { Count: > 0 } blocks
+        && blocks.All(b => TranscriptJson.BlockType(b) == "tool_result"
+                           && TranscriptJson.AsString(b?["tool_use_id"]) == toolUseId);
+
     private static Classification FinishClassify(ClassifyState s)
     {
         var launched = s.Launched?.ToList();   // a copy: the fold keeps appending to its own list
         if (!s.SawTurn)
             return new Classification(false, null, launched);  // nothing yet / just spawned — idle
-        bool working = s.LastWasUser           // an injected prompt or a tool_result awaiting the next step
-            || s.LastAssistantHadToolUse;      // assistant ended on a tool_use -> awaiting its result
+        bool working = s.HandbackId is null    // handed its report back: done, whatever the tail looks like
+            && (s.LastWasUser                  // an injected prompt or a tool_result awaiting the next step
+                || s.LastAssistantHadToolUse); // assistant ended on a tool_use -> awaiting its result
         string? activity = working && !string.IsNullOrEmpty(s.LastToolName)
             ? ToolSummary.Describe(s.LastToolName!, s.LastToolInput)
             : null;

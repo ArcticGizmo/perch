@@ -436,6 +436,30 @@ public class SubAgentReaderTests
     public void ScanBackground_DeclaredTimeoutPastTheMax_IsCappedAtTenMinutes() =>
         Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(11), ShellAgentPrompt, ShellToolUse("Bash", 3_600_000)));
 
+    // ----- SubagentHandback --------------------------------------------------------------------
+    //
+    // Newer Claude Code has a sub-agent deliver its final report by calling SubagentHandback, so its transcript ends
+    // on that call's tool_result, which reads like "awaiting the model". Captured live (2026-10-07): the agent stayed
+    // "working" until the staleness window, and an idle session may not rescan to notice.
+
+    private const string HandbackCall =
+        """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_hb","name":"SubagentHandback","input":{"message":"DONE"}}]}}""";
+    private const string HandbackResult =
+        """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_hb","content":[{"type":"text","text":"{\"success\":true}"}]}]}}""";
+
+    [Fact]
+    public void ScanBackground_AgentThatHandedBack_IsFinishedAtOnce()
+    {
+        Assert.Empty(ScanShellAgent(TimeSpan.Zero, ShellAgentPrompt, ShellToolUse("Bash", null), ShellToolResult, HandbackCall));
+        Assert.Empty(ScanShellAgent(TimeSpan.Zero,
+            ShellAgentPrompt, ShellToolUse("Bash", null), ShellToolResult, HandbackCall, HandbackResult));
+    }
+
+    [Fact]
+    public void ScanBackground_AgentResumedAfterHandback_IsWorkingAgain() =>
+        Assert.Single(ScanShellAgent(TimeSpan.Zero, ShellAgentPrompt, HandbackCall, HandbackResult,
+            """{"type":"user","message":{"role":"user","content":"one more thing: run the lint too"}}"""));
+
     [Fact]
     public void ScanBackground_ShellCallThatReturned_FallsBackToTheUsualWindow()
     {

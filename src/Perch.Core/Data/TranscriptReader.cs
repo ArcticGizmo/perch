@@ -46,8 +46,10 @@ internal sealed class TranscriptReader
     private static readonly LineFolder<ArtifactsState> ArtifactsFolder = new(() => new(), StepArtifacts);
     private static readonly LineFolder<ContextState> ContextFolder = new(() => new(), StepContext);
     private static readonly LineFolder<TitleState> TitleFolder = new(() => new(), StepTitle);
+    private static readonly LineFolder<BackgroundState> BackgroundFolder = new(() => new(), StepBackground);
 
-    private readonly TranscriptFold _fold = new(AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder);
+    private readonly TranscriptFold _fold = new(AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder,
+        BackgroundFolder);
 
     /// <summary>Bytes the whole-file readers have read from disk (test/benchmark probe; see <see cref="TranscriptFold"/>).</summary>
     internal long FoldBytesRead => _fold.BytesRead;
@@ -230,6 +232,113 @@ internal sealed class TranscriptReader
             if (s.Notified == null || !s.Notified.Contains(id))
                 return true;
         return false;
+    }
+
+    /// <summary>
+    /// The background work a terminal session has running, from its transcript: shells, Monitors and async agents
+    /// whose launch result named a task (<c>backgroundTaskId</c> / <c>taskId</c> / <c>isAsync</c>) and whose ending
+    /// <c>&lt;task-notification&gt;</c> (one with a <c>&lt;status&gt;</c>; a Monitor <em>event</em> has none) hasn't
+    /// landed. A clean exit (<c>cost-state</c>) takes everything before it down with the process. Empty when the
+    /// transcript can't be read. Folded incrementally like the other whole-file readers. See
+    /// <c>docs/background-tasks-plan.md</c>.
+    /// </summary>
+    public IReadOnlyList<RunningBackgroundTask> GetRunningBackgroundTasks(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return [];
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? [] : RunningBackgroundTasksAt(path);
+    }
+
+    internal IReadOnlyList<RunningBackgroundTask> RunningBackgroundTasksAt(string path) =>
+        _fold.Get(path, BackgroundFolder, s => (IReadOnlyList<RunningBackgroundTask>)s.Running.Values.ToList(), []);
+
+    private sealed class BackgroundState
+    {
+        public readonly Dictionary<string, RunningBackgroundTask> Running = new(StringComparer.Ordinal);   // by task id
+        // A background launch's own description (or command), by tool-use id, until its result names the task.
+        public readonly Dictionary<string, string> Pending = new(StringComparer.Ordinal);
+    }
+
+    private static readonly Regex NotificationTaskId = new(@"<task-id>([^<]+)</task-id>", RegexOptions.Compiled);
+
+    private static void StepBackground(BackgroundState s, string line)
+    {
+        if (line.Length == 0)
+            return;
+        if (line.Contains("<task-notification>"))
+        {
+            // Only an ending notification has a <status>; a Monitor event doesn't. Matched on the raw line (an agent's
+            // embedded result can be huge); the header tags come before the result, so the first match is the header.
+            if (line.Contains("<status>") && NotificationTaskId.Match(line) is { Success: true } m)
+                s.Running.Remove(m.Groups[1].Value);
+            return;
+        }
+        if (line.Contains("\"type\":\"cost-state\""))
+        {
+            s.Running.Clear();   // the CLI exited cleanly; its background work went with it
+            s.Pending.Clear();
+            return;
+        }
+        bool launchCall = line.Contains("run_in_background") || line.Contains("\"name\":\"Monitor\"");
+        if (!launchCall && !line.Contains("backgroundTaskId") && !line.Contains("timeoutMs") && !line.Contains("isAsync"))
+            return;
+        JsonNode? node;
+        try { node = JsonNode.Parse(line); }
+        catch { return; }
+        if (launchCall && TranscriptJson.AsString(node?["type"]) == "assistant")
+        {
+            NoteBackgroundLaunchCalls(s, node);
+            return;
+        }
+        if (node?["toolUseResult"] is not JsonObject r)
+            return;
+        string? description = null;
+        if (TranscriptJson.ContentArray(node) is { } results)
+            foreach (var block in results)
+                if (TranscriptJson.AsString(block?["tool_use_id"]) is { } useId && s.Pending.Remove(useId, out var d))
+                    description = d;
+        var at = TranscriptJson.ParseTimestamp(TranscriptJson.AsString(node["timestamp"]));
+        RunningBackgroundTask? task = null;
+        if (TranscriptJson.AsString(r["backgroundTaskId"]) is { Length: > 0 } shell)
+        {
+            string? output = null;
+            if (TranscriptJson.ContentArray(node) is { } content)
+                foreach (var block in content)
+                    output ??= BackgroundTaskOutput.FromLaunchResult(TranscriptJson.AsString(block?["content"]));
+            task = new RunningBackgroundTask(shell, BackgroundTaskKind.Shell, at, output, description);
+        }
+        else if (TranscriptJson.AsString(r["taskId"]) is { Length: > 0 } monitor && r["timeoutMs"] is not null)
+            task = new RunningBackgroundTask(monitor, BackgroundTaskKind.Monitor, at, null, description);
+        else if (r["isAsync"] is JsonValue v && v.TryGetValue<bool>(out var isAsync) && isAsync
+                 && TranscriptJson.AsString(r["agentId"]) is { Length: > 0 } agent)
+            task = new RunningBackgroundTask(agent, BackgroundTaskKind.Agent, at, null, description);
+        if (task is not null)
+            s.Running[task.TaskId] = task;
+    }
+
+    // An assistant record's background launches: remember each one's description (else its command) until the result
+    // that names its task arrives. Bounded: a launch whose result never lands is dropped once many are pending.
+    private static void NoteBackgroundLaunchCalls(BackgroundState s, JsonNode? node)
+    {
+        if (TranscriptJson.ContentArray(node) is not { } blocks)
+            return;
+        foreach (var block in blocks)
+        {
+            if (TranscriptJson.BlockType(block) != "tool_use" || TranscriptJson.AsString(block?["id"]) is not { } id)
+                continue;
+            var input = block?["input"];
+            bool background = TranscriptJson.AsString(block?["name"]) == "Monitor"
+                || (input?["run_in_background"] is JsonValue bg && bg.TryGetValue<bool>(out var on) && on);
+            if (!background)
+                continue;
+            var label = TranscriptJson.AsString(input?["description"]) is { Length: > 0 } d ? d
+                      : TranscriptJson.AsString(input?["command"]);
+            if (label is null)
+                continue;
+            if (s.Pending.Count >= 64) s.Pending.Clear();
+            s.Pending[id] = ToolSummary.Clip(label);
+        }
     }
 
     /// <summary>

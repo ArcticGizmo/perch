@@ -39,8 +39,35 @@ internal sealed record ToolUseEvent(string ToolUseId, string ToolName, string Su
 
 /// <summary>A tool finished; <paramref name="Text"/> is its result as text (all text blocks joined), capped
 /// at a generous length so the card can show the whole thing on expand — not the old 60-char preview. The
-/// card derives its own one-line collapsed summary from it.</summary>
-internal sealed record ToolResultEvent(string ToolUseId, string Text, bool IsError) : SessionEvent;
+/// card derives its own one-line collapsed summary from it. <paramref name="Launch"/> is set when the call
+/// started background work (its <c>tool_use_result</c> named a task).</summary>
+internal sealed record ToolResultEvent(string ToolUseId, string Text, bool IsError, BackgroundLaunch? Launch = null) : SessionEvent;
+
+/// <summary>The background task a tool call started, read off its result's <c>tool_use_result</c> /
+/// <c>toolUseResult</c>: a shell's <c>backgroundTaskId</c>, a Monitor's <c>taskId</c> (+ <c>persistent</c>), or an
+/// async agent's <c>agentId</c>. <paramref name="At"/> is the record's timestamp when it has one; <paramref name="OutputFile"/>
+/// is the path a shell's result text names.</summary>
+internal sealed record BackgroundLaunch(string TaskId, BackgroundTaskKind Kind, bool? Persistent = null, DateTime? At = null,
+    string? OutputFile = null);
+
+/// <summary><c>system/task_started</c>: the CLI began tracking a task. <paramref name="IsBackgrounded"/> is false for a
+/// plain foreground shell call, which isn't background work. See <c>docs/background-tasks-plan.md</c>.</summary>
+internal sealed record TaskStartedEvent(
+    string TaskId, string? ToolUseId, string? TaskType, string? Description, bool IsBackgrounded, bool OwnedBySubagent) : SessionEvent;
+
+/// <summary><c>system/task_progress</c>: an agent task's latest step ("Running Sleep for 15 seconds").</summary>
+internal sealed record TaskProgressEvent(string TaskId, string? Description) : SessionEvent;
+
+/// <summary><c>system/task_updated</c> with a <c>patch.status</c> (<c>completed</c> / <c>failed</c> / <c>killed</c>).</summary>
+internal sealed record TaskUpdatedEvent(string TaskId, string? Status, DateTime? EndUtc) : SessionEvent;
+
+/// <summary>A task notification: the stream's <c>system/task_notification</c>, or a transcript's delivered
+/// <c>&lt;task-notification&gt;</c> user record (<paramref name="Delivered"/>, which also carries Monitor events).</summary>
+internal sealed record TaskNotificationEvent(TaskNotification Notification, bool Delivered, DateTime? At = null) : SessionEvent;
+
+/// <summary><c>system/background_tasks_changed</c>: the CLI's whole set of running background tasks.</summary>
+internal sealed record BackgroundTasksChangedEvent(
+    IReadOnlyList<(string TaskId, string? TaskType, string? Description)> Tasks) : SessionEvent;
 
 /// <summary>A streaming text delta (only emitted with <c>--include-partial-messages</c>). Deltas
 /// accumulate into the block a later <see cref="AssistantTextEvent"/> finalises.</summary>

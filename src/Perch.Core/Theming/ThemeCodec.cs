@@ -50,6 +50,7 @@ public static class ThemeCodec
         (t => t.Burn,               (t, c) => t with { Burn = c }),
         (t => t.TeamGray,           (t, c) => t with { TeamGray = c }),
         (t => t.ModeAcceptEdits,    (t, c) => t with { ModeAcceptEdits = c }),
+        (t => t.BackgroundTask,     (t, c) => t with { BackgroundTask = c }),   // background-tasks plan
     ];
 
     public static string Encode(Theme t)

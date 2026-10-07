@@ -70,6 +70,7 @@ internal sealed class ThemeDesignerWindow : Window
         new("Burn rate",    t => t.Burn,            (t, c) => t with { Burn = c }),
         new("Bot / team",   t => t.TeamGray,        (t, c) => t with { TeamGray = c }),
         new("Accept edits", t => t.ModeAcceptEdits, (t, c) => t with { ModeAcceptEdits = c }),
+        new("Background",   t => t.BackgroundTask,  (t, c) => t with { BackgroundTask = c }),
     ];
 
     // The six pairs the readout audits: label, the draft role read as foreground (+ how to rewrite it when

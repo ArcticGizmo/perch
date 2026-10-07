@@ -97,6 +97,7 @@ public static class CvdSim
             Burn = Simulate(theme.Burn, type),
             TeamGray = Simulate(theme.TeamGray, type),
             ModeAcceptEdits = Simulate(theme.ModeAcceptEdits, type),
+            BackgroundTask = Simulate(theme.BackgroundTask, type),
         };
     }
 

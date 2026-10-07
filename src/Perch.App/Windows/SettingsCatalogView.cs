@@ -475,6 +475,7 @@ internal sealed class SettingsCatalogView : StackPanel
         {
             PreviewTarget.ModeBadge       => ("Plan",        Palette.Accent,  Color.FromRgb(38, 49, 74)),
             PreviewTarget.TaskProgress    => ("3 / 7",       Palette.Fg, Color.FromRgb(38, 38, 52)),
+            PreviewTarget.BackgroundTasks => ("❯ 2",         Color.FromRgb(96, 165, 250), Color.FromRgb(30, 40, 66)),
             PreviewTarget.ContextPressure => ("68%",         Palette.Orange,  Color.FromRgb(48, 40, 30)),
             PreviewTarget.WaitingTimer    => ("waiting 4m",  Palette.Yellow,  Color.FromRgb(45, 42, 28)),
             PreviewTarget.Artifacts       => ("◆ artifact", Color.FromRgb(196, 166, 255), Color.FromRgb(46, 38, 60)),

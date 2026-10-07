@@ -1732,6 +1732,7 @@ public partial class App : Application
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
                 w.InterruptRequested += sid => PerchSessionFor(sid)?.Interrupt();
+                w.StopTaskRequested += (sid, task) => PerchSessionFor(sid)?.StopTask(task);
                 w.PromptSubmitted += (sid, text) => PerchSessionFor(sid)?.SendPrompt(text);
                 // Take over = the overlay's Elevate: same eligibility, same confirm (modal over the Roost).
                 w.CanTakeOver = CanElevate;

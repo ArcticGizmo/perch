@@ -71,6 +71,10 @@ internal sealed class SessionPalette
     public SolidColorBrush Violet { get; } = new(Colors.Transparent);
     public SolidColorBrush VioletWash { get; } = new(Colors.Transparent);
     public SolidColorBrush VioletLine { get; } = new(Colors.Transparent);
+    /// <summary>Background shells / Monitors: the theme's blue <c>BackgroundTask</c> role, beside the purple agents.</summary>
+    public SolidColorBrush Bg { get; } = new(Colors.Transparent);
+    public SolidColorBrush BgWash { get; } = new(Colors.Transparent);
+    public SolidColorBrush BgLine { get; } = new(Colors.Transparent);
     public SolidColorBrush ThinkWash { get; } = new(Colors.Transparent);
     /// <summary>Plan mode's colour in the session UI (pinned blue; see <c>ModeGlyph.Plan</c>).</summary>
     public SolidColorBrush Plan { get; } = new(Colors.Transparent);
@@ -186,6 +190,9 @@ internal sealed class SessionPalette
         Violet.Color = violet;
         VioletWash.Color = WashColor(violet, 0x1F);
         VioletLine.Color = WashColor(violet, 0x4D);
+        Bg.Color = t.BackgroundTask.ToColor();
+        BgWash.Color = WashColor(Bg.Color, dark ? (byte)0x1F : (byte)0x1A);
+        BgLine.Color = WashColor(Bg.Color, dark ? (byte)0x57 : (byte)0x52);
         ThinkWash.Color = WashColor(muted, 0x0F);
         // Plan mode stays a distinct blue (the theme's burn hue), so it never collides with the accent.
         Plan.Color = t.Burn.ToColor();

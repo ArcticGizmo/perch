@@ -299,6 +299,21 @@ internal sealed class ClaudeSessionController : IDisposable
         ["request"] = new JsonObject { ["subtype"] = "interrupt" },
     });
 
+    /// <summary>Stops one background task (a <c>run_in_background</c> shell, a Monitor, an async agent) without
+    /// touching the turn: the CLI's <c>stop_task</c> control request, found by protocol spike against 2.1.292 (see
+    /// <c>docs/background-tasks-plan.md</c>). The task then reports <c>task_updated{killed}</c> →
+    /// <c>task_notification{stopped}</c>, and Claude hears of it on its next turn.</summary>
+    public void StopTask(string taskId)
+    {
+        if (!IsSafeToken(taskId)) return;
+        WriteLine(new JsonObject
+        {
+            ["type"] = "control_request",
+            ["request_id"] = NextRequestId(),
+            ["request"] = new JsonObject { ["subtype"] = "stop_task", ["task_id"] = taskId },
+        });
+    }
+
     // How long a stopped session gets to exit on its own before its tree is killed. A clean exit writes the transcript's
     // cost-state flush and runs SessionEnd hooks (the user's own included); a kill skips both, which reads as an abrupt
     // end. A bare session took 2.5s to exit (docs/session-recovery-plan.md, R0), so 3s was too tight once MCP servers

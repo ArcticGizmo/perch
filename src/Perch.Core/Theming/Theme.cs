@@ -101,4 +101,6 @@ public sealed record Theme
     public Rgb TeamGray { get; init; }
     /// <summary>The "Accept edits" permission-mode badge (blue-purple).</summary>
     public Rgb ModeAcceptEdits { get; init; }
+    /// <summary>Background shells / Monitors (blue), distinct from the purple sub-agents.</summary>
+    public Rgb BackgroundTask { get; init; }
 }

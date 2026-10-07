@@ -131,6 +131,11 @@ internal sealed class AppSettings
     // its width; the checklist is still tracked, just not shown. Defaults to true; a missing key keeps it on.
     public bool ShowTaskProgress { get; set; } = true;
 
+    // Whether to draw the count of a session's running background shells and Monitors (run_in_background, Monitor)
+    // on its overlay row, so an idle session that still has a dev server or a watcher running doesn't read as
+    // finished. They never hold the "done" alert; this count is their only overlay signal. Defaults to true.
+    public bool ShowBackgroundTasks { get; set; } = true;
+
     // Whether to show a session's pinned note on its overlay row — the clickable note glyph and its text
     // line. Off (the default) hides the indicator entirely; the note is still stored and editable from the
     // session's right-click menu. A missing key keeps it off.

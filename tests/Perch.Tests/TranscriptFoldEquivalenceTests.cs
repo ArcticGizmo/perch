@@ -56,6 +56,7 @@ public sealed class TranscriptFoldEquivalenceTests : IDisposable
             Artifacts = r.T.ArtifactsAt(path),
             Title = r.T.TitleAt(path),
             Async = r.T.HasOutstandingAsyncAgentAt(path),
+            Background = r.T.RunningBackgroundTasksAt(path),
             Fill = fill,
             Window = window,
             Produced = md.Produced,

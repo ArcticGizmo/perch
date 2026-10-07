@@ -16,7 +16,8 @@ internal static class ToolSummary
     public static bool IsKnown(string tool) => tool is
         "Read" or "Edit" or "MultiEdit" or "Write" or "NotebookEdit" or
         "Bash" or "PowerShell" or "Grep" or "Glob" or "Task" or "Agent" or
-        "WebFetch" or "WebSearch" or "TodoWrite" or "AskUserQuestion";
+        "WebFetch" or "WebSearch" or "TodoWrite" or "AskUserQuestion" or
+        "Monitor" or "TaskStop" or "TaskOutput";
 
     /// <summary>Maps a tool name + its input to a short present-tense phrase.</summary>
     public static string Describe(string tool, JsonNode? input)
@@ -41,6 +42,12 @@ internal static class ToolSummary
                 return "Searching: " + Clip(Str("pattern") ?? "");
             case "Glob":
                 return "Finding: " + Clip(Str("pattern") ?? "");
+            case "Monitor":
+                return "Watching: " + Clip(Str("description") ?? Str("command") ?? "a command");
+            case "TaskStop":
+                return "Stopping: " + Clip(Str("task_id") ?? Str("shell_id") ?? "a task");
+            case "TaskOutput":
+                return "Checking: " + Clip(Str("task_id") ?? "a task");
             case "Task":
             case "Agent":
                 return "Delegating: " + Clip(Str("description") ?? "sub-agent");
