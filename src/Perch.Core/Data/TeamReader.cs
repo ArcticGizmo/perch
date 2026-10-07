@@ -121,7 +121,7 @@ internal static class TeamReader
     }
 
     // Bump when StepTeam's rules change: the persisted cache folded old transcripts under the old rules.
-    internal const int TeamFoldVersion = 1;
+    internal const int TeamFoldVersion = 2;   // 2: counts 1-hour cache writes (TokenTotals.CacheWrite1h)
 
     internal static readonly LineFolder<TeamFoldState> TeamFolder = new(() => new TeamFoldState(), StepTeam);
 
@@ -146,11 +146,7 @@ internal static class TeamReader
             state.Days[day] = data = new TeamDay { FirstLine = position };
 
         if (node["message"]?["usage"] is { } usage)
-            data.Tokens += new TokenTotals(
-                TranscriptJson.AsLong(usage["input_tokens"]),
-                TranscriptJson.AsLong(usage["output_tokens"]),
-                TranscriptJson.AsLong(usage["cache_creation_input_tokens"]),
-                TranscriptJson.AsLong(usage["cache_read_input_tokens"]));
+            data.Tokens += TokenTotals.FromUsage(usage);
     }
 
     /// <summary>One teammate's contribution to the days <paramref name="inRange"/> accepts: its tokens per day,

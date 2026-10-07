@@ -88,8 +88,8 @@ internal sealed record AssistantUsageEvent(long ContextTokens) : SessionEvent;
 
 /// <summary>A turn finished (the <c>result</c> record): outcome plus cost/usage for the whole session so far.
 /// The three input buckets are kept apart because they price very differently — fresh
-/// <paramref name="InputTokens"/> at 1×, <paramref name="CacheCreationTokens"/> at ~1.25×,
-/// <paramref name="CacheReadTokens"/> at ~0.1× — and their sum is the prompt size sent to the model, i.e.
+/// <paramref name="InputTokens"/> at 1×, <paramref name="CacheCreationTokens"/> at 1.25–2× (by cache TTL),
+/// <paramref name="CacheReadTokens"/> at ≤0.1× (see <see cref="ModelPricing"/>) — and their sum is the prompt size sent to the model, i.e.
 /// the session's current context occupancy.</summary>
 internal sealed record TurnResultEvent(
     bool IsError, string Subtype, double CostUsd, long InputTokens, long OutputTokens, long DurationMs,

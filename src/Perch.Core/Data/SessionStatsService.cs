@@ -24,14 +24,26 @@ internal sealed record DayStats(DateOnly Day, int SessionCount, TimeSpan ActiveT
     private static string FormatActive(TimeSpan t) => StatsFormat.Duration(t);
 }
 
-/// <summary>Token counts split by billing class. Cache writes price at ~1.25× input, cache reads at
-/// ~0.1× — kept separate so the cost estimate is honest rather than treating every token the same.</summary>
-internal readonly record struct TokenTotals(long Input, long Output, long CacheWrite, long CacheRead)
+/// <summary>Token counts split by billing class — kept separate so the cost estimate is honest rather than
+/// treating every token the same (see <see cref="ModelPricing"/>). <paramref name="CacheWrite1h"/> is the part of
+/// <paramref name="CacheWrite"/> written with the 1-hour TTL (2× input, against 1.25× for 5-minute writes); it
+/// is already counted in <paramref name="CacheWrite"/>, so <see cref="Total"/> leaves it out.</summary>
+internal readonly record struct TokenTotals(long Input, long Output, long CacheWrite, long CacheRead, long CacheWrite1h = 0)
 {
     public long Total => Input + Output + CacheWrite + CacheRead;
     public static readonly TokenTotals Zero = default;
     public static TokenTotals operator +(TokenTotals a, TokenTotals b) =>
-        new(a.Input + b.Input, a.Output + b.Output, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead);
+        new(a.Input + b.Input, a.Output + b.Output, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead,
+            a.CacheWrite1h + b.CacheWrite1h);
+
+    /// <summary>The totals of one transcript <c>message.usage</c> object. Older transcripts carry no
+    /// <c>cache_creation</c> TTL breakdown; their writes count as 5-minute ones.</summary>
+    public static TokenTotals FromUsage(JsonNode usage) => new(
+        TranscriptJson.AsLong(usage["input_tokens"]),
+        TranscriptJson.AsLong(usage["output_tokens"]),
+        TranscriptJson.AsLong(usage["cache_creation_input_tokens"]),
+        TranscriptJson.AsLong(usage["cache_read_input_tokens"]),
+        TranscriptJson.AsLong(usage["cache_creation"]?["ephemeral_1h_input_tokens"]));
 }
 
 internal sealed record ToolStat(string Tool, int Count);
@@ -234,17 +246,6 @@ internal static class SessionStatsService
     }
 
     // ── Rich report (Tier 1 + 2) ─────────────────────────────────────────────────
-    // Per-model equivalent API pricing, USD per million tokens (input, output). Keys are matched as a
-    // prefix of the transcript's model id so dated snapshots (claude-haiku-4-5-20251001) resolve too.
-    // Cache reads bill at ~0.1× input and cache writes at ~1.25× input — applied in CostOf.
-    private static readonly (string key, decimal input, decimal output)[] Prices =
-    [
-        ("claude-fable-5",   10m, 50m),
-        ("claude-opus-4",     5m, 25m),   // 4.5 / 4.6 / 4.7 / 4.8 all share Opus-tier pricing
-        ("claude-sonnet-4",   3m, 15m),
-        ("claude-haiku-4",    1m,  5m),
-    ];
-
     /// <summary>The full report for a single day. Heavier than <see cref="ForDay"/> — call off the UI thread.</summary>
     public static StatsReport ReportForDay(DateOnly day) =>
         ComposeReport(day, Scan(SessionStatsCache.Shared, CandidateTranscripts(day), day, day.AddDays(1)).Values);
@@ -330,7 +331,7 @@ internal static class SessionStatsService
 
     // Bump when StepSession's rules (or anything it counts — SwearFilter's list, prompt detection) change:
     // the persisted cache folded old transcripts under the old rules and must be rebuilt.
-    internal const int SessionFoldVersion = 1;
+    internal const int SessionFoldVersion = 2;   // 2: counts 1-hour cache writes (TokenTotals.CacheWrite1h)
 
     internal static readonly LineFolder<SessionFoldState> SessionFolder = new(() => new SessionFoldState(), StepSession);
 
@@ -422,11 +423,7 @@ internal static class SessionStatsService
         if (message?["usage"] is { } usage)
         {
             var model = message["model"]?.GetValue<string>() ?? "unknown";
-            var tt = new TokenTotals(
-                TranscriptJson.AsLong(usage["input_tokens"]),
-                TranscriptJson.AsLong(usage["output_tokens"]),
-                TranscriptJson.AsLong(usage["cache_creation_input_tokens"]),
-                TranscriptJson.AsLong(usage["cache_read_input_tokens"]));
+            var tt = TokenTotals.FromUsage(usage);
             data.Tokens += tt;
             data.Models[model] = data.Models.GetValueOrDefault(model, TokenTotals.Zero) + tt;
         }
@@ -649,19 +646,18 @@ internal static class SessionStatsService
             hourly[times[^1].Hour] += (int)SessionTail.TotalSeconds;
     }
 
-    // internal for golden tests — pins the per-model pricing the cost estimate depends on.
+    // Equivalent API cost of a model's tokens, priced through the shared ModelPricing table: cache reads at the
+    // model's read rate, 1-hour cache writes at 2× input and the rest at 1.25×. internal for golden tests.
     internal static decimal? CostOf(string model, TokenTotals t)
     {
-        foreach (var (key, input, output) in Prices)
-        {
-            if (!model.StartsWith(key, StringComparison.Ordinal))
-                continue;
-            return (t.Input * input
-                  + t.CacheRead * input * 0.10m
-                  + t.CacheWrite * input * 1.25m
-                  + t.Output * output) / 1_000_000m;
-        }
-        return null;   // unknown model — surfaced as "—" rather than a fabricated figure
+        if (ModelPricing.For(model) is not { } p)
+            return null;   // unknown model — surfaced as "—" rather than a fabricated figure
+        long write1h = Math.Min(t.CacheWrite1h, t.CacheWrite);
+        return (t.Input * p.InputPerMtok
+              + t.CacheRead * p.CacheReadPerMtok
+              + (t.CacheWrite - write1h) * p.InputPerMtok * ModelPricing.CacheWrite5mMultiplier
+              + write1h * p.InputPerMtok * ModelPricing.CacheWrite1hMultiplier
+              + t.Output * p.OutputPerMtok) / 1_000_000m;
     }
 
     // Per-(session, day) figures: accumulated by StepSession, held by the cache between reports, and
