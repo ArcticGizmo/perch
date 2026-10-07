@@ -1358,6 +1358,18 @@ internal sealed class SessionMonitor : IDisposable
 
     public void Acknowledge(string pid) => _idleSince.Remove(pid);
 
+    /// <summary>
+    /// The inverse of <see cref="Acknowledge"/>: re-arms the "done" badge on an idle session the user wants to
+    /// come back to (the row's "Mark as unread"). Only the badge — no notification fires, as this isn't a
+    /// completion. Applies only to a session last seen idle; a running / waiting one owns its own status, and
+    /// the API-error check in <see cref="Scan"/> still wins over the badge.
+    /// </summary>
+    public void MarkUnread(string pid)
+    {
+        if (_lastRawStatus.TryGetValue(pid, out var raw) && raw == "idle")
+            _idleSince[pid] = Clock.Now;
+    }
+
     public void Dispose()
     {
         if (_disposed)

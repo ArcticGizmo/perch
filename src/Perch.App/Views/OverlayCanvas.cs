@@ -1649,6 +1649,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// for the app to flip its marker file.</summary>
     public event Action<string>? ExternalNotifyToggleRequested;
 
+    /// <summary>Raised when the user marks a session unread (re-arm its "done" badge) or read (clear it without
+    /// focusing it). Carries the session's pid and true for unread.</summary>
+    public event Action<string, bool>? ReadStateRequested;
+
     /// <summary>Raised when the user picks "Add note…"/"Edit note…" for a session. The app opens the note
     /// editor on the row's project note (prefilled from <see cref="ClaudeSession.ProjectNote"/>) and writes
     /// the result via the monitor. Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
@@ -4988,6 +4992,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var view = new List<Control> { MenuItem("View history", () => HistoryRequested?.Invoke(s.SessionId)) };
             if (s.RemoteControlled)
                 view.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
+            // Read state: an idle session can be flagged "done" again to come back to later; a done one can be
+            // cleared without focusing it.
+            if (!subRow && s.Status == SessionStatus.Idle)
+                view.Add(MenuItem("Mark as unread", () => ReadStateRequested?.Invoke(s.Pid, true)));
+            else if (!subRow && s.Status == SessionStatus.NeedsAttention)
+                view.Add(MenuItem("Mark as read", () => ReadStateRequested?.Invoke(s.Pid, false)));
 
             // 2. Session actions on a real row: git history, note (only when the notes feature is on),
             //    external notifications. Each gated by its global switch / a cheap repo check.

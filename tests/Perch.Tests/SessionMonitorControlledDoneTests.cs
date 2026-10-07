@@ -97,6 +97,57 @@ public class SessionMonitorControlledDoneTests : IDisposable
         }
     }
 
+    [Fact]
+    public void MarkUnread_RearmsDoneBadgeWithoutAlert_UntilAcknowledged()
+    {
+        // "Mark as unread" on an idle row: the badge comes back (no toast — it isn't a completion) and stays
+        // until read again, exactly like a real "done".
+        var clock = new SteppedClock(DateTime.Now);
+        Clock.SetProvider(clock);
+        try
+        {
+            using var monitor = new SessionMonitor(new AlwaysAlive());
+            int done = 0;
+            monitor.NeedsAttention += s => { if (s.SessionId == SessionId) done++; };
+
+            Assert.Equal(SessionStatus.Idle, Status(monitor));
+            monitor.MarkUnread(DeadPid);
+            Assert.Equal(SessionStatus.NeedsAttention, Status(monitor));
+            clock.Now = clock.Now.AddMinutes(5);
+            Assert.Equal(SessionStatus.NeedsAttention, Status(monitor));
+            Assert.Equal(0, done);
+
+            monitor.Acknowledge(DeadPid);
+            Assert.Equal(SessionStatus.Idle, Status(monitor));
+        }
+        finally
+        {
+            Clock.Reset();
+        }
+    }
+
+    [Fact]
+    public void MarkUnread_IgnoresRunningSession()
+    {
+        ControlledSessions.Register(SessionId);
+        try
+        {
+            using var monitor = new SessionMonitor(new AlwaysAlive());
+            ControlledSessions.SetActivity(SessionId, ControlledActivity.Busy);
+            Assert.Equal(SessionStatus.Running, Status(monitor));
+            monitor.MarkUnread(DeadPid);
+            Assert.Equal(SessionStatus.Running, Status(monitor));
+
+            // Idling straight after must still go through the normal settle, not pick up a stale manual badge.
+            ControlledSessions.SetActivity(SessionId, ControlledActivity.Idle);
+            Assert.Equal(SessionStatus.Idle, Status(monitor));
+        }
+        finally
+        {
+            ControlledSessions.Unregister(SessionId);
+        }
+    }
+
     private static SessionStatus Status(SessionMonitor monitor) =>
         Assert.Single(monitor.Scan(), s => s.SessionId == SessionId).Status;
 
