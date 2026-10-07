@@ -1951,6 +1951,89 @@ internal static class HeadlessRenderer
     // a user bubble, thinking, an edit tool card with its result, a test-run card, prose, and a pending
     // Bash permission card with the CLI's suggested mode switch. Dark + light (the window's own palette
     // sides), plus the launcher.
+    // Background work (docs/background-tasks-plan.md): a dev server and a Monitor still running (live cards + the amber
+    // RUNNING chips with Stop), and a test run in the background that failed (its card settled, plus the notice).
+    // One shot with the cards collapsed, one with the dev server's chip clicked open to its live output tail.
+    private static void RenderBackgroundTasks(string outDir, string cwd)
+    {
+        var tasksDir = Directory.CreateDirectory(Path.Combine(outDir, "bg-sample-tasks")).FullName;
+        string Output(string id, string text)
+        {
+            var path = Path.Combine(tasksDir, id + ".output");
+            File.WriteAllText(path, text);
+            return path;
+        }
+        var devOut = Output("bdev01", string.Join("\n",
+            "> perch-site@1.4.0 dev", "> vite --port 5173", "",
+            "  VITE v6.2.1  ready in 412 ms", "",
+            "  ➜  Local:   http://localhost:5173/", "  ➜  Network: use --host to expose",
+            "12:04:31 [vite] page reload src/App.tsx", "12:05:02 [vite] hmr update /src/components/Overlay.tsx"));
+        var testOut = Output("btest02", string.Join("\n",
+            "Starting test execution, please wait...",
+            "  Failed PlacementMathTests.Clamp_KeepsCorner [12 ms]",
+            "  Error Message: Assert.Equal() Failure: Expected 24, Actual 0",
+            "Failed!  - Failed: 1, Passed: 2283, Skipped: 1", "", "[exited with code 1]"));
+
+        static Perch.Data.Control.BackgroundLaunch Launch(string id, Perch.Data.BackgroundTaskKind kind, string? output = null) =>
+            new(id, kind, Persistent: kind == Perch.Data.BackgroundTaskKind.Monitor ? false : null, OutputFile: output);
+        var events = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.AssistantTextEvent("I'll start the dev server, watch the build log for errors, and run the slow tests alongside."),
+            new Perch.Data.Control.ToolUseEvent("u1", "Bash", "Running: npm run dev",
+                "{\"command\":\"npm run dev\",\"description\":\"Start the dev server\",\"run_in_background\":true}"),
+            new Perch.Data.Control.TaskStartedEvent("bdev01", "u1", "local_bash", "Start the dev server", true, false),
+            new Perch.Data.Control.ToolResultEvent("u1", "Command running in background with ID: bdev01.", false,
+                Launch("bdev01", Perch.Data.BackgroundTaskKind.Shell, devOut)),
+            new Perch.Data.Control.ToolUseEvent("u2", "Monitor", "Watching: build errors",
+                "{\"command\":\"tail -f build.log | grep --line-buffered error\",\"description\":\"build errors\",\"timeout_ms\":600000,\"persistent\":false}"),
+            new Perch.Data.Control.TaskStartedEvent("bmon03", "u2", "local_bash", "build errors", true, false),
+            new Perch.Data.Control.ToolResultEvent("u2", "Monitor started (task bmon03, expires in 600s).", false,
+                Launch("bmon03", Perch.Data.BackgroundTaskKind.Monitor)),
+            new Perch.Data.Control.ToolUseEvent("u3", "Bash", "Running: dotnet test --filter Category=Slow",
+                "{\"command\":\"dotnet test --filter Category=Slow\",\"description\":\"Run the slow tests\",\"run_in_background\":true}"),
+            new Perch.Data.Control.TaskStartedEvent("btest02", "u3", "local_bash", "Run the slow tests", true, false),
+            new Perch.Data.Control.ToolResultEvent("u3", "Command running in background with ID: btest02.", false,
+                Launch("btest02", Perch.Data.BackgroundTaskKind.Shell, testOut)),
+            new Perch.Data.Control.AssistantTextEvent("All three are going. I'll pick the test results up when they land."),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.21, InputTokens: 900, OutputTokens: 240, DurationMs: 6100),
+            new Perch.Data.Control.TaskUpdatedEvent("btest02", "failed", null),
+            new Perch.Data.Control.TaskNotificationEvent(new Perch.Data.TaskNotification("btest02", "u3", "failed", testOut,
+                "Background command \"Run the slow tests\" failed with exit code 1"), Delivered: false),
+        };
+
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, "Start the dev server and watch the build, then run the slow tests.", events);
+            // Pose the tasks as running for a while, so the elapsed labels read like a real session.
+            var tracker = w.ConversationForRender.BackgroundTasks;
+            var now = DateTime.UtcNow;
+            tracker.Get("bdev01")!.StartedUtc = now.AddSeconds(-134);
+            tracker.Get("bmon03")!.StartedUtc = now.AddSeconds(-121);
+            tracker.Get("bmon03")!.EventCount = 2;
+            tracker.Get("btest02")!.StartedUtc = now.AddSeconds(-118);
+            tracker.Get("btest02")!.EndedUtc = now.AddSeconds(-31);
+            w.ShowTasksForRender();
+            w.Show();
+            void Shot(string file)
+            {
+                // The cards read their output tails off the UI thread; let those land before capturing.
+                for (int i = 0; i < 20; i++) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(15); }
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (w.CaptureRenderedFrame() is { } frame)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, file));
+                    frame.Save(fs);
+                }
+            }
+            Shot(dark ? "session_bgtasks_1x.png" : "session_bgtasks_light_1x.png");
+            w.RevealBackgroundTaskForRender("bdev01");
+            Shot(dark ? "session_bgtasks_open_1x.png" : "session_bgtasks_open_light_1x.png");
+            w.Close();
+        }
+    }
+
     private static void RenderSessionWindow(string outDir)
     {
         const string cwd = @"C:\src\perch";
@@ -2068,6 +2151,8 @@ internal static class HeadlessRenderer
             Shot(dark ? "session_agent_tab_1x.png" : "session_agent_tab_light_1x.png");
             w.Close();
         }
+
+        RenderBackgroundTasks(outDir, cwd);
 
         // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
         // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).

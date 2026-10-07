@@ -36,11 +36,11 @@ internal static class ToolResultFormat
         return false;
     }
 
-    /// <summary>The shell command a Bash/PowerShell card should show in full when expanded (its header clips
-    /// it), or <c>null</c> for any other tool / missing command.</summary>
+    /// <summary>The shell command a Bash/PowerShell/Monitor card should show in full when expanded (its header
+    /// clips it, or names a Monitor by its description), or <c>null</c> for any other tool / missing command.</summary>
     public static string? Command(string tool, JsonNode? input)
     {
-        if (tool is not ("Bash" or "PowerShell")) return null;
+        if (tool is not ("Bash" or "PowerShell" or "Monitor")) return null;
         var cmd = TranscriptJson.AsString(input?["command"]);
         return string.IsNullOrWhiteSpace(cmd) ? null : cmd;
     }

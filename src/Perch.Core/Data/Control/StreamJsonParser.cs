@@ -253,24 +253,26 @@ internal static class StreamJsonParser
         foreach (var block in blocks)
         {
             if (TranscriptJson.BlockType(block) != "tool_result") continue;
+            var resultText = ResultTextOf(block?["content"]);
             events.Add(new ToolResultEvent(
                 TranscriptJson.AsString(block?["tool_use_id"]) ?? "",
-                ResultTextOf(block?["content"]),
+                resultText,
                 block?["is_error"]?.GetValue<bool>() ?? false,
-                LaunchOf(root)));
+                LaunchOf(root, resultText)));
         }
         return events;
     }
 
     // The background task a tool result reports starting, from its structured result (stream-json's
     // tool_use_result, the transcript's toolUseResult). A record carries one tool_result in practice.
-    private static BackgroundLaunch? LaunchOf(JsonNode root)
+    private static BackgroundLaunch? LaunchOf(JsonNode root, string resultText)
     {
         var r = root["tool_use_result"] ?? root["toolUseResult"];
         if (r is not JsonObject) return null;
         var at = TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"]));
         if (TranscriptJson.AsString(r["backgroundTaskId"]) is { Length: > 0 } shell)
-            return new BackgroundLaunch(shell, BackgroundTaskKind.Shell, At: at);
+            return new BackgroundLaunch(shell, BackgroundTaskKind.Shell, At: at,
+                OutputFile: BackgroundTaskOutput.FromLaunchResult(resultText));
         if (TranscriptJson.AsString(r["taskId"]) is { Length: > 0 } monitor && r["timeoutMs"] is not null)
             return new BackgroundLaunch(monitor, BackgroundTaskKind.Monitor, AsBool(r["persistent"]), at);
         if (AsBool(r["isAsync"]) && TranscriptJson.AsString(r["agentId"]) is { Length: > 0 } agent)

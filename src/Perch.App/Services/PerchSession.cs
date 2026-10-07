@@ -360,6 +360,13 @@ internal sealed class PerchSession : IDisposable
         _controller?.Interrupt();
     }
 
+    /// <summary>Stops one background task (shell, Monitor, async agent) without touching the turn. Its end arrives
+    /// back through the stream like any other (killed → stopped). No-op when the task has ended or nothing runs.</summary>
+    public void StopTask(BackgroundTask task)
+    {
+        if (task.IsRunning && IsRunning) _controller?.StopTask(task.TaskId);
+    }
+
     /// <summary>Enables/disables Remote Control for the live session (the CLI's <c>remote_control</c> control
     /// request). The ack arrives asynchronously as a <see cref="RemoteControlEvent"/> → <see cref="OnRemoteControl"/>.</summary>
     public void RequestRemoteControl(bool enabled)

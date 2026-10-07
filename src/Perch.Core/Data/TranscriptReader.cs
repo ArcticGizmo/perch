@@ -259,7 +259,6 @@ internal sealed class TranscriptReader
     }
 
     private static readonly Regex NotificationTaskId = new(@"<task-id>([^<]+)</task-id>", RegexOptions.Compiled);
-    private static readonly Regex OutputFileRx = new(@"Output is being written to: (.+?\.output)", RegexOptions.Compiled);
 
     private static void StepBackground(BackgroundState s, string line)
     {
@@ -292,8 +291,7 @@ internal sealed class TranscriptReader
             string? output = null;
             if (TranscriptJson.ContentArray(node) is { } content)
                 foreach (var block in content)
-                    if (TranscriptJson.AsString(block?["content"]) is { } text && OutputFileRx.Match(text) is { Success: true } om)
-                        output = om.Groups[1].Value;
+                    output ??= BackgroundTaskOutput.FromLaunchResult(TranscriptJson.AsString(block?["content"]));
             task = new RunningBackgroundTask(shell, BackgroundTaskKind.Shell, at, output);
         }
         else if (TranscriptJson.AsString(r["taskId"]) is { Length: > 0 } monitor && r["timeoutMs"] is not null)

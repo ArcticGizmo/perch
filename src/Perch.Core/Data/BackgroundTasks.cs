@@ -8,6 +8,143 @@ internal enum BackgroundTaskKind { Shell, Monitor, Agent }
 
 internal enum BackgroundTaskStatus { Running, Completed, Failed, Stopped }
 
+/// <summary>
+/// A background task's live output file (<c>%TEMP%\claude\{enc-cwd}\{sessionId}\tasks\{taskId}.output</c>): where it
+/// is, and a bounded read of its tail. A shell's file is plain stdout/stderr and ends with
+/// <c>[exited with code N]</c> once it finishes. Best-effort: every failure reads as "no output", never a throw.
+/// </summary>
+internal static class BackgroundTaskOutput
+{
+    /// <summary>How much of the file's end a tail read returns.</summary>
+    public const int TailBytes = 8 * 1024;
+
+    /// <summary>The task's output file: the one a record named, else a sibling's directory (every task of a session
+    /// writes to the same folder), else Claude Code's own layout under the temp dir. Null when none can be formed.
+    /// The file may not exist yet (or ever: an agent's is empty), so readers check.</summary>
+    public static string? PathFor(BackgroundTask task, IEnumerable<BackgroundTask> siblings, string? cwd, string? sessionId)
+    {
+        if (task.OutputFile is { Length: > 0 } named) return named;
+        try
+        {
+            if (siblings.Select(s => s.OutputFile).FirstOrDefault(f => f is { Length: > 0 }) is { } sibling
+                && Path.GetDirectoryName(sibling) is { Length: > 0 } dir)
+                return Path.Combine(dir, task.TaskId + ".output");
+            if (string.IsNullOrEmpty(cwd) || string.IsNullOrEmpty(sessionId)) return null;
+            return Path.Combine(Path.GetTempPath(), "claude", TranscriptLocator.EncodeProjectDir(cwd), sessionId, "tasks",
+                task.TaskId + ".output");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The last <see cref="TailBytes"/> of <paramref name="path"/> (cut to a line start when clipped), plus
+    /// the exit code its <c>[exited with code N]</c> trailer reports. ("", null) when the file is missing or
+    /// unreadable. Opened with <see cref="FileShare.ReadWrite"/>: the task is still writing it.</summary>
+    public static (string Text, int? ExitCode) ReadTail(string? path, int maxBytes = TailBytes)
+    {
+        if (string.IsNullOrEmpty(path)) return ("", null);
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            long start = Math.Max(0, fs.Length - maxBytes);
+            fs.Seek(start, SeekOrigin.Begin);
+            var buf = new byte[fs.Length - start];
+            int read = 0;
+            while (read < buf.Length && fs.Read(buf, read, buf.Length - read) is > 0 and var n) read += n;
+            var text = System.Text.Encoding.UTF8.GetString(buf, 0, read);
+            if (start > 0 && text.IndexOf('\n') is >= 0 and var nl) text = text[(nl + 1)..];   // drop the partial first line
+            text = text.Replace("\r\n", "\n").TrimEnd('\n');
+            int? exit = null;
+            if (TrailerRx.Match(text) is { Success: true } m)
+            {
+                exit = int.Parse(m.Groups[1].Value);
+                text = text[..m.Index].TrimEnd('\n');
+            }
+            return (text, exit);
+        }
+        catch { return ("", null); }
+    }
+
+    private static readonly Regex TrailerRx = new(@"\n?\[exited with code (-?\d+)\]\s*$", RegexOptions.Compiled);
+
+    private static readonly Regex LaunchOutputRx = new(@"Output is being written to: (.+?\.output)", RegexOptions.Compiled);
+
+    /// <summary>The output path a background shell's launch result names ("Output is being written to: ….output").</summary>
+    public static string? FromLaunchResult(string? resultText) =>
+        resultText is not null && LaunchOutputRx.Match(resultText) is { Success: true } m ? m.Groups[1].Value : null;
+}
+
+/// <summary>The words every surface uses for a background task (card status, notices, chips), so they read alike.</summary>
+internal static class BackgroundTaskText
+{
+    /// <summary>"shell" / "monitor" / "agent".</summary>
+    public static string Noun(BackgroundTaskKind kind) => kind switch
+    {
+        BackgroundTaskKind.Monitor => "monitor",
+        BackgroundTaskKind.Agent => "agent",
+        _ => "shell",
+    };
+
+    /// <summary>A compact running time: "42s", "2m 14s", "1h 05m".</summary>
+    public static string Elapsed(TimeSpan d)
+    {
+        if (d < TimeSpan.Zero) d = TimeSpan.Zero;
+        if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes:00}m";
+        if (d.TotalMinutes >= 1) return $"{(int)d.TotalMinutes}m {d.Seconds:00}s";
+        return $"{(int)d.TotalSeconds}s";
+    }
+
+    /// <summary>The card's status label: "background · 2m 14s" (a Monitor: "watching · 3 events · 1m 02s") while it
+    /// runs, else how it ended ("exit 0", "exit 3", "failed", "stopped", "done").</summary>
+    public static string Status(BackgroundTask t, DateTime nowUtc)
+    {
+        if (t.IsRunning)
+        {
+            var took = Elapsed(nowUtc - t.StartedUtc);
+            if (t.Kind != BackgroundTaskKind.Monitor) return $"background · {took}";
+            return t.EventCount > 0
+                ? $"watching · {t.EventCount} event{(t.EventCount == 1 ? "" : "s")} · {took}"
+                : $"watching · {took}";
+        }
+        return t.Status switch
+        {
+            BackgroundTaskStatus.Stopped => "stopped",
+            _ when t.ExitCode is { } code => $"exit {code}",
+            BackgroundTaskStatus.Failed => "failed",
+            _ => "done",
+        };
+    }
+
+    /// <summary>A notice line for a task that ended (the CLI's own summary when it gave one), or for a Monitor event.</summary>
+    public static string Notice(BackgroundTask t, string? eventText)
+    {
+        var name = t.Description.Length > 0 ? t.Description : t.TaskId;
+        if (eventText is not null)
+            return $"Monitor \"{name}\": {FirstLine(eventText)}";
+        if (t.Summary is { Length: > 0 } s) return s;
+        var noun = t.Kind switch
+        {
+            BackgroundTaskKind.Monitor => "Monitor",
+            BackgroundTaskKind.Agent => "Agent",
+            _ => "Background command",
+        };
+        var how = t.Status switch
+        {
+            BackgroundTaskStatus.Failed => "failed",
+            BackgroundTaskStatus.Stopped => "was stopped",
+            _ => "finished",
+        };
+        return $"{noun} \"{name}\" {how}";
+    }
+
+    private static string FirstLine(string text)
+    {
+        var line = text.Trim();
+        int nl = line.IndexOf('\n');
+        if (nl >= 0) line = line[..nl].TrimEnd() + " …";
+        return line.Length <= 160 ? line : line[..160].TrimEnd() + "…";
+    }
+}
+
 /// <summary>A terminal session's still-running background task, as its transcript tells it
 /// (<see cref="TranscriptReader.GetRunningBackgroundTasks"/>): no live feed, just launch and not-yet-ended.
 /// <paramref name="OutputFile"/> is a shell's output path when the launch result named it.</summary>
@@ -153,10 +290,11 @@ internal sealed class BackgroundTaskTracker(Func<DateTime>? clock = null)
     /// <summary>A launch tool_result named its task (<c>backgroundTaskId</c>, a Monitor's <c>taskId</c>, or an async
     /// agent's <c>agentId</c>).</summary>
     public BackgroundTask Launched(string toolUseId, string taskId, BackgroundTaskKind kind, DateTime? at = null,
-        bool? persistent = null)
+        bool? persistent = null, string? outputFile = null)
     {
         var t = GetOrAdd(taskId, at);
         t.ToolUseId ??= toolUseId;
+        t.OutputFile ??= outputFile;
         t.Kind = KindFor(toolUseId, kind);
         t.Persistent ??= persistent;
         if (t.Description.Length == 0) t.Description = DescriptionFor(toolUseId) ?? "";

@@ -1,7 +1,7 @@
 # Background tasks (shells, monitors, async agents) — design & checkpoint plan
 
-Status: **P0 + P1 done** (2026-10-07), on branch `background-tasks` (cut from `main`), uncommitted. The Core model is
-unit-tested against real captures. Nothing is drawn yet (P2): a `TaskNoticeItem` renders as an empty row until then.
+Status: **P0–P2 done** (2026-10-07), on branch `background-tasks` (cut from `main`). P0+P1 are unit-tested against real
+captures; P2 is render-verified (`render` → `session_bgtasks*_1x.png`). Stop and the live tail are owed a live check.
 
 ## The ask
 
@@ -104,10 +104,10 @@ doesn't read as finished.
 
 ### D3. The live card (session window)
 
-A background launch's tool card links to its task (`ToolCallPart.BackgroundTaskId`). It reads "Running in background
-· 2m 14s" with a tail of the `.output` file, then settles to ✓ / ✗ with the exit code. It has **Stop**, **Open
-output** and **Copy path** buttons. The tail is a bounded read (last ~8 KB), off the UI thread, polled only while the
-card is expanded and the task running.
+A background launch's tool card links to its task (`ToolCallPart.BackgroundTaskId`). It reads "background · 2m 14s"
+with a tail of the `.output` file, then settles to the exit code. It has **Stop**, **Open output** and **Copy path**
+buttons. The tail is a bounded read (last ~8 KB), off the UI thread, polled only while the card is on screen and the
+task running.
 
 ### D4. Notices, not bubbles
 
@@ -118,7 +118,7 @@ event in history is a quiet "Monitor 'X': event 1" line.
 ### D5. Counts everywhere else
 
 - **Session window:** the RUNNING chips grow shell and monitor chips (own glyph + elapsed) beside the agent ones.
-  Clicking one opens a read-only output tab (the agent-tab mechanism, with a terminal-style log view).
+  Clicking one brings its launch card into view, expanded to the live output.
 - **Overlay:** a small background count glyph on the session row, plus "idle · 2 background" in the status text.
 - **Roost:** the same count on the pane pill and the mini card.
 
@@ -137,6 +137,17 @@ against the shell's `.output` trailer so a task orphaned by a dead CLI doesn't c
   `TranscriptReader.GetRunningBackgroundTasks` is the terminal-session fold (a clean exit clears it). Tests are in
   `BackgroundTaskTests`, with the fold added to `TranscriptFoldEquivalenceTests`.
   - Still owed for P3: the `.output`-trailer cross-check for a task whose CLI died abruptly (no `cost-state`).
-- **P2 — session window.** Live card, notices, shell/monitor chips + output tab, Stop.
+- **P2 — session window.** ✅ A launch card (`SessionThreadView.ToolCard.UpdateBackground`) follows its task, not
+  the instant "launched" result. Its status reads "background · 2m 14s" / "watching · 3 events · …" / "exit 1" /
+  "stopped". The body is the newest output line, or, expanded, the command plus a scroll panel of the `.output` tail.
+  That tail is a bounded 8 KB read off the UI thread every 2s while the card is on screen and the task runs, plus one
+  last read after it ends. The card has **■ Stop**, **Open output** and **Copy path**. An async agent's card skips
+  the tail, because its output file is a JSONL transcript, and shows `task_progress` instead. `TaskNoticeItem`
+  renders as a centred ✓/✗/■/◉ line. The RUNNING row gains an amber chip per running shell or Monitor
+  (`SessionWindow.Tasks.cs`) with a ticking elapsed time and its own ■. Clicking a chip reveals and expands the
+  launch card, in place of the separate output tab first planned: the card already holds the tail and Stop.
+  `PerchSession.StopTask` sends `stop_task`. `BackgroundTaskOutput` (path inference + tail) and `BackgroundTaskText`
+  (shared wording) live in Core. Monitor, TaskStop and TaskOutput get proper tool summaries and glyphs.
+  - Owed: a live check of Stop + the tail against a real session. Stop isn't offered in the Roost's pane yet (P3).
 - **P3 — overlay + Roost.** Count glyph and status text, fed by the fold for terminal sessions.
 - **P4 — polish.** Stop from a chip's menu, and a Monitor event list on its card.

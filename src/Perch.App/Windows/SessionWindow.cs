@@ -719,6 +719,7 @@ internal sealed partial class SessionWindow : Window
         _thread.QuestionAnswered += (item, answers) => { _session?.AnswerQuestion(item, answers); _composer.Focus(); };
         // File references in tool cards route their open/diff intents up to the app (which owns those windows).
         _thread.OpenFileRequested += p => OpenFileInViewerRequested?.Invoke(p);
+        _thread.StopTaskRequested += t => _session?.StopTask(t);
         _thread.ViewDiffRequested += p => ViewFileDiffRequested?.Invoke(p);
         // Live theme swap: the shared palette's brushes are re-tinted in place (so chrome and text follow with
         // no work here), but the thread's markdown baked its code-syntax for the old light/dark side — rebuild it.
@@ -871,6 +872,7 @@ internal sealed partial class SessionWindow : Window
         session.Ended += OnSessionEnded;
         session.RemoteControlChanged += OnRemoteControlChanged;   // pop the QR when remote control turns on
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
+        session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         session.Woke += OnSessionWoke;
         // A dormant session resumes its own id on the first send, whichever window it's viewed in.
@@ -882,6 +884,7 @@ internal sealed partial class SessionWindow : Window
         ApplyRunState();
         RefreshBar();
         if (session.IsDormant) ShowDormantEstimate(session);
+        RenderTaskChips();
         if (CanCompose) _composer.Focus();
     }
 
@@ -894,6 +897,7 @@ internal sealed partial class SessionWindow : Window
         s.Ended -= OnSessionEnded;
         s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
+        s.Conversation.BackgroundTaskChanged -= OnBackgroundTaskChanged;
         s.Woke -= OnSessionWoke;
         _sendAfterWake = false;
         // The session outlives this window by design: without this its conversation keeps the whole chat tree
@@ -901,6 +905,7 @@ internal sealed partial class SessionWindow : Window
         _thread.Unbind();
         _session = null;
         ClearAgents();   // its sub-agents (and any agent tab) belong to the session that just went
+        ClearTaskChips();
     }
 
     // The composer takes input for a live session, and for a dormant one (its first send starts claude).
@@ -919,6 +924,7 @@ internal sealed partial class SessionWindow : Window
         // A dormant one can be ended too: it's how a Perch session that isn't running stops coming back.
         _endButton.IsVisible = running || dormant;
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
+        _thread.CanStopTasks = running || _renderLive;   // a background task's Stop needs the live process
         HideToast();
     }
 
@@ -3791,6 +3797,7 @@ internal sealed partial class SessionWindow : Window
         var sample = PerchSession.ForRender(cwd);
         if (userPrompt is not null) sample.Conversation.AddUserPrompt(userPrompt, attachments);
         foreach (var ev in events) sample.Conversation.Apply(ev);
+        _renderLive = true;   // background tasks offer Stop, as on a live session
         Attach(sample);
         // A render-only session has no process, so pose it as a live one.
         _composer.IsEnabled = true;

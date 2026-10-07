@@ -318,7 +318,8 @@ internal sealed class SessionConversation
                     {
                         call.Part.BackgroundTaskId = launch.TaskId;
                         _launchCards[launch.TaskId] = call;
-                        BackgroundTasks.Launched(result.ToolUseId, launch.TaskId, launch.Kind, launch.At, launch.Persistent);
+                        BackgroundTasks.Launched(result.ToolUseId, launch.TaskId, launch.Kind, launch.At, launch.Persistent,
+                            launch.OutputFile);
                     }
                     Changed?.Invoke(call.Owner, ConversationChange.Updated);
                 }

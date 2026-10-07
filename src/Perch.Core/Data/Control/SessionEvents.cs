@@ -45,8 +45,10 @@ internal sealed record ToolResultEvent(string ToolUseId, string Text, bool IsErr
 
 /// <summary>The background task a tool call started, read off its result's <c>tool_use_result</c> /
 /// <c>toolUseResult</c>: a shell's <c>backgroundTaskId</c>, a Monitor's <c>taskId</c> (+ <c>persistent</c>), or an
-/// async agent's <c>agentId</c>. <paramref name="At"/> is the record's timestamp when it has one.</summary>
-internal sealed record BackgroundLaunch(string TaskId, BackgroundTaskKind Kind, bool? Persistent = null, DateTime? At = null);
+/// async agent's <c>agentId</c>. <paramref name="At"/> is the record's timestamp when it has one; <paramref name="OutputFile"/>
+/// is the path a shell's result text names.</summary>
+internal sealed record BackgroundLaunch(string TaskId, BackgroundTaskKind Kind, bool? Persistent = null, DateTime? At = null,
+    string? OutputFile = null);
 
 /// <summary><c>system/task_started</c>: the CLI began tracking a task. <paramref name="IsBackgrounded"/> is false for a
 /// plain foreground shell call, which isn't background work. See <c>docs/background-tasks-plan.md</c>.</summary>

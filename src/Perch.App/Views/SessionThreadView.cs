@@ -6,6 +6,7 @@ using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -146,6 +147,25 @@ internal sealed class SessionThreadView : ScrollViewer
 
     /// <summary>A file reference's "View diff" was picked — the absolute path (opens the git tree on it).</summary>
     public event Action<string>? ViewDiffRequested;
+
+    /// <summary>A background task's Stop was clicked (only offered while <see cref="CanStopTasks"/>).</summary>
+    public event Action<BackgroundTask>? StopTaskRequested;
+
+    /// <summary>The bound session is live and controlled, so a running background task can be stopped from its card.
+    /// False for history, a read-only tail, or a session whose process has gone.</summary>
+    public bool CanStopTasks { get; set; }
+
+    // What a background launch's card needs from the view: the live task, where its output is, and the Stop wiring.
+    private BackgroundHooks? _bgHooks;
+    private BackgroundHooks BgHooks => _bgHooks ??= new BackgroundHooks(
+        id => _conv?.BackgroundTasks.Get(id),
+        t => _conv is { } c ? BackgroundTaskOutput.PathFor(t, c.BackgroundTasks.All, Cwd, c.SessionId) : null,
+        () => CanStopTasks,
+        t => StopTaskRequested?.Invoke(t));
+
+    private sealed record BackgroundHooks(
+        Func<string, BackgroundTask?> Lookup, Func<BackgroundTask, string?> OutputPath, Func<bool> CanStop,
+        Action<BackgroundTask> Stop);
 
     /// <summary>The session's working directory, used to resolve a tool's file path to an absolute one. Set
     /// before <see cref="Bind"/> so tool cards built during materialisation can arm their file references.</summary>
@@ -442,6 +462,27 @@ internal sealed class SessionThreadView : ScrollViewer
         RecomputeScrollState();
     }
 
+    /// <summary>Brings the card that launched background task <paramref name="taskId"/> into view, expanded to its
+    /// live output (a RUNNING chip's click). No-op when no card in this thread launched it.</summary>
+    public void RevealBackgroundTask(string taskId)
+    {
+        if (_conv is null) return;
+        FlushBacklog();
+        foreach (var item in _conv.Items)
+        {
+            if (item is not AssistantMessageItem a
+                || a.Parts.OfType<ToolCallPart>().FirstOrDefault(p => p.BackgroundTaskId == taskId) is not { } part)
+                continue;
+            if (_wraps.TryGetValue(item, out var wrap) && wrap.Child is null) Hydrate(item, wrap);
+            _expandState[part] = true;
+            if (!_views.TryGetValue(item, out var view) || !view.Tools.TryGetValue(part, out var card)) return;
+            card.Expand();
+            _stickToBottom = false;
+            Dispatcher.UIThread.Post(() => card.Root.BringIntoView(), DispatcherPriority.Loaded);
+            return;
+        }
+    }
+
     /// <summary>Scroll to the very top of the thread (the "jump to top" button).</summary>
     public void JumpToTop()
     {
@@ -547,6 +588,7 @@ internal sealed class SessionThreadView : ScrollViewer
         PermissionItem p       => new ItemView { Root = Row(BuildPermission(p), null, null) },
         NoteItem n             => new ItemView { Root = Row(BuildNote(n), null, null) },
         CompactionItem cm      => new ItemView { Root = Row(BuildCompaction(cm), null, null) },
+        TaskNoticeItem tn      => new ItemView { Root = Row(BuildTaskNotice(tn), null, null) },
         _                      => new ItemView { Root = new Panel() },
     };
 
@@ -997,7 +1039,8 @@ internal sealed class SessionThreadView : ScrollViewer
             if (part is ToolCallPart tp && IsFoldable(tp.ToolName))
             {
                 var card = new ToolCard(_p, tp, Cwd,
-                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact);
+                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact,
+                    BgHooks);
                 view.Tools[tp] = card;
                 var group = view.OpenGroup;
                 if (group is null)
@@ -1024,7 +1067,8 @@ internal sealed class SessionThreadView : ScrollViewer
                     break;
                 case ToolCallPart tool:
                     var card = new ToolCard(_p, tool, Cwd,
-                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact);
+                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact,
+                        BgHooks);
                     view.Tools[tool] = card;
                     c = card.Root;
                     break;
@@ -1347,13 +1391,31 @@ internal sealed class SessionThreadView : ScrollViewer
         private bool _shownExpanded;
         private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
+        // A background launch (run_in_background shell, Monitor, async agent): the card follows its task rather than
+        // the instant "launched" tool result. A 1s timer ticks the elapsed label while it runs and re-reads the tail
+        // of its output file every other tick, off the UI thread. See docs/background-tasks-plan.md.
+        private readonly BackgroundHooks? _bg;
+        private readonly Dictionary<object, bool> _expandState;
+        private DispatcherTimer? _bgTimer;
+        private int _bgTicks;
+        private bool _tailReading;
+        private string _tail = "";
+        private int? _tailExit;
+        private bool _tailFinal;      // read once more after the task ended, so the card shows its last output
+        private string? _shownBgSig;  // what the background body was last built from
+        private SelectableTextBlock? _tailText;
+        private ScrollViewer? _tailScroll;
+
         public Border Root { get; }
 
         public ToolCard(SessionPalette p, ToolCallPart part, string cwd,
-            Action<string> openFile, Action<string> viewDiff, Dictionary<object, bool> expandState, bool compact = false)
+            Action<string> openFile, Action<string> viewDiff, Dictionary<object, bool> expandState, bool compact = false,
+            BackgroundHooks? bg = null)
         {
             _p = p;
             _part = part;
+            _bg = bg;
+            _expandState = expandState;
 
             _input = ParseOrNull(part.InputJson);
             _diffLines = EditDiff.Build(part.ToolName, _input);
@@ -1454,13 +1516,32 @@ internal sealed class SessionThreadView : ScrollViewer
                 Background = p.Surface, ClipToBounds = true, Margin = new Thickness(0, 0, 0, 12),
                 Child = new StackPanel { Children = { _headerBorder, _out } },
             };
+            if (_bg is not null)
+            {
+                Root.AttachedToVisualTree += (_, _) => SyncBackgroundTimer();
+                Root.DetachedFromVisualTree += (_, _) => _bgTimer?.Stop();
+            }
             Update(part);
         }
+
+        /// <summary>Opens the card's detail (a background card: its live output), remembering it like a click would.</summary>
+        public void Expand()
+        {
+            if (_expanded) return;
+            _expanded = true;
+            _expandState[_part] = true;
+            Update(_part);
+        }
+
+        // The background task this card launched, when it launched one and the conversation knows it.
+        private BackgroundTask? Task => _part.BackgroundTaskId is { } id ? _bg?.Lookup(id) : null;
 
         /// <summary>Re-renders the card from <paramref name="part"/>; returns false (doing nothing) when its status,
         /// result and expanded state are what the card already shows.</summary>
         public bool Update(ToolCallPart part)
         {
+            if (part.BackgroundTaskId is not null && _bg?.Lookup(part.BackgroundTaskId) is { } task)
+                return UpdateBackground(part, task);
             if (ReferenceEquals(part, _part) && part.Status == _shownStatus
                 && ReferenceEquals(part.ResultText, _shownResult) && _expanded == _shownExpanded)
                 return false;
@@ -1526,6 +1607,184 @@ internal sealed class SessionThreadView : ScrollViewer
             }
             _out.IsVisible = _bodyStack.Children.Count > 0;
             return true;
+        }
+
+        // The background card: status from the live task (not the instant "launched" result), a body built from its
+        // output tail (collapsed: the newest line; expanded: the command and the tail in a scroll panel that follows
+        // the end), and the task's actions. A no-op when nothing it shows has changed, apart from the elapsed label.
+        private bool UpdateBackground(ToolCallPart part, BackgroundTask task)
+        {
+            bool canStop = _bg!.CanStop();
+            var sig = $"{task.Status}|{task.EventCount}|{task.ExitCode}|{task.Progress}|{task.LastEvent}|{_tail.Length}:" +
+                      $"{_tail.GetHashCode()}|{_tailExit}|{_expanded}|{canStop}";
+            if (ReferenceEquals(part, _part) && sig == _shownBgSig)
+            {
+                RenderBackgroundStatus(task);
+                return false;
+            }
+            _part = part;
+            _shownBgSig = sig;
+            _shownStatus = null;   // a later ordinary update must rebuild
+            RenderBackgroundStatus(task);
+
+            bool failed = task.Status == BackgroundTaskStatus.Failed;
+            _expandable = true;
+            _chevron.IsVisible = true;
+            _chevron.Text = _expanded ? "▾" : "▸";
+            _headerBorder.Cursor = HandCursor;
+            _bodyStack.Children.Clear();
+            if (_expanded)
+            {
+                if (ToolResultFormat.Command(part.ToolName, _input) is { Length: > 0 } command)
+                    _bodyStack.Children.Add(MonoText((part.ToolName == "PowerShell" ? "PS> " : "$ ") + command, false));
+                _bodyStack.Children.Add(TailPanel(_tail.Length > 0 ? _tail : BackgroundFallback(task), failed));
+            }
+            else
+            {
+                _bodyStack.Children.Add(MonoText(LastLine(_tail) ?? BackgroundFallback(task), failed));
+            }
+            if (BackgroundActions(task, canStop) is { } actions) _bodyStack.Children.Add(actions);
+            _out.IsVisible = true;
+            SyncBackgroundTimer();
+            return true;
+        }
+
+        private void RenderBackgroundStatus(BackgroundTask t)
+        {
+            var brush = t.Status switch
+            {
+                BackgroundTaskStatus.Running   => _p.Await,
+                BackgroundTaskStatus.Completed => _p.Ok,
+                BackgroundTaskStatus.Failed    => _p.Err,
+                _                              => _p.Faint,
+            };
+            _dot.Fill = brush;
+            _status.Foreground = brush;
+            // The file's own trailer gives the exit code before (or without) the notification's summary.
+            _status.Text = !t.IsRunning && t.ExitCode is null && _tailExit is { } code && t.Status != BackgroundTaskStatus.Stopped
+                ? $"exit {code}"
+                : BackgroundTaskText.Status(t, DateTime.UtcNow);
+        }
+
+        // What the body says before any output exists (or for an agent, whose output file is its JSONL transcript).
+        private static string BackgroundFallback(BackgroundTask t)
+        {
+            if (!t.IsRunning) return t.Summary ?? BackgroundTaskText.Notice(t, null);
+            return t.Kind switch
+            {
+                BackgroundTaskKind.Monitor => t.LastEvent is { } e ? "last event: " + e : "Watching for events…",
+                BackgroundTaskKind.Agent   => t.Progress ?? "Working in the background…",
+                _                          => "Running in the background…",
+            };
+        }
+
+        // The newest non-blank output line, clipped, or null when there is none.
+        private static string? LastLine(string text)
+        {
+            for (int end = text.Length; end > 0;)
+            {
+                int start = text.LastIndexOf('\n', end - 1) + 1;
+                var line = text[start..end].Trim();
+                if (line.Length > 0) return line.Length <= 140 ? line : line[..140].TrimEnd() + "…";
+                end = start - 1;
+            }
+            return null;
+        }
+
+        // The expanded output: one selectable block in a height-capped scroller, kept across refreshes so a selection
+        // or scroll position survives; it follows the end only while the user is already at the end.
+        private Control TailPanel(string text, bool failed)
+        {
+            if (_tailText is null || _tailScroll is null)
+            {
+                _tailText = new SelectableTextBlock
+                {
+                    FontFamily = _p.Mono, FontSize = 12, LineHeight = 12 * 1.65, TextWrapping = TextWrapping.Wrap,
+                };
+                _tailScroll = new ScrollViewer
+                {
+                    MaxHeight = 320, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _tailText,
+                };
+            }
+            var scroll = _tailScroll;
+            bool atEnd = scroll.Extent.Height <= 0 || scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - 4;
+            _tailText.Foreground = failed ? _p.Err : _p.Muted;
+            if (_tailText.Text != text)
+            {
+                _tailText.Text = text;
+                if (atEnd) Dispatcher.UIThread.Post(scroll.ScrollToEnd, DispatcherPriority.Loaded);
+            }
+            return scroll;
+        }
+
+        private Control? BackgroundActions(BackgroundTask t, bool canStop)
+        {
+            var row = new WrapPanel { Orientation = Orientation.Horizontal };
+            if (t.IsRunning && canStop)
+                row.Children.Add(ActionChip("■ Stop", _p.Err, () => _bg!.Stop(t)));
+            if (t.Kind != BackgroundTaskKind.Agent && _bg!.OutputPath(t) is { } path)
+            {
+                row.Children.Add(ActionChip("Open output", _p.Muted, () => PlatformServices.FileRevealer.OpenInEditor(path)));
+                row.Children.Add(ActionChip("Copy path", _p.Muted,
+                    () => TopLevel.GetTopLevel(Root)?.Clipboard?.SetTextAsync(path)));
+            }
+            return row.Children.Count > 0 ? row : null;
+        }
+
+        private Control ActionChip(string text, IBrush fg, Action onClick)
+        {
+            var chip = new Border
+            {
+                Background = _p.Raised2, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 3),
+                Margin = new Thickness(0, 2, 6, 0), Cursor = HandCursor,
+                Child = new TextBlock { Text = text, FontFamily = _p.Mono, FontSize = 11.5, Foreground = fg },
+            };
+            chip.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                e.Handled = true;
+                onClick();
+            };
+            return chip;
+        }
+
+        // Runs the 1s tick while the card is on screen and its task is live, plus one last read after it ends.
+        private void SyncBackgroundTimer()
+        {
+            if (Task is not { } t || !Root.IsAttachedToVisualTree()) { _bgTimer?.Stop(); return; }
+            bool wants = t.IsRunning || !_tailFinal;
+            if (!wants) { _bgTimer?.Stop(); return; }
+            if (_bgTimer is null)
+            {
+                _bgTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                _bgTimer.Tick += (_, _) => OnBackgroundTick();
+            }
+            if (!_bgTimer.IsEnabled) { _bgTimer.Start(); OnBackgroundTick(); }
+        }
+
+        private void OnBackgroundTick()
+        {
+            if (Task is not { } t) { _bgTimer?.Stop(); return; }
+            if (t.IsRunning) RenderBackgroundStatus(t);   // the elapsed label
+            // An agent's output file is its JSONL transcript, not readable output; its card follows task_progress.
+            if (t.Kind == BackgroundTaskKind.Agent) { _tailFinal = true; if (!t.IsRunning) _bgTimer?.Stop(); return; }
+            if (_tailReading || (t.IsRunning && _bgTicks++ % 2 != 0)) return;
+            if (_bg!.OutputPath(t) is not { } path) { _tailFinal = !t.IsRunning; return; }
+            bool ended = !t.IsRunning;
+            _tailReading = true;
+            System.Threading.Tasks.Task.Run(() => BackgroundTaskOutput.ReadTail(path)).ContinueWith(r =>
+            {
+                _tailReading = false;
+                if (!Root.IsAttachedToVisualTree()) return;
+                var (text, exit) = r.IsCompletedSuccessfully ? r.Result : ("", null);
+                if (ended) { _tailFinal = true; _bgTimer?.Stop(); }
+                if (text == _tail && exit == _tailExit) return;
+                _tail = text;
+                _tailExit = exit;
+                Update(_part);
+            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
         }
 
         // A single-line summary of a tool result for the collapsed card: its first non-blank line, clipped.
@@ -1632,6 +1891,9 @@ internal sealed class SessionThreadView : ScrollViewer
             "Grep" or "Glob"       => "⌕",
             "WebFetch" or "WebSearch" => "◎",
             "Task" or "Agent"      => "⇄",
+            "Monitor"              => "◉",
+            "TaskStop"             => "■",
+            "TaskOutput"           => "▤",
             "TodoWrite" or "TaskCreate" or "TaskUpdate" => "☑",
             "AskUserQuestion"      => "?",
             _                      => "•",
@@ -2188,6 +2450,32 @@ internal sealed class SessionThreadView : ScrollViewer
         HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap,
         TextAlignment = TextAlignment.Center, Margin = new Thickness(0, -8, 0, -8),
     };
+
+    // ── Background-task notice ────────────────────────────────────────────────────
+
+    // A background task ended, or a Monitor fired: a quiet centred line like a note, marked by how it ended. It
+    // stands in for the raw <task-notification> the CLI hands Claude, which used to render as a user bubble.
+    private Control BuildTaskNotice(TaskNoticeItem n)
+    {
+        var t = n.Task;
+        var (glyph, brush) = n.IsEvent
+            ? ("◉", _p.Faint)
+            : t.Status switch
+            {
+                BackgroundTaskStatus.Failed  => ("✗", _p.Err),
+                BackgroundTaskStatus.Stopped => ("■", _p.Faint),
+                _                            => ("✓", _p.Faint),
+            };
+        var text = BackgroundTaskText.Notice(t, n.EventText);
+        if (!n.IsEvent && t.EndedUtc is { } end && end - t.StartedUtc >= TimeSpan.FromSeconds(1))
+            text += "  ·  " + BackgroundTaskText.Elapsed(end - t.StartedUtc);
+        return new TextBlock
+        {
+            Text = glyph + "  " + text, FontFamily = _p.Mono, FontSize = 11.5, Foreground = brush,
+            HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center, Margin = new Thickness(0, -8, 0, -8),
+        };
+    }
 
     // ── Compaction progress ───────────────────────────────────────────────────────
 

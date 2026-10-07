@@ -229,6 +229,74 @@ public class BackgroundTaskTests
         finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
 
+    [Fact]
+    public void Stream_ShellLaunch_KnowsItsOutputFileBeforeItEnds()
+    {
+        var conv = new SessionConversation();
+        foreach (var line in File.ReadLines(Fixture("stream-json", "bg-stop-task-control.jsonl")))
+        {
+            if (line.Contains("\"perch\"")) continue;
+            foreach (var ev in StreamJsonParser.Parse(line)) conv.Apply(ev);
+            if (conv.BackgroundTasks.Get("bupmsikht") is { IsRunning: true, OutputFile: { } f })
+            {
+                Assert.Equal(@"C:\fixtures\tmp\tasks\bupmsikht.output", f);
+                return;
+            }
+        }
+        Assert.Fail("the running shell never learned its output file");
+    }
+
+    [Fact]
+    public void Output_ReadTail_StripsTrailerAndReadsExitCode()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "perch-bgout-" + Guid.NewGuid().ToString("N") + ".output");
+        try
+        {
+            File.WriteAllText(path, "tick 1\r\ntick 2\n");
+            Assert.Equal(("tick 1\ntick 2", (int?)null), BackgroundTaskOutput.ReadTail(path));
+            File.AppendAllText(path, "\n[exited with code 3]\n");
+            Assert.Equal(("tick 1\ntick 2", (int?)3), BackgroundTaskOutput.ReadTail(path));
+            // A long file is cut at a line start, never mid-line.
+            File.WriteAllText(path, string.Concat(Enumerable.Range(0, 2000).Select(i => $"line {i}\n")));
+            var (text, _) = BackgroundTaskOutput.ReadTail(path, 100);
+            Assert.StartsWith("line ", text);
+            Assert.EndsWith("line 1999", text);
+        }
+        finally { File.Delete(path); }
+        Assert.Equal(("", (int?)null), BackgroundTaskOutput.ReadTail(path));   // gone: no throw
+    }
+
+    [Fact]
+    public void Output_PathFor_PrefersNamedThenSiblingDirectory()
+    {
+        var named = new BackgroundTask("b1") { OutputFile = @"C:\t\tasks\b1.output" };
+        var monitor = new BackgroundTask("b2");
+        Assert.Equal(@"C:\t\tasks\b1.output", BackgroundTaskOutput.PathFor(named, [], null, null));
+        Assert.Equal(Path.Combine(@"C:\t\tasks", "b2.output"), BackgroundTaskOutput.PathFor(monitor, [named], null, null));
+        Assert.EndsWith(Path.Combine("claude", "C--p", "sid", "tasks", "b2.output"),
+            BackgroundTaskOutput.PathFor(monitor, [], @"C:\p", "sid"));
+    }
+
+    [Fact]
+    public void Text_StatusAndNotice_ReadNaturally()
+    {
+        var start = new DateTime(2026, 10, 7, 4, 0, 0, DateTimeKind.Utc);
+        var shell = new BackgroundTask("b1") { Description = "dev server", StartedUtc = start };
+        Assert.Equal("background · 2m 14s", BackgroundTaskText.Status(shell, start.AddSeconds(134)));
+        var monitor = new BackgroundTask("b2") { Kind = BackgroundTaskKind.Monitor, StartedUtc = start, EventCount = 3 };
+        Assert.Equal("watching · 3 events · 9s", BackgroundTaskText.Status(monitor, start.AddSeconds(9)));
+
+        shell.Status = BackgroundTaskStatus.Failed;
+        shell.ExitCode = 3;
+        Assert.Equal("exit 3", BackgroundTaskText.Status(shell, start));
+        Assert.Equal("Background command \"dev server\" failed", BackgroundTaskText.Notice(shell, null));
+        shell.Summary = "Background command \"dev server\" failed with exit code 3";
+        Assert.Equal(shell.Summary, BackgroundTaskText.Notice(shell, null));
+        monitor.Description = "tick";
+        Assert.Equal("Monitor \"tick\": event 1 …", BackgroundTaskText.Notice(monitor, "event 1\nevent 2"));
+        Assert.Equal("1h 05m", BackgroundTaskText.Elapsed(TimeSpan.FromMinutes(65)));
+    }
+
     private static string Fixture(string dir, string name) =>
         Path.Combine(AppContext.BaseDirectory, "fixtures", dir, name);
 

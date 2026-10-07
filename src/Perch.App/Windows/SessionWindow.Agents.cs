@@ -87,7 +87,8 @@ internal sealed partial class SessionWindow
             Child = _agentTabs,
         };
 
-        // ── Bottom-of-chat chips ──
+        // ── Bottom-of-chat chips (sub-agents, then background shells/monitors: SessionWindow.Tasks.cs) ──
+        BuildTaskChips();
         _agentChips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         var caption = new TextBlock
         {
@@ -98,7 +99,10 @@ internal sealed partial class SessionWindow
         _agentChipsRow = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Margin = new Thickness(0, 0, 0, 8), IsVisible = false,
-            Child = new DockPanel { Children = { caption, _agentChips } },
+            Child = new DockPanel
+            {
+                Children = { caption, new WrapPanel { Orientation = Orientation.Horizontal, Children = { _agentChips, _taskChips } } },
+            },
         };
 
         // ── The agent view ──
@@ -213,7 +217,7 @@ internal sealed partial class SessionWindow
         _agentTabStrip.IsVisible = attached && tabs.Count > 0;
 
         SyncPills(_agentChips, _agentChipById, _runningAgents, BuildAgentChip, UpdateAgentChip);
-        _agentChipsRow.IsVisible = attached && !AgentViewOpen && _runningAgents.Count > 0;
+        _agentChipsRow.IsVisible = attached && !AgentViewOpen && (_runningAgents.Count > 0 || _taskChips.Children.Count > 0);
     }
 
     private static void SyncPills(Panel host, Dictionary<string, AgentPill> cache, IReadOnlyList<SubAgent> agents,
