@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.10] - 2026-10-07
+
+- Long sessions stay responsive (it was redrawing every tool card per word)
+- Long threads use a fraction of the memory
+- Opened tool cards stay open through a theme change
+
+---
+
 ## [v0.5.9] - 2026-10-07
 
 - Resume estimate knows the cache lasts an hour (it was quoting cold prices for warm sessions, roughly 30× over)
