@@ -66,4 +66,32 @@ internal static class FeedAddress
             "Perch won't follow a public feed into your local network.",
         _ => null,
     };
+
+    /// <summary>
+    /// A next step for a subscription that's failing in the background (the overlay tooltip, the story player's
+    /// error card, the Settings row). Covers everything <see cref="HintFor"/> does, plus the transient failures a
+    /// first check needn't explain — those say that Perch keeps retrying on its own.
+    /// </summary>
+    public static string? StatusHint(string? error) => error switch
+    {
+        null => null,
+        _ when HintFor(error) is { } hint => hint,
+        _ when error.StartsWith("Timed out", StringComparison.Ordinal)
+            || error.StartsWith("Couldn't connect", StringComparison.Ordinal)
+            || error.StartsWith("Couldn't find", StringComparison.Ordinal) =>
+            "The site didn't answer. Perch keeps retrying, backing off to once every 2 hours.",
+        _ when error.StartsWith("429", StringComparison.Ordinal) || IsServerError(error) =>
+            "The server is having trouble. Perch keeps retrying, backing off to once every 2 hours.",
+        _ when error.Contains("too large", StringComparison.OrdinalIgnoreCase) =>
+            "The feed is bigger than Perch's 4 MB limit.",
+        _ => null,
+    };
+
+    // "503 Service Unavailable" or "HTTP 599".
+    private static bool IsServerError(string error)
+    {
+        var s = error.StartsWith("HTTP ", StringComparison.Ordinal) ? error[5..] : error;
+        return s.Length >= 3 && s[0] == '5' && char.IsAsciiDigit(s[1]) && char.IsAsciiDigit(s[2])
+            && (s.Length == 3 || s[3] == ' ');
+    }
 }

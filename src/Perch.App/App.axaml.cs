@@ -486,6 +486,7 @@ public partial class App : Application
             _notifier = new Notifications.AvaloniaToastNotifier(toastScreen);
 #endif
             _notifier.SessionActivated += OnToastActivated;
+            _notifier.ActionActivated += OnToastAction;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
             _achievements = new AchievementService(AchievementStore.Load());
 
@@ -511,6 +512,7 @@ public partial class App : Application
             _feedsHost = new Services.FeedsMonitorHost(
                 new Perch.Feeds.FeedsService(Perch.Feeds.FeedStore.Default(), new Perch.Feeds.FeedFetcher()), _sessionLock);
             _feedsHost.Changed += () => { PushFeedsRow(); _settings?.RefreshFeedStatus(); };
+            _feedsHost.Arrived += OnFeedsArrived;
             _feedIcons.Loaded += () => { PushFeedsRow(); _feedStoryWindow?.RefreshIcons(); };
             _overlay.Canvas.FeedStoryRequested += OpenFeedStory;
             _overlay.Canvas.FeedAddRequested += () => OpenSettings("feeds");
@@ -1947,6 +1949,31 @@ public partial class App : Application
         _overlay.Canvas.SetFeedsRow(heads);
     }
 
+    // A check brought new entries (never a priming fetch): toast them, batched per feed (FeedNotice), when the user
+    // asked for feed notifications. NotifyOnFeedEntry is playful, so Quiet mode masks it on Effective; the master
+    // switch and Do Not Disturb hold them too. A click plays that feed's story (OnToastAction).
+    private void OnFeedsArrived(IReadOnlyList<Perch.Feeds.FeedArrivals> arrivals)
+    {
+        if (Effective is not { NotificationsEnabled: true, NotifyOnFeedEntry: true } || _notifier is null) return;
+        bool dnd;
+        try { dnd = PlatformServices.DoNotDisturb.IsActive; } catch { dnd = false; }
+        if (dnd) return;
+        foreach (var t in Perch.Feeds.FeedNotice.Build(arrivals))
+            _notifier.ShowAction(t.Title, t.Body, ToastLevel.Info, FeedToastPrefix + (t.SubId ?? ""));
+    }
+
+    private const string FeedToastPrefix = "feed:";
+
+    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news).
+    private void OnToastAction(string action)
+    {
+        if (action.StartsWith(FeedToastPrefix, StringComparison.Ordinal))
+        {
+            var id = action[FeedToastPrefix.Length..];
+            OpenFeedStory(id.Length > 0 ? id : null);
+        }
+    }
+
     // A head (or the "+N" chip, null) was clicked: play its story in the one story window, opened centred on the
     // overlay's monitor.
     private void OpenFeedStory(string? subId)
@@ -3301,6 +3328,8 @@ public partial class App : Application
             OpenSocialDebug = OpenSocialDebug,
             FeedsChanged = () => _feedsHost?.Apply(settings),
             FeedStatus = id => _feedsHost?.Head(id),
+            FeedsMarkAllRead = () => _feedsHost?.MarkAllRead(),
+            FeedsRefresh = () => _feedsHost?.RefreshNow(),
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

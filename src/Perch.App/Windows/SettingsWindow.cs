@@ -127,6 +127,12 @@ internal sealed class SettingsHooks
     /// <summary>The feeds engine's latest view of one subscription (title, last error, latest entry) for the
     /// Feeds page's status lines; null before its first check or while feeds are off.</summary>
     public Func<string, Perch.Feeds.FeedHead?>? FeedStatus;
+
+    /// <summary>Mark every feed's entries read (the Feeds page's "Mark all read").</summary>
+    public Action? FeedsMarkAllRead;
+
+    /// <summary>Check every feed now (the Feeds page's "Check all now"); a no-op while feeds are off.</summary>
+    public Action? FeedsRefresh;
 }
 
 /// <summary>

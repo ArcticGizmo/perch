@@ -408,7 +408,7 @@ internal static class SettingsRegistry
             "A notification when a feed you follow publishes something new (one per feed per check).",
             SettingSurface.Notifications, ["feed", "feeds", "atom", "rss", "notify", "notification", "toast", "new", "post"],
             PreviewTarget.None, nameof(AppSettings.NotifyOnFeedEntry),
-            s => s.NotifyOnFeedEntry, (s, v) => s.NotifyOnFeedEntry = v),
+            s => s.NotifyOnFeedEntry, (s, v) => s.NotifyOnFeedEntry = v, playful: true),   // Quiet mode holds feed toasts
 
         Info("config-dirs", "Config directories",
             "Extra Claude Code config directories (CLAUDE_CONFIG_DIR roots) Perch watches alongside " +

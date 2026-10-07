@@ -65,7 +65,8 @@ public sealed partial class OverlayCanvas
     public event Action<string?>? FeedStoryRequested;
     public event Action? FeedAddRequested;
     public event Action<string>? FeedRefreshRequested;
-    public event Action<string>? FeedMarkAllReadRequested;
+    /// <summary>Mark one feed's entries read (its id), or every feed's (null).</summary>
+    public event Action<string?>? FeedMarkAllReadRequested;
     public event Action<string>? FeedEditRequested;
     public event Action<string>? FeedOpenSiteRequested;
     public event Action? FeedSettingsRequested;
@@ -338,6 +339,9 @@ public sealed partial class OverlayCanvas
             items.Add(new Separator());
             items.Add(MenuItem("Edit feed…", () => FeedEditRequested?.Invoke(head.SubId)));
         }
+        // Offered when news sits somewhere other than the head right-clicked (that one has its own item above).
+        if (_feedHeads.Count(h => h.Unread > 0) > (i >= 0 && i < _feedHeads.Count && _feedHeads[i].Unread > 0 ? 1 : 0))
+            items.Add(MenuItem("Mark all feeds read", () => FeedMarkAllReadRequested?.Invoke(null)));
         items.Add(MenuItem("Add a feed…", () => FeedAddRequested?.Invoke()));
         items.Add(MenuItem("Feeds settings…", () => FeedSettingsRequested?.Invoke()));
         ShowFlyout(items);

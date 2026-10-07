@@ -79,6 +79,31 @@ The render probe is `overlay_feeds*`.
   replay,hostile,hostile_light}_1x.png`, all eyeballed. The hostile card is built from a hostile Atom document
   through the real parser, and it renders inert.
 
+**F5 built** (on `feeds`). It adds:
+
+- **Toasts.** `FeedNotice` (Core) makes one toast per feed per check. A single entry reads "New in ‹feed›" with
+  its title underneath; several read "N new posts in ‹feed›", then "Latest: …". Once more than three feeds have
+  news in one check (a catch-up after unlock), it collapses to one summary toast. The app gates every toast on:
+  - `NotifyOnFeedEntry`, which is now `playful`, so Quiet mode masks it (`QuietModeTests` lists it);
+  - the master notifications switch;
+  - `IDoNotDisturb`.
+
+  A click plays that feed's story; the summary toast plays the first feed with news.
+- **`INotifier.ShowAction` / `ActionActivated`**, a generic clickable toast carrying an opaque token
+  (`feed:<id>`). The Windows toast carries it as a `perch` argument, so it can't collide with the update toast's
+  `action`. The Avalonia toast calls back directly.
+- **Mark all read everywhere:**
+  - on the overlay row's menu ("Mark all feeds read", shown when news sits outside the head you right-clicked);
+  - in the story player's ⋯ menu;
+  - on the Settings page ("Mark all read", next to a new "Check all now").
+- **Story player keys:** M marks this feed read, R checks it now, and Home/End go to the top or bottom of the
+  body. The ⋯ menu shows the M and R gestures.
+- **Error UX.** `FeedAddress.StatusHint` extends the add dialog's hints with the transient failures (timeouts,
+  connection and DNS failures, 429/5xx: "Perch keeps retrying, backing off to once every 2 hours"; too large).
+  It shows on the story player's error card and under a failing row in Settings.
+
+Tests are `FeedNoticeTests` (batching, the summary, caps and status hints).
+
 **Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
 YouTube channel feed) and an interactive pass over the keys, slides, tray switching and read-on-show in the
 running app. None of it has been run live.

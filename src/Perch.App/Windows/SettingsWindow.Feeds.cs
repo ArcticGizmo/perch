@@ -18,6 +18,7 @@ internal sealed partial class SettingsWindow
 {
     private readonly List<FeedSubscription> _feeds = [];
     private StackPanel _feedsList = null!;
+    private Button? _feedsMarkRead, _feedsCheckNow;
 
     private void BuildFeedsPage(StackPanel page)
     {
@@ -47,6 +48,12 @@ internal sealed partial class SettingsWindow
         var addBtn = SettingsUi.FlatButton("Add feed…");
         addBtn.Click += async (_, _) => await AddOrEditFeed(null);
         addRow.Children.Add(addBtn);
+        _feedsMarkRead = SettingsUi.FlatButton("Mark all read");
+        _feedsMarkRead.Click += (_, _) => _hooks.FeedsMarkAllRead?.Invoke();
+        addRow.Children.Add(_feedsMarkRead);
+        _feedsCheckNow = SettingsUi.FlatButton("Check all now");
+        _feedsCheckNow.Click += (_, _) => _hooks.FeedsRefresh?.Invoke();
+        addRow.Children.Add(_feedsCheckNow);
         page.Children.Add(addRow);
 
         page.Children.Add(SettingsUi.Separator());
@@ -73,6 +80,11 @@ internal sealed partial class SettingsWindow
     private void RebuildFeedsList()
     {
         _feedsList.Children.Clear();
+        // The bulk actions only make sense with something to act on.
+        if (_feedsMarkRead is not null)
+            _feedsMarkRead.IsEnabled = _feeds.Any(f => (_hooks.FeedStatus?.Invoke(f.Id)?.UnreadCount ?? 0) > 0);
+        if (_feedsCheckNow is not null)
+            _feedsCheckNow.IsEnabled = _settings.ShowFeeds && _feeds.Any(f => f.Enabled);
         if (_feeds.Count == 0)
         {
             _feedsList.Children.Add(new TextBlock
@@ -118,6 +130,12 @@ internal sealed partial class SettingsWindow
             Text = line, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = warn ? new SolidColorBrush(Palette.Yellow) : Palette.MutedBrush,
         });
+        // A failing feed says what to do about it (or that Perch keeps retrying on its own).
+        if (feed.Enabled && _settings.ShowFeeds && FeedAddress.StatusHint(status?.Error) is { } hint)
+            text.Children.Add(new TextBlock
+            {
+                Text = hint, FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap,
+            });
         Grid.SetColumn(text, 1);
         grid.Children.Add(text);
 

@@ -343,12 +343,15 @@ internal sealed class FeedStoryWindow : Window
         };
         var edit = PillButton("Edit feed…");
         edit.Click += (_, _) => EditRequested?.Invoke(card.SubId);
-        // What › does next: the entries cached before the failure, another feed, or nothing (the hint goes).
-        string? hint = _plan is not { } pl ? null
+        // The next step for this failure, then what › does next: the entries cached before it, another feed, or
+        // nothing (that part goes).
+        string? next = _plan is not { } pl ? null
             : pl.CardIndex + 1 < pl.CurrentRun.Cards.Count ? "› shows what was fetched before."
             : pl.RunIndex + 1 < pl.Runs.Count ? "› moves on."
             : null;
-        return Centered("⚠", _p.Await, $"Couldn't load {name}", card.Error ?? "The last check failed.", hint, retry, edit);
+        string? hint = string.Join("\n", new[] { FeedAddress.StatusHint(card.Error), next }.Where(s => s is not null));
+        return Centered("⚠", _p.Await, $"Couldn't load {name}", card.Error ?? "The last check failed.",
+            hint.Length > 0 ? hint : null, retry, edit);
     }
 
     private Control CaughtUpCard()
@@ -576,19 +579,34 @@ internal sealed class FeedStoryWindow : Window
     {
         if (CurrentSubId is not { } id || _host.Head(id) is not { } head) return;
         var items = new List<Control>();
-        if (head.UnreadCount > 0) items.Add(Item("Mark all read", () => _host.MarkAllRead(id)));
-        items.Add(Item("Check now", () => _host.RefreshNow(id)));
+        if (head.UnreadCount > 0) items.Add(Item("Mark all read", () => _host.MarkAllRead(id), Key.M));
+        if (_host.Current.Heads.Any(h => h.UnreadCount > 0 && h.SubId != id))
+            items.Add(Item("Mark all feeds read", () => _host.MarkAllRead(null)));
+        items.Add(Item("Check now", () => _host.RefreshNow(id), Key.R));
         if (head.SiteUrl is { } site) items.Add(Item("Open website", () => PlatformServices.UrlOpener.Open(site)));
         items.Add(new Separator());
         items.Add(Item("Edit feed…", () => EditRequested?.Invoke(id)));
         new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight }.ShowAt(_menu);
     }
 
-    private static MenuItem Item(string header, Action onClick)
+    // The gesture is display-only (the key itself is handled in OnKey), so the menu teaches the shortcut.
+    private static MenuItem Item(string header, Action onClick, Key? key = null)
     {
         var item = new MenuItem { Header = header };
+        if (key is { } k) item.InputGesture = new KeyGesture(k);
         item.Click += (_, _) => onClick();
         return item;
+    }
+
+    // M: mark this feed read. Its cards stay in the plan (it's a snapshot), so you can keep reading.
+    private void MarkCurrentRead()
+    {
+        if (CurrentSubId is { } id) _host.MarkAllRead(id);
+    }
+
+    private void CheckCurrent()
+    {
+        if (CurrentSubId is { } id) _host.RefreshNow(id);
     }
 
     private void OpenEntry()
@@ -645,6 +663,10 @@ internal sealed class FeedStoryWindow : Window
             case Key.Up: ScrollBody(-48); break;
             case Key.PageDown: ScrollBody(Page()); break;
             case Key.PageUp: ScrollBody(-Page()); break;
+            case Key.Home: ScrollBody(double.NegativeInfinity); break;
+            case Key.End: ScrollBody(double.PositiveInfinity); break;
+            case Key.M: MarkCurrentRead(); break;
+            case Key.R: CheckCurrent(); break;
             case Key.Enter: OpenEntry(); break;
             case Key.Escape: Close(); break;
             default: return;

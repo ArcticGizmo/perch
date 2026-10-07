@@ -32,6 +32,13 @@ public interface INotifier
     /// </summary>
     void ShowUpdate(string title, string body);
 
+    /// <summary>
+    /// Shows a toast whose click raises <see cref="ActionActivated"/> with <paramref name="action"/> — an opaque
+    /// token the owner routes (e.g. <c>feed:&lt;id&gt;</c> plays that feed's story). Called on the UI thread;
+    /// never throws.
+    /// </summary>
+    void ShowAction(string title, string body, ToastLevel level, string action);
+
     /// <summary>Raised (on the UI thread) when a session toast is clicked, carrying its pid and project so
     /// the owner can focus that terminal and acknowledge the alert.</summary>
     event Action<string, string?>? SessionActivated;
@@ -39,4 +46,7 @@ public interface INotifier
     /// <summary>Raised (on the UI thread) when the "update available" toast is clicked, so the owner can
     /// start the update — the same action as the update button.</summary>
     event Action? UpdateActivated;
+
+    /// <summary>Raised (on the UI thread) when a <see cref="ShowAction"/> toast is clicked, with its action.</summary>
+    event Action<string>? ActionActivated;
 }
