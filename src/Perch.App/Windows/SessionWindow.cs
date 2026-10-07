@@ -1416,16 +1416,16 @@ internal sealed partial class SessionWindow : Window
                                 (est.WarmCostUsd is { } w ? $" (≈${w:0.00})." : "."),
             CacheWarmth.Cooling => $"idle {HumanIdle(est.Idle)} — the cache may have lapsed; the first message could re-bill the whole context" +
                                 (est.ColdCostUsd is { } cc ? $" (≈${cc:0.00})." : "."),
-            CacheWarmth.Cold => $"idle {HumanIdle(est.Idle)} — the cache has certainly gone cold, so the first message re-reads the whole context at full price" +
-                                (est.ColdCostUsd is { } c ? $" (≈${c:0.00}), then re-caches." : ", then re-caches."),
+            CacheWarmth.Cold => $"idle {HumanIdle(est.Idle)} — past the hour-long cache, so the first message re-writes the whole context into it" +
+                                (est.ColdCostUsd is { } c ? $" (≈${c:0.00})." : "."),
             _ => "no activity timestamp, so cache warmth is unknown.",
         };
         return
             $"Resuming re-sends this session's ≈{FormatTokens(est.ContextTokens)}-token context " +
             $"({est.ContextPercent:0}% of a {FormatTokens(est.WindowTokens)} window, {ModelContext.SourceLabel(est.WindowSource)}).\n" +
             $"Cache: {cache}\n" +
-            $"≈{est.FiveHourPercent:0.#}% of a 5-hour window — rough: assumes ≈{FormatTokens(est.AssumedFiveHourBudget)} input tokens per 5h, " +
-            "as Anthropic's usage endpoint publishes no real token cap.";
+            $"≈{est.FiveHourPercent:0.#}% of a 5-hour window — rough: the context weighted by its cache price, against an assumed " +
+            $"≈{FormatTokens(est.AssumedFiveHourBudget)} input tokens per 5h, as Anthropic's usage endpoint publishes no real token cap.";
     }
 
     private static string WarmthWord(CacheWarmth w) => w switch

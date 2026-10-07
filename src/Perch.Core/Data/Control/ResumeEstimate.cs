@@ -1,18 +1,18 @@
 namespace Perch.Data.Control;
 
 /// <summary>How likely a resumed session's prompt cache is still warm, inferred from how long the session has
-/// been idle. A warm cache serves the whole prior context at ~0.1× input price; a cold one re-bills it at
-/// ~1.25× (cache write) on the first message — the difference this whole estimate exists to surface.</summary>
+/// been idle. A warm cache serves the whole prior context at the model's cache-read price (≤0.1× input); a cold
+/// one re-writes it at 2× (a 1-hour cache write) on the first message — the difference this whole estimate
+/// exists to surface.</summary>
 internal enum CacheWarmth
 {
     /// <summary>No activity timestamp — can't tell.</summary>
     Unknown,
-    /// <summary>Idle within the default prompt-cache TTL (~5 min): the first message likely hits the cache.</summary>
+    /// <summary>Idle well inside Claude Code's 1-hour prompt-cache TTL: the first message hits the cache.</summary>
     Warm,
-    /// <summary>Past the 5-min TTL but within the extended hour: a cache hit is possible, not assured.</summary>
+    /// <summary>Close to the hour: a cache hit is possible, not assured.</summary>
     Cooling,
-    /// <summary>Idle beyond an hour: the cache has certainly lapsed — the first message re-reads the whole
-    /// context at full price.</summary>
+    /// <summary>Idle beyond an hour: the cache has lapsed — the first message re-writes the whole context.</summary>
     Cold,
 }
 
@@ -45,15 +45,15 @@ internal readonly record struct ResumeEstimate(
     /// cache has (probably) lapsed, else the warm cache-read cost.</summary>
     public decimal? LikelyCostUsd => Warmth == CacheWarmth.Warm ? WarmCostUsd : ColdCostUsd;
 
-    // Prompt-cache lifetimes: the default breakpoint TTL is 5 minutes; the extended option lasts an hour.
-    // Inside 5 min a hit is likely, 5–60 min is a maybe, beyond an hour it has certainly gone cold.
-    private static readonly TimeSpan WarmWindow = TimeSpan.FromMinutes(5);
+    // Claude Code writes its prompt cache with the 1-hour TTL (checked against real transcripts: resumes up to
+    // ~61 min idle were all cache reads, from ~63 min they were full re-writes). Idle is measured from the
+    // transcript's last write, which trails the last request's start (where the TTL clock begins) by that
+    // turn's duration — so the last ten minutes before the hour are only a maybe.
+    private static readonly TimeSpan WarmWindow = TimeSpan.FromMinutes(50);
     private static readonly TimeSpan CoolingWindow = TimeSpan.FromMinutes(60);
 
-    // Cost multipliers over the base input price, mirroring SessionStatsService.CostOf: a cold resume writes
-    // the context into the cache (~1.25×) on the first message; a warm one reads it back (~0.1×).
-    private const decimal CacheWriteMultiplier = 1.25m;
-    private const decimal CacheReadMultiplier = 0.10m;
+    // The cache-read weight for an unpriced model's 5h share: the typical read rate.
+    private const decimal FallbackCacheReadMultiplier = 0.10m;
 
     /// <summary>
     /// Assumed input-token allowance of a 5-hour usage window. There is <b>no real figure to use here</b>:
@@ -73,30 +73,23 @@ internal readonly record struct ResumeEstimate(
                    : idle <= CoolingWindow ? CacheWarmth.Cooling
                    : CacheWarmth.Cold;
 
-        decimal? inPrice = InputPricePerMtok(window.Model);
-        decimal? cold = inPrice is { } p ? contextTokens * p * CacheWriteMultiplier / 1_000_000m : null;
-        decimal? warm = inPrice is { } q ? contextTokens * q * CacheReadMultiplier / 1_000_000m : null;
+        // Cold: the first message re-writes the context into the 1-hour cache (2× input). Warm: it reads it back
+        // at the model's cache-read price. Prices come from the same table as the Stats cost.
+        var price = ModelPricing.For(window.Model);
+        decimal? cold = price is { } p ? contextTokens * p.InputPerMtok * ModelPricing.CacheWrite1hMultiplier / 1_000_000m : null;
+        decimal? warm = price is { } q ? contextTokens * q.CacheReadPerMtok / 1_000_000m : null;
 
+        // The 5h share weighs the context the way it is billed — a warm resume costs a sliver of a cold one —
+        // in input-token equivalents against the assumed budget. Same likely case as LikelyCostUsd.
+        decimal weight = warmth == CacheWarmth.Warm
+            ? price?.CacheReadMultiplier ?? FallbackCacheReadMultiplier
+            : ModelPricing.CacheWrite1hMultiplier;
         double fivePct = AssumedFiveHourInputTokens > 0
-            ? (double)contextTokens / AssumedFiveHourInputTokens * 100.0
+            ? (double)(contextTokens * weight) / AssumedFiveHourInputTokens * 100.0
             : 0;
 
         return new ResumeEstimate(
             contextTokens, window.Tokens, window.Model, window.Source, warmth, idle, cold, warm,
             fivePct, AssumedFiveHourInputTokens);
-    }
-
-    /// <summary>Base input price (USD per million tokens) for a model, matched by family so it works on an id
-    /// ("claude-opus-4-8"), a display name ("Opus 4.8"), or an alias ("opus"). Null for an unknown model —
-    /// the caller shows no dollar figure rather than a fabricated one. Mirrors SessionStatsService.Prices.</summary>
-    private static decimal? InputPricePerMtok(string? model)
-    {
-        if (string.IsNullOrEmpty(model)) return null;
-        var m = model.ToLowerInvariant();
-        if (m.Contains("fable")) return 10m;
-        if (m.Contains("opus")) return 5m;
-        if (m.Contains("sonnet")) return 3m;
-        if (m.Contains("haiku")) return 1m;
-        return null;
     }
 }

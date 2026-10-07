@@ -151,14 +151,35 @@ public class SessionStatsServiceTests
     [Theory]
     [InlineData("claude-opus-4-8", 1_000_000, 0, 0, 0, 5.0)]        // input @ $5/M
     [InlineData("claude-opus-4-8", 0, 1_000_000, 0, 0, 25.0)]       // output @ $25/M
-    [InlineData("claude-opus-4-8", 0, 0, 1_000_000, 0, 6.25)]       // cache write @ 1.25x input
+    [InlineData("claude-opus-4-8", 0, 0, 1_000_000, 0, 6.25)]       // 5-minute cache write @ 1.25x input
     [InlineData("claude-opus-4-8", 0, 0, 0, 1_000_000, 0.5)]        // cache read @ 0.1x input
-    [InlineData("claude-haiku-4-5-20251001", 1_000_000, 0, 0, 0, 1.0)]  // prefix match on "claude-haiku-4"
+    [InlineData("claude-haiku-4-5-20251001", 1_000_000, 0, 0, 0, 1.0)]  // dated snapshot resolves
+    [InlineData("claude-opus-5-5", 1_000_000, 1_000_000, 0, 0, 24.0)]   // Opus 5.5: $4 in / $20 out
+    [InlineData("claude-opus-5-5", 0, 0, 0, 1_000_000, 0.2)]        // Opus 5.5 reads @ $0.20 (0.05x)
+    [InlineData("claude-opus-5", 1_000_000, 0, 0, 0, 5.0)]          // Opus 5 keeps Opus-tier $5
+    [InlineData("claude-sonnet-5-5", 1_000_000, 0, 0, 0, 2.0)]      // Sonnet 5.x: $2
+    [InlineData("claude-fable-5-1", 0, 0, 0, 1_000_000, 0.25)]      // Fable 5.1 reads @ $0.25 (0.025x)
     public void CostOf_PricesKnownModels(string model, long input, long output, long cw, long cr, double expected)
     {
         var cost = SessionStatsService.CostOf(model, new TokenTotals(input, output, cw, cr));
         Assert.NotNull(cost);
         Assert.Equal((decimal)expected, cost!.Value);
+    }
+
+    [Fact]
+    public void CostOf_PricesHourCacheWritesAtTwiceInput()
+    {
+        // 1M written, 600k of it with the 1-hour TTL: 400k*5*1.25 + 600k*5*2 = 2.5 + 6.0 = $8.50.
+        var cost = SessionStatsService.CostOf("claude-opus-4-8", new TokenTotals(0, 0, 1_000_000, 0, 600_000));
+        Assert.Equal(8.5m, cost);
+    }
+
+    [Fact]
+    public void TokenTotals_FromUsage_ReadsTheHourWriteSplit()
+    {
+        var usage = System.Text.Json.Nodes.JsonNode.Parse(
+            """{"input_tokens":2,"output_tokens":9,"cache_creation_input_tokens":700,"cache_read_input_tokens":5000,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":600}}""")!;
+        Assert.Equal(new TokenTotals(2, 9, 700, 5000, 600), TokenTotals.FromUsage(usage));
     }
 
     [Fact]

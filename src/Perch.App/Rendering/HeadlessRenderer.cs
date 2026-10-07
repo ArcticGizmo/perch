@@ -2071,11 +2071,9 @@ internal static class HeadlessRenderer
 
         // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
         // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).
-        var dormantEstimate = new Perch.Data.Control.ResumeEstimate(
-            ContextTokens: 142_000, WindowTokens: 1_000_000, Model: "claude-opus-5",
-            WindowSource: Perch.Data.ContextWindowSource.Assumed, Warmth: Perch.Data.Control.CacheWarmth.Cold,
-            Idle: TimeSpan.FromHours(14), ColdCostUsd: 0.89m, WarmCostUsd: 0.07m, FiveHourPercent: 2.8,
-            AssumedFiveHourBudget: Perch.Data.Control.ResumeEstimate.AssumedFiveHourInputTokens);
+        var dormantEstimate = Perch.Data.Control.ResumeEstimate.Compute(
+            142_000, new Perch.Data.ContextWindowInfo(1_000_000, "claude-opus-5-5", Perch.Data.ContextWindowSource.Assumed),
+            TimeSpan.FromHours(14));
         // A finished turn, as a transcript would hold it (permission prompts aren't recorded, so a dormant session
         // never shows a live card).
         var dormantScene = new List<Perch.Data.Control.SessionEvent>

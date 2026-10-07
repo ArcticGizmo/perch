@@ -22,7 +22,7 @@ namespace Perch.Data;
 internal sealed class SessionStatsCache
 {
     private const int Magic = 0x43545350;   // "PSTC"
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;   // 2: TokenTotals gained CacheWrite1h
     internal static readonly TimeSpan SaveInterval = TimeSpan.FromMinutes(10);
 
     private static readonly Lazy<SessionStatsCache> SharedLazy = new(() =>
@@ -329,9 +329,11 @@ internal sealed class SessionStatsCache
         w.Write(t.Output);
         w.Write(t.CacheWrite);
         w.Write(t.CacheRead);
+        w.Write(t.CacheWrite1h);
     }
 
-    private static TokenTotals ReadTokens(BinaryReader r) => new(r.ReadInt64(), r.ReadInt64(), r.ReadInt64(), r.ReadInt64());
+    private static TokenTotals ReadTokens(BinaryReader r) =>
+        new(r.ReadInt64(), r.ReadInt64(), r.ReadInt64(), r.ReadInt64(), r.ReadInt64());
 
     private static void WriteCounts(BinaryWriter w, Dictionary<string, int> counts)
     {

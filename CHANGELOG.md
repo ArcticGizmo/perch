@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.9] - 2026-10-07
+
+- Resume estimate knows the cache lasts an hour (it was quoting cold prices for warm sessions, roughly 30× over)
+- Stats show costs for Opus 5 and Sonnet 5 (previously "—", which was optimistic)
+- Current model prices, cache reads and hour-long cache writes included
+
+---
+
 ## [v0.5.8] - 2026-10-07
 
 - Sessions no longer stuck on "working…" after a mid-turn message (it had finished; it just wasn't telling)

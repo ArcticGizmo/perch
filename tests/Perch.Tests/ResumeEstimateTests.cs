@@ -20,10 +20,13 @@ public class ResumeEstimateTests
         Assert.True(est.HasData);
     }
 
+    // Claude Code caches with the 1-hour TTL, so a session idle for half an hour still resumes warm — the
+    // estimate used to assume the 5-minute TTL and price every such resume as a full cold re-write.
     [Theory]
-    [InlineData(2, "Warm")]      // inside the 5-min TTL
-    [InlineData(30, "Cooling")]  // past 5 min, within the hour
-    [InlineData(180, "Cold")]    // beyond an hour
+    [InlineData(2, "Warm")]
+    [InlineData(30, "Warm")]      // well inside the hour-long cache
+    [InlineData(55, "Cooling")]   // the last minutes before the hour: a maybe
+    [InlineData(180, "Cold")]     // beyond an hour
     public void Warmth_TracksIdleTime(int idleMinutes, string expected)
     {
         var est = ResumeEstimate.Compute(50_000, Window(), TimeSpan.FromMinutes(idleMinutes));
@@ -31,13 +34,24 @@ public class ResumeEstimateTests
     }
 
     [Fact]
-    public void Cost_ColdReBillsHigherThanWarmReads()
+    public void Cost_ColdReWritesTheContextIntoTheHourCache()
     {
-        // 100k tokens on Opus ($5/Mtok input): cold ~ 100k*5*1.25/1e6 = $0.625; warm ~ *0.10 = $0.05.
+        // 100k tokens on Opus 4.8 ($5/Mtok input): cold = a 1-hour cache write, 100k*5*2/1e6 = $1.00;
+        // warm = a cache read, 100k*5*0.10/1e6 = $0.05.
         var est = ResumeEstimate.Compute(100_000, Window(200_000, "claude-opus-4-8"), TimeSpan.FromHours(3));
-        Assert.Equal(0.625m, est.ColdCostUsd);
+        Assert.Equal(1.00m, est.ColdCostUsd);
         Assert.Equal(0.05m, est.WarmCostUsd);
         Assert.Equal(est.ColdCostUsd, est.LikelyCostUsd);   // cold session → the cold figure is the likely one
+    }
+
+    [Fact]
+    public void Cost_UsesTheModelsOwnPrices()
+    {
+        // Opus 5.5 is $4/Mtok input with reads at $0.20 (0.05×): 300k idle 20 min reads back for $0.06.
+        var est = ResumeEstimate.Compute(300_000, Window(1_000_000, "claude-opus-5-5"), TimeSpan.FromMinutes(20));
+        Assert.Equal(0.06m, est.WarmCostUsd);
+        Assert.Equal(2.40m, est.ColdCostUsd);
+        Assert.Equal(est.WarmCostUsd, est.LikelyCostUsd);
     }
 
     [Fact]
@@ -50,11 +64,14 @@ public class ResumeEstimateTests
     }
 
     [Fact]
-    public void FiveHourPercent_IsAgainstTheAssumedBudget()
+    public void FiveHourPercent_WeighsTheContextByItsLikelyCachePrice()
     {
-        long ctx = ResumeEstimate.AssumedFiveHourInputTokens / 10;   // exactly a tenth of the assumed window
-        var est = ResumeEstimate.Compute(ctx, Window(), TimeSpan.FromMinutes(1));
-        Assert.Equal(10.0, est.FiveHourPercent, precision: 3);
+        long ctx = ResumeEstimate.AssumedFiveHourInputTokens / 10;   // a tenth of the assumed window, unweighted
+        // Warm: read back at 0.1× → 1%. Cold: re-written at 2× → 20%.
+        var warm = ResumeEstimate.Compute(ctx, Window(), TimeSpan.FromMinutes(1));
+        var cold = ResumeEstimate.Compute(ctx, Window(), TimeSpan.FromHours(3));
+        Assert.Equal(1.0, warm.FiveHourPercent, precision: 3);
+        Assert.Equal(20.0, cold.FiveHourPercent, precision: 3);
     }
 
     [Fact]
