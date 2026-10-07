@@ -158,6 +158,9 @@ internal sealed class SessionMonitorHost : IDisposable
     /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.</summary>
     public void Acknowledge(string pid) => OnWorker(() => _monitor.Acknowledge(pid));
 
+    /// <summary>Re-arms an idle session's "done" badge ("Mark as unread") and rescans so the overlay shows it.</summary>
+    public void MarkUnread(string pid) => OnWorker(() => _monitor.MarkUnread(pid));
+
     private void RequestScan()
     {
         if (!_disposed) _scan.Request();

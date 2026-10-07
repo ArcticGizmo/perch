@@ -30,6 +30,14 @@ internal sealed class SubAgentReader
     // agent flips straight back to working.
     private static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromSeconds(90);
 
+    // A shell command (Bash/PowerShell) writes nothing to the agent's transcript until it returns, so an
+    // agent waiting on a long foreground command — a full test suite, a build — goes silent far past the
+    // 90s window while genuinely working. Such a pending call is given its own declared timeout (the
+    // tool's default when it names none) plus some slack instead; Claude Code caps it at 10 minutes.
+    private static readonly TimeSpan ShellDefaultTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ShellMaxTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ShellTimeoutSlack = TimeSpan.FromSeconds(30);
+
     private readonly TimeSpan _staleAfter;
 
     // Legacy parent-transcript scan, and the 2.1+ per-agent turn classification (working/idle + current
@@ -139,10 +147,11 @@ internal sealed class SubAgentReader
             {
                 var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
 
-                // An ordinary sub-agent is surfaced only while working, and a file silent past the stale window
-                // can't be (a working tail there is demoted as stale below) — so skip it before classifying. A
-                // long session accumulates dozens of finished agent files; this spares each a first-time parse.
-                if (!meta.IsTeammate && IsStale(file, nowUtc))
+                // An ordinary sub-agent is surfaced only while working, and a file silent past the longest stale
+                // window (a pending shell call's) can't be (a working tail there is demoted as stale below) — so
+                // skip it before classifying. A long session accumulates dozens of finished agent files; this
+                // spares each a first-time parse.
+                if (!meta.IsTeammate && IsStale(file, nowUtc, MaxStaleWindow))
                     continue;
 
                 var state = _agentState.Get(file, ClassifyFolder, FinishClassify, default);
@@ -155,9 +164,10 @@ internal sealed class SubAgentReader
 
                 // A "working" classification only holds while the transcript is still advancing: an agent
                 // left frozen mid-turn by an interrupt keeps that tail forever, so demote it to not-working
-                // once its file has gone silent past the staleness window (see DefaultStaleAfter). The
-                // explicit marker above wins, so a cleanly-stopped agent never has to wait for this.
-                bool stale = state.Working && !ended && IsStale(file, nowUtc);
+                // once its file has gone silent past the staleness window (see DefaultStaleAfter; longer for
+                // a pending shell call, see ShellDefaultTimeout). The explicit marker above wins, so a
+                // cleanly-stopped agent never has to wait for this.
+                bool stale = state.Working && !ended && IsStale(file, nowUtc, StaleWindow(state));
                 bool working = state.Working && !ended && !stale;
 
                 var agentId = AgentIdFromFile(file);
@@ -252,14 +262,25 @@ internal sealed class SubAgentReader
         return roots;
     }
 
-    // True when an agent's transcript hasn't been written to within the staleness window — the signal
+    // True when an agent's transcript hasn't been written to within the given staleness window — the signal
     // that a "working" tail is actually frozen (interrupted) rather than in flight. If the file can't be
     // stat'd we don't force it idle; the transcript's own verdict stands.
-    private bool IsStale(string file, DateTime nowUtc)
+    private static bool IsStale(string file, DateTime nowUtc, TimeSpan window)
     {
-        try { return nowUtc - File.GetLastWriteTimeUtc(file) > _staleAfter; }
+        try { return nowUtc - File.GetLastWriteTimeUtc(file) > window; }
         catch { return false; }
     }
+
+    // How long this agent may stay silent before its "working" tail counts as frozen: the usual window, or —
+    // while it waits on a shell call — that call's timeout plus slack, whichever is longer.
+    private TimeSpan StaleWindow(Classification state) =>
+        state.PendingShellTimeout is { } timeout && timeout + ShellTimeoutSlack > _staleAfter
+            ? timeout + ShellTimeoutSlack
+            : _staleAfter;
+
+    // The longest any agent can be silent yet still working (a pending shell call at its maximum timeout).
+    private TimeSpan MaxStaleWindow =>
+        ShellMaxTimeout + ShellTimeoutSlack > _staleAfter ? ShellMaxTimeout + ShellTimeoutSlack : _staleAfter;
 
     // True when an authoritative "turn ended" marker sits beside this agent's transcript and is at
     // least as new as it. The perch plugin's hooks drop one when Claude Code fires the matching event:
@@ -334,8 +355,10 @@ internal sealed class SubAgentReader
 
     // A sub-agent's turn state, parsed from its own transcript: whether it's mid-turn (Working) with a
     // present-tense Activity phrase, plus the Task/Agent tool_use ids it has launched (LaunchedIds) — the
-    // spawn ids of any nested sub-agents, used to reconstruct the tree in BuildForest.
-    private readonly record struct Classification(bool Working, string? Activity, IReadOnlyList<string>? LaunchedIds);
+    // spawn ids of any nested sub-agents, used to reconstruct the tree in BuildForest. PendingShellTimeout is
+    // set while the turn waits on a shell call, which stays silent until it returns (see StaleWindow).
+    private readonly record struct Classification(
+        bool Working, string? Activity, IReadOnlyList<string>? LaunchedIds, TimeSpan? PendingShellTimeout = null);
 
     // A sub-agent's transcript ends in a completed assistant turn — a final assistant message with no
     // pending tool call — only while it is idle, waiting for its next instruction. While it is working,
@@ -406,7 +429,21 @@ internal sealed class SubAgentReader
         string? activity = working && !string.IsNullOrEmpty(s.LastToolName)
             ? ToolSummary.Describe(s.LastToolName!, s.LastToolInput)
             : null;
-        return new Classification(working, activity, launched);
+        TimeSpan? shellTimeout = !s.LastWasUser && s.LastAssistantHadToolUse
+            && s.LastToolName is "Bash" or "PowerShell"
+                ? ShellTimeout(s.LastToolInput)
+                : null;
+        return new Classification(working, activity, launched, shellTimeout);
+    }
+
+    // A shell call's declared timeout (milliseconds in its input), else the tool's default, capped at the max.
+    private static TimeSpan ShellTimeout(JsonNode? input)
+    {
+        long ms = TranscriptJson.AsLong(input?["timeout"]);
+        if (ms <= 0)
+            return ShellDefaultTimeout;
+        var declared = TimeSpan.FromMilliseconds(ms);
+        return declared > ShellMaxTimeout ? ShellMaxTimeout : declared;
     }
 
     // Collect every Task tool_use and the set of tool_use ids that already have a result;

@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.12] - 2026-10-07
+
+- Sub-agents running long tests or builds no longer read as idle (they were busy, just quiet about it)
+- "Mark as unread" and "Mark as read" on a session's menu
+
+---
+
 ## [v0.5.11] - 2026-10-07
 
 - `\` then Enter adds a new line in the session composer, as in the terminal (no more half-sent prompts)

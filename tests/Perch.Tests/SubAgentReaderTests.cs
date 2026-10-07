@@ -331,8 +331,9 @@ public class SubAgentReaderTests
         }
     }
 
-    // CP20: an ordinary sub-agent whose file has gone quiet past the stale window can never be surfaced, so it's
-    // skipped before its transcript is parsed at all; a teammate is always classified (it stays on the roster).
+    // CP20: an ordinary sub-agent whose file has gone quiet past the longest stale window (a pending shell call's,
+    // 10m30s) can never be surfaced, so it's skipped before its transcript is parsed at all; a teammate is always
+    // classified (it stays on the roster).
     [Fact]
     public void ScanBackground_SkipsQuietOrdinaryAgentsUnparsed_ButStillClassifiesTeammates()
     {
@@ -348,7 +349,7 @@ public class SubAgentReaderTests
             void Age(string name, TimeSpan age) => File.SetLastWriteTimeUtc(Path.Combine(dir, name + ".jsonl"), DateTime.UtcNow - age);
 
             Copy("agent-plainwork3333");   // an ordinary agent whose tail reads "working"
-            Age("agent-plainwork3333", TimeSpan.FromMinutes(10));
+            Age("agent-plainwork3333", TimeSpan.FromMinutes(15));
             var reader = new SubAgentReader();
             Assert.Empty(reader.ScanBackground(dir));
             Assert.Equal(0, reader.AgentBytesRead);   // never parsed
@@ -358,7 +359,7 @@ public class SubAgentReaderTests
             Assert.True(reader.AgentBytesRead > 0);
 
             Copy("agent-aux-explorer-1111");   // a teammate, equally quiet: still classified, kept as idle/stale
-            Age("agent-aux-explorer-1111", TimeSpan.FromMinutes(10));
+            Age("agent-aux-explorer-1111", TimeSpan.FromMinutes(15));
             long before = reader.AgentBytesRead;
             Assert.Contains(reader.ScanBackground(dir), s => s.IsTeammate);
             Assert.True(reader.AgentBytesRead > before);
@@ -367,5 +368,87 @@ public class SubAgentReaderTests
         {
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
+    }
+
+    // ----- Pending shell calls ----------------------------------------------------------------
+    //
+    // A sub-agent blocked in a long foreground Bash/PowerShell call (a full test suite, a build) writes nothing
+    // to its transcript until the call returns, so it goes silent far past the 90s window while genuinely
+    // working. Such an agent is held working for the call's declared timeout (default 2 min) plus 30s slack.
+
+    private const string ShellAgentPrompt =
+        """{"type":"user","message":{"role":"user","content":"run the suite"}}""";
+
+    private static string ShellToolUse(string tool, int? timeoutMs)
+    {
+        var timeout = timeoutMs is { } t ? $",\"timeout\":{t}" : "";
+        return "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\","
+            + $"\"id\":\"toolu_sh\",\"name\":\"{tool}\",\"input\":{{\"command\":\"dotnet test\"{timeout}}}}}]}}}}";
+    }
+
+    private const string ShellToolResult =
+        """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sh","content":"ok"}]}}""";
+
+    // Scans a scratch subagents dir holding one ordinary agent with the given transcript, silent for `age`.
+    private static IReadOnlyList<SubAgent> ScanShellAgent(TimeSpan age, params string[] lines)
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "perch-subshell-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            var transcript = Path.Combine(dir, "agent-ashell.jsonl");
+            File.WriteAllLines(transcript, lines);
+            File.WriteAllText(Path.Combine(dir, "agent-ashell.meta.json"),
+                """{"agentType":"general-purpose","description":"Api finish","toolUseId":"toolu_spawn"}""");
+            File.SetLastWriteTimeUtc(transcript, DateTime.UtcNow - age);
+            return new SubAgentReader().ScanBackground(dir);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("Bash")]
+    [InlineData("PowerShell")]
+    public void ScanBackground_AgentInLongShellCall_StaysWorkingWithinItsTimeout(string tool)
+    {
+        // The reported case: an agent 7 minutes into a 10-minute test-suite wait was dropped as stale.
+        var running = ScanShellAgent(TimeSpan.FromMinutes(7), ShellAgentPrompt, ShellToolUse(tool, 600000));
+        var agent = Assert.Single(running);
+        Assert.Equal("ashell", agent.AgentId);
+        Assert.False(agent.IsStale);
+        Assert.NotNull(agent.Activity);
+    }
+
+    [Fact]
+    public void ScanBackground_AgentInShellCall_IsDroppedPastTimeoutPlusSlack() =>
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(11), ShellAgentPrompt, ShellToolUse("Bash", 600000)));
+
+    [Fact]
+    public void ScanBackground_ShellCallWithoutTimeout_UsesTheTwoMinuteDefault()
+    {
+        Assert.Single(ScanShellAgent(TimeSpan.FromMinutes(2), ShellAgentPrompt, ShellToolUse("Bash", null)));
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(3), ShellAgentPrompt, ShellToolUse("Bash", null)));
+    }
+
+    [Fact]
+    public void ScanBackground_DeclaredTimeoutPastTheMax_IsCappedAtTenMinutes() =>
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(11), ShellAgentPrompt, ShellToolUse("Bash", 3_600_000)));
+
+    [Fact]
+    public void ScanBackground_ShellCallThatReturned_FallsBackToTheUsualWindow()
+    {
+        // Once the result is in, the agent is waiting on the model, not the shell, so silence means the usual 90s.
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(3),
+            ShellAgentPrompt, ShellToolUse("Bash", 600000), ShellToolResult));
+    }
+
+    [Fact]
+    public void ScanBackground_NonShellToolSilentPastTheWindow_IsStillDropped()
+    {
+        const string read =
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":"C:\\a.cs"}}]}}""";
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(3), ShellAgentPrompt, read));
     }
 }
