@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.11] - 2026-10-07
+
+- `\` then Enter adds a new line in the session composer, as in the terminal (no more half-sent prompts)
+
+---
+
 ## [v0.5.10] - 2026-10-07
 
 - Long sessions stay responsive (it was redrawing every tool card per word)
