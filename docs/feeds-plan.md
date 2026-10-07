@@ -5,7 +5,41 @@
 hostile corpus), `AtomParserTests` and `HtmlToMarkdownTests`. The full suite passes and the solution builds clean.
 
 The corpus was mutation-checked: disabling text escaping fails 19 tests, and disabling the URL gate fails 16.
-F1 is next.
+
+**F1 built** (uncommitted on `feeds`). It adds:
+
+- **`FeedFetcher`**: the fenced and open pipelines, manual redirects, caps and our own error wording.
+- **`FeedIcon`**: raster-only icon validation, including ICO and its embedded PNGs.
+- **`FeedStore`**: cache, read state and icons, re-cleaned on load, with an id allowlist.
+- **`FeedReadState`**, **`FeedSchedule`** and **`FeedStoryQueue`** (`StoryPlan`).
+- **`FeedsService`**: the UI-free engine F3's monitor host will drive.
+
+Tests are `FeedFetcherTests`, `FeedStateTests`, `FeedStoryQueueTests` and `FeedsServiceTests`, plus the shared
+`FeedTestSupport`. All 209 feed tests pass, the full suite passes and the solution builds clean.
+
+Pulled forward from F3: `FeedSchedule` and `FeedsService` live in Core, so scheduling, priming, ordering and
+failure handling are tested end to end without the UI. F3's `FeedsMonitorHost` shrinks to a `DispatcherTimer`
+that calls `TickAsync` and pushes `Snapshot()` to the canvas.
+
+**Deviations from the draft**
+
+- **Read-marker pruning** is retention-based (30 days after an entry leaves the feed, hard cap 2,000). It no
+  longer prunes to the ids currently in the feed. A feed that briefly serves an empty document would otherwise
+  wipe its markers and re-light everything.
+- **A private subscription's icon** may be fetched only from that subscription's own host; redirects off it are
+  refused. Any other icon is fenced.
+- **ICO icons** are validated by `FeedIcon` (`ImageHeader` doesn't read ICO). Every entry is size-checked,
+  including PNGs embedded in the ICO.
+
+**Not tested here**
+
+- The **gzip-bomb** case has no separate test. The cap counts bytes read from the handler's already-decompressed
+  stream, so it applies by construction; stub handlers can't decompress.
+- The **SSRF fence** is exercised for real: the actual `SocketsHttpHandler` connect hook runs with a stub
+  resolver that returns private addresses, and refuses before any socket opens. It was **not** mutation-checked,
+  because disabling it would make the test open a real connection.
+- **Behind a system proxy** the connect hook sees the proxy, not the target. The fence then only checks the
+  target's local DNS answer, which is best effort and documented in `FeedFetcher`.
 
 Decisions settled 2026-10-07 (see §7):
 
@@ -279,8 +313,9 @@ are populated immediately at startup, before any network call. The cache is re-v
   unread. The head can still be clicked straight away and plays the replay story.
 - Unread means the entry's `id` isn't in `readIds`. **Edits don't re-light** a read entry (`updated` bumps are
   noisy in real feeds); a per-feed "treat updates as new" option can come later if anyone asks.
-- Prune `readIds` to the ids still in the cached doc after each good fetch, so the file stays bounded. (An entry
-  that falls off and comes back would re-light. That's rare, and acceptable.)
+- **Pruning is conservative.** A read marker is dropped only once its entry has left the feed **and** it's more
+  than 30 days old, with a hard cap of 2,000 per feed. A feed that briefly serves an empty or truncated document
+  can't wipe the markers and re-light everything when it recovers. (Markers are stored as id → read time.)
 
 ### 3.4 Injection defences
 
