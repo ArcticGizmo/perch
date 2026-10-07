@@ -667,10 +667,13 @@ internal sealed class SessionPane : Border
     }
 
     // Enter sends (or, with nothing typed, allows a pending permission — never a question, which is answered by
-    // picking); Shift+Enter is a newline; Esc denies a pending permission, else interrupts a running turn. Tunnel
-    // so these beat the TextBox's own Enter-inserts-a-newline.
+    // picking); Shift+Enter is a newline, as is Enter straight after a "\" (the terminal's habit); Esc denies a
+    // pending permission, else interrupts a running turn. Tunnel so these beat the TextBox's own Enter-inserts-a-newline.
     private void OnComposerKeyDown(object? sender, KeyEventArgs e)
     {
+        // Left unhandled: the TextBox's own Enter types the newline over the selected backslash.
+        if (e.Key == global::Avalonia.Input.Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _composer.TryContinueLine())
+            return;
         // A dormant pane: Enter is the first send, which resumes the session. The window clears the text once it went.
         if (_pane is { IsDormant: true })
         {

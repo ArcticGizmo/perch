@@ -3570,7 +3570,7 @@ internal sealed partial class SessionWindow : Window
 
     // ── Keyboard ─────────────────────────────────────────────────────────────────
 
-    // Enter sends; Shift+Enter inserts a newline (the TextBox's default).
+    // Enter sends; Shift+Enter (or Enter straight after a "\", as in the terminal) inserts a newline.
     private void OnComposerKeyDown(object? sender, KeyEventArgs e)
     {
         // Ctrl+V: let the normal text paste happen, but also check the clipboard for an image to stage as an
@@ -3612,6 +3612,9 @@ internal sealed partial class SessionWindow : Window
 
         if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
+            // A trailing "\" makes Enter a newline, as in the terminal, so that habit doesn't send half a prompt.
+            // (Left unhandled: the TextBox's own Enter types the newline over the selected backslash.)
+            if (_composer.TryContinueLine()) return;
             // With a permission pending and nothing typed, Enter allows (mirrors the TUI). A question card is
             // answered by picking, never by a bare Enter.
             if (Conv.PendingPermission is { IsQuestion: false } pending && string.IsNullOrWhiteSpace(_composer.Text))
