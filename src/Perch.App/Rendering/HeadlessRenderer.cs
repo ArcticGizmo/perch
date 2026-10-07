@@ -326,6 +326,7 @@ internal static class HeadlessRenderer
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
         RenderFeedDialog(outDir);
+        RenderFeedStory(outDir);
 
         // Feeds row: heads with news (gradient ring + count; one in double figures → "9+"), read heads, a failing
         // one (yellow badge), one with a real icon clipped round; then a narrow panel where the tail folds into
@@ -2758,6 +2759,56 @@ internal static class HeadlessRenderer
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The feeds story player over a seeded host (no engine, no network, no read state written): the first card of an
+    // unread story, a long post mid-story (and scrolled), the "All caught up" end card, a failing feed's error card, a
+    // replay, and a card built from the hostile corpus through the real parser — dark and light where it matters.
+    private static void RenderFeedStory(string outDir)
+    {
+        var story = SampleData.FeedStory();
+        Capture("feed_story_first_1x.png", story, "rt", 0, dark: true);
+        Capture("feed_story_mid_1x.png", story, "av", 0, dark: true, start: "rt");
+        Capture("feed_story_mid_light_1x.png", story, "av", 0, dark: false, start: "rt");
+        Capture("feed_story_scrolled_1x.png", story, "av", 0, dark: true, start: "rt", scroll: 520);
+        Capture("feed_story_end_1x.png", story, null, 4, dark: true, start: "rt");
+        Capture("feed_story_error_1x.png", story, "st", 0, dark: true);
+        Capture("feed_story_replay_1x.png", story, "hn", 0, dark: false);
+        Capture("feed_story_hostile_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: true);
+        Capture("feed_story_hostile_light_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: false);
+
+        // Plays `start` (or `play`) and steps forward; for `start`, steps until `play`'s feed is on screen.
+        void Capture(string file, Perch.Feeds.FeedsSnapshot snap, string? play, int steps, bool dark, string? start = null, double scroll = 0)
+        {
+            var root = Path.Combine(Path.GetTempPath(), "perch-render-feeds-" + Guid.NewGuid().ToString("N"));
+            using var host = new FeedsMonitorHost(
+                new Perch.Feeds.FeedsService(new Perch.Feeds.FeedStore(root), new Perch.Feeds.FeedFetcher()), null);
+            host.SeedForRender(snap);
+            var w = new FeedStoryWindow(host, _ => null, SessionPalette.For(dark));
+            w.PrepareForRender();
+            w.Show();
+            w.Play(start ?? play);
+            if (start is not null && play is not null)
+            {
+                for (int i = 0; i < 20 && !w.ShowingFeedForRender(play); i++) w.StepForRender(1);
+            }
+            w.StepForRender(steps);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (scroll > 0)
+            {
+                w.ScrollForRender(scroll);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {

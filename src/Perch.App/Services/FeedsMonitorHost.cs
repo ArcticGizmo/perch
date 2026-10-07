@@ -26,7 +26,7 @@ internal sealed class FeedsMonitorHost : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly DispatcherTimer _saveRead;
     private readonly DateTime _createdUtc = DateTime.UtcNow;
-    private bool _ticking, _disposed;
+    private bool _ticking, _disposed, _seeded;
 
     /// <summary>The latest view of every enabled subscription (UI thread).</summary>
     public FeedsSnapshot Current { get; private set; } = FeedsSnapshot.Empty;
@@ -50,7 +50,7 @@ internal sealed class FeedsMonitorHost : IDisposable
     /// <summary>Pushes the settings into the engine: subscriptions, interval, on/off. Idempotent.</summary>
     public void Apply(AppSettings s)
     {
-        if (_disposed) return;
+        if (_disposed || _seeded) return;
         _service.SetSubscriptions(s.Feeds ?? []);
         _service.Interval = TimeSpan.FromMinutes(s.FeedsIntervalMinutes);
 
@@ -72,6 +72,7 @@ internal sealed class FeedsMonitorHost : IDisposable
     /// <summary>Checks one feed (or all) now — the row's "Refresh" and the story card's Retry.</summary>
     public void RefreshNow(string? subId = null)
     {
+        if (_seeded) return;
         _service.RefreshNow(subId);
         Tick();
     }
@@ -79,19 +80,29 @@ internal sealed class FeedsMonitorHost : IDisposable
     /// <summary>Marks an entry read (a story card was shown); persisted shortly after, off the UI thread.</summary>
     public void MarkRead(string subId, string entryId)
     {
-        if (!_service.MarkRead(subId, entryId)) return;
+        if (_seeded || !_service.MarkRead(subId, entryId)) return;
         Publish();
         ScheduleSave();
     }
 
     public void MarkAllRead(string? subId = null)
     {
+        if (_seeded) return;
         _service.MarkAllRead(subId);
         Publish();
         ScheduleSave();
     }
 
     public FeedHead? Head(string subId) => Current.Heads.FirstOrDefault(h => h.SubId == subId);
+
+    /// <summary>Headless-render seam: show a fixed snapshot. The engine is never started, and reads, refreshes and
+    /// settings are ignored from here on, so a render touches no network and writes no read state.</summary>
+    internal void SeedForRender(FeedsSnapshot snapshot)
+    {
+        _seeded = true;
+        Current = snapshot;
+        Changed?.Invoke();
+    }
 
     private void ScheduleSave()
     {

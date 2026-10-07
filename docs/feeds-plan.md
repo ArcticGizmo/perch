@@ -48,6 +48,41 @@ There's no overlay row yet; that's F3.
 The headless render now has `feed_dialog_{ok,webpage,http,duplicate}_1x.png`, all eyeballed. **The Settings
 page itself isn't render-verified** (the renderer has no Settings-window harness); check it in the running app.
 
+**F3 built** (committed as a51b06f). It adds `OverlaySection.Feeds` (default slot before GitHub) and
+`OverlayCanvas.Feeds.cs`, the heads row: rings, count pills, error badges, the `+N` overflow chip, the trailing
+"+", tooltips, the right-click menu and the self-stopping pop. Icons decode off the UI thread in `FeedIconCache`.
+The render probe is `overlay_feeds*`.
+
+**F4 built** (uncommitted on `feeds`). It adds:
+
+- **`FeedStoryWindow`** (App), the story player. It has a tray of every feed, whose order is frozen for the
+  playback so heads don't jump as feeds are read; clicking a head switches feeds. One progress segment per card
+  of the current feed; clicking one jumps to it. The card scrolls inside its own `ScrollViewer`. The side gutters
+  are hidden, not disabled, at the ends. "Open in browser" is pinned. The ⋯ menu has *Mark all read*, *Check
+  now*, *Open website* and *Edit feed…*. There are error, "All caught up" and empty cards.
+  - Keys go through a tunnel handler: → / Space, ←, ↑ / ↓, PgUp / PgDn, Enter and Esc.
+  - Transitions are a timer-driven slide: 150 ms between cards, and 230 ms with a slight zoom between feeds.
+    Both are skipped under reduce-motion.
+  - Showing a card marks it read. The host's `Changed` merges new entries in ahead of the cursor and refreshes
+    the chrome without rebuilding the card, so the scroll position survives.
+  - It opens centred on the overlay's monitor and replaces the interim "open the oldest unread in the browser"
+    behaviour in `App.OpenFeedStory`.
+- **`FeedCard`** (Core): the card body. It runs `HtmlToMarkdown` against `ContentBase`, falls back to the
+  escaped summary, then to empty (the window shows a "No preview" stub). The window converts on the thread pool
+  and prefetches the next card.
+- **The render guard**, which is two tests:
+  - `FeedCardTests` checks that no path-like href or img src (drive, UNC, `file:`, rooted, relative,
+    `ms-settings:`) comes out as a link `OpenTargets.LinkFilePath` would accept, with or without a base.
+  - `UiConventionTests.Feed_story_window_never_arms_file_references` pins the window to the two-argument
+    `MarkdownView.Build(md, style)`. That's the overload with no `FileRefContext`.
+- **`FeedsMonitorHost.SeedForRender`**, and render probes `feed_story_{first,mid,mid_light,scrolled,end,error,
+  replay,hostile,hostile_light}_1x.png`, all eyeballed. The hostile card is built from a hostile Atom document
+  through the real parser, and it renders inert.
+
+**Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
+YouTube channel feed) and an interactive pass over the keys, slides, tray switching and read-on-show in the
+running app. None of it has been run live.
+
 **Deviations from the draft**
 
 - **Read-marker pruning** is retention-based (30 days after an entry leaves the feed, hard cap 2,000). It no

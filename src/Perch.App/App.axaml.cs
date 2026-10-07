@@ -102,6 +102,7 @@ public partial class App : Application
     private Services.GitHubAlertsMonitorHost? _gitHubHost;
     private Services.FeedsMonitorHost? _feedsHost;
     private readonly Services.FeedIconCache _feedIcons = new();
+    private FeedStoryWindow? _feedStoryWindow;
     private GitHubAlertsWindow? _gitHubWindow;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
@@ -510,7 +511,7 @@ public partial class App : Application
             _feedsHost = new Services.FeedsMonitorHost(
                 new Perch.Feeds.FeedsService(Perch.Feeds.FeedStore.Default(), new Perch.Feeds.FeedFetcher()), _sessionLock);
             _feedsHost.Changed += () => { PushFeedsRow(); _settings?.RefreshFeedStatus(); };
-            _feedIcons.Loaded += PushFeedsRow;
+            _feedIcons.Loaded += () => { PushFeedsRow(); _feedStoryWindow?.RefreshIcons(); };
             _overlay.Canvas.FeedStoryRequested += OpenFeedStory;
             _overlay.Canvas.FeedAddRequested += () => OpenSettings("feeds");
             _overlay.Canvas.FeedSettingsRequested += () => OpenSettings("feeds");
@@ -756,6 +757,7 @@ public partial class App : Application
         _projectPicker?.Close();
         _todoWindow?.Close();
         _gitHubWindow?.Close();
+        _feedStoryWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
             note.CloseWithoutPrompt();
     }
@@ -1945,26 +1947,31 @@ public partial class App : Application
         _overlay.Canvas.SetFeedsRow(heads);
     }
 
-    // A head (or the "+N" chip, null) was clicked. Until the story player lands (F4), open the feed's oldest unread
-    // entry in the browser and mark it read — or its website when nothing is unread.
+    // A head (or the "+N" chip, null) was clicked: play its story in the one story window, opened centred on the
+    // overlay's monitor.
     private void OpenFeedStory(string? subId)
     {
         if (_feedsHost is not { } host) return;
-        var stories = host.Current.Stories;
-        var story = subId is null
-            ? stories.FirstOrDefault(s => s.UnreadIds.Count > 0) ?? stories.FirstOrDefault()
-            : stories.FirstOrDefault(s => s.SubId == subId);
-        if (story is null) return;
-        var next = story.Entries.LastOrDefault(e => story.UnreadIds.Contains(e.Id));
-        if (next is not null)
-        {
-            if (next.Url is { } url) PlatformServices.UrlOpener.Open(url);
-            host.MarkRead(story.SubId, next.Id);
-        }
-        else if (host.Head(story.SubId)?.SiteUrl is { } site)
-        {
-            PlatformServices.UrlOpener.Open(site);
-        }
+        _feedStoryWindow = WindowHost.ShowOrFocus(_feedStoryWindow,
+            () =>
+            {
+                var w = new FeedStoryWindow(host, _feedIcons.Get);
+                w.EditRequested += _ => OpenSettings("feeds");
+                CenterOnOverlayScreen(w);
+                return w;
+            },
+            () => _feedStoryWindow = null,
+            w => w.Play(subId));
+    }
+
+    // Centres a not-yet-shown window on the monitor the overlay is on (else the primary).
+    private void CenterOnOverlayScreen(Window w)
+    {
+        if (_overlay is null || (_overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary) is not { } screen) return;
+        var wa = screen.WorkingArea;
+        int physW = (int)Math.Round(w.Width * screen.Scaling), physH = (int)Math.Round(w.Height * screen.Scaling);
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Position = new PixelPoint(wa.X + Math.Max(0, (wa.Width - physW) / 2), wa.Y + Math.Max(0, (wa.Height - physH) / 2));
     }
 
     private void OpenAchievements() =>

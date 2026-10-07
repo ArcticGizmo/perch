@@ -2850,7 +2850,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Up to two letters for the icon-less fallback glyph: the initials of the first two words, or the
     // first two characters of a single word. Falls back to "?" for an empty name.
-    private static string Initials(string name)
+    internal static string Initials(string name)
     {
         var words = name.Split([' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
         if (words.Length == 0) return "?";
@@ -2861,7 +2861,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // A stable, reasonably saturated colour derived from the name, so two icon-less links are visually
     // distinguishable without any per-link configuration.
-    private static Color FallbackColor(string name)
+    internal static Color FallbackColor(string name)
     {
         int hash = 0;
         foreach (char c in name) hash = hash * 31 + c;
