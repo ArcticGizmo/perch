@@ -25,6 +25,25 @@ public class UiConventionTests
             "instead. Offending file(s): " + string.Join(", ", offenders));
     }
 
+    // The feeds story card renders untrusted content, so it must never hand MarkdownView a file-reference context —
+    // that would arm path-like code spans and links against the local disk (docs/feeds-plan.md §3.4.2, "MarkdownView
+    // wiring"). FeedCardTests covers the converter's side; this pins the window's.
+    [Fact]
+    public void Feed_story_window_never_arms_file_references()
+    {
+        var file = Path.Combine(RepoRoot(), "src", "Perch.App", "Windows", "FeedStoryWindow.cs");
+        var source = File.ReadAllText(file);
+        Assert.Contains("MarkdownView.Build(", source);
+        Assert.DoesNotContain("FileRefContext(", source);
+        Assert.DoesNotContain("FileRef.", source);
+        foreach (var call in source.Split("MarkdownView.Build(").Skip(1))
+        {
+            // Two arguments only: the Markdown and the style (the overload that passes no FileRefContext).
+            var args = call[..call.IndexOf(')')];
+            Assert.True(args.Count(c => c == ',') == 1, "FeedStoryWindow must call MarkdownView.Build(md, style) only: " + args);
+        }
+    }
+
     // .cs / .axaml under src/, skipping the bin/obj build output.
     private static IEnumerable<string> SourceFiles(string root) =>
         Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)

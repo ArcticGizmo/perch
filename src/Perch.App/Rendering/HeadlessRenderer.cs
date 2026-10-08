@@ -325,6 +325,37 @@ internal static class HeadlessRenderer
         GitHubProbe("overlay_github_error_1x.png",
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
+        RenderFeedDialog(outDir);
+        RenderFeedStory(outDir);
+        RenderLinkPopup(outDir);
+
+        // Feeds row: heads with news (gradient ring + count; one in double figures → "9+"), read heads, a failing
+        // one (yellow badge), one with a real icon clipped round; then a narrow panel where the tail folds into
+        // "+N" (its dot lit because a folded head has news), and the empty "Add a feed" row.
+        global::Avalonia.Media.Imaging.Bitmap? perchIcon = null;
+        try
+        {
+            perchIcon = new global::Avalonia.Media.Imaging.Bitmap(
+                global::Avalonia.Platform.AssetLoader.Open(new Uri("avares://perch/Assets/icon.png")));
+        }
+        catch { }
+        void FeedsProbe(string file, IReadOnlyList<OverlayCanvas.FeedHeadView> heads, double dpi = 96, double? width = null)
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.SetShowFeeds(true);
+            c.SetFeedsRow(heads);
+            if (width is { } w) c.SetFloatingWidth(w);
+            RenderControl(c, Path.Combine(outDir, file), dpi);
+        }
+        var feedHeads = SampleData.FeedHeads().ToList();
+        feedHeads[3] = feedHeads[3] with { Icon = perchIcon };
+        FeedsProbe("overlay_feeds_1x.png", feedHeads);
+        FeedsProbe("overlay_feeds_1.5x.png", feedHeads, 144);
+        var manyHeads = feedHeads.Concat(Enumerable.Range(1, 6).Select(i =>
+            new OverlayCanvas.FeedHeadView($"x{i}", $"Extra feed {i}", null, i == 6 ? 1 : 0, null, null, null, null))).ToList();
+        FeedsProbe("overlay_feeds_narrow_1x.png", manyHeads, width: OverlayCanvas.MinOverlayWidthDip);
+        FeedsProbe("overlay_feeds_empty_1x.png", []);
 
         // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
         // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
@@ -2699,6 +2730,156 @@ internal static class HeadlessRenderer
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The "where does this link go?" popup: link text that isn't its address, and text naming another site (the
+    // warning). Shown over a plain host window, the way a click on a link in the story or a session shows it.
+    private static void RenderLinkPopup(string outDir)
+    {
+        Capture("link_popup_1x.png", "the release notes", "https://github.com/anthropics/claude-code/releases/tag/v2.1.0");
+        Capture("link_popup_other_site_1x.png", "github.com/anthropics", "https://github-login.evil.example/session?next=%2Fanthropics");
+
+        void Capture(string file, string label, string url)
+        {
+            var tb = new SelectableTextBlock { Text = label, Foreground = Palette.FgBrush, Margin = new Thickness(16) };
+            var w = new Window
+            {
+                Width = 480, Height = 240, Background = Palette.FormBgBrush, Content = tb,
+                WindowDecorations = WindowDecorations.None,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            LinkText.ShowConfirmForRender(tb, label, url);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            LinkText.DismissPopup();
+            w.Close();
+        }
+    }
+
+    // The Add feed dialog after a check: a good feed, a web page given by mistake (with its hint), plain http (the
+    // warning), and an address already followed. Seeded directly, so nothing touches the network.
+    private static void RenderFeedDialog(string outDir)
+    {
+        var existing = new List<Perch.Feeds.FeedSubscription>
+        {
+            new() { Id = "taken", Url = "https://github.com/AvaloniaUI/Avalonia/releases.atom" },
+        };
+        Capture("feed_dialog_ok_1x.png", "https://github.com/dotnet/runtime/releases.atom", SampleData.FeedDoc(), null);
+        Capture("feed_dialog_webpage_1x.png", "https://blog.example.com/", null, "Not a feed (looks like a web page)");
+        Capture("feed_dialog_http_1x.png", "http://intranet.example/news.atom", SampleData.FeedDoc(), null);
+        Capture("feed_dialog_duplicate_1x.png", "https://github.com/AvaloniaUI/Avalonia/releases.atom", null, null);
+        // A web page that advertises feeds (autodiscovery): each is offered with "Use this feed".
+        Capture("feed_dialog_discovered_1x.png", "https://devblogs.microsoft.com/dotnet/", null,
+            "Not a feed (looks like a web page)",
+            [
+                new(new Uri("https://devblogs.microsoft.com/dotnet/feed/"), ".NET Blog", "RSS"),
+                new(new Uri("https://devblogs.microsoft.com/dotnet/comments/feed/"), ".NET Blog » Comments Feed", "RSS"),
+                new(new Uri("https://devblogs.microsoft.com/dotnet/feed/atom/"), null, "Atom"),
+            ]);
+        // Adding: the address box doubles as a search over the known feeds (a typed name isn't flagged).
+        Capture("feed_dialog_add_1x.png", "", null, null, adding: true);
+        Capture("feed_dialog_add_search_1x.png", "julia", null, null, adding: true);
+
+        void Capture(string file, string url, Perch.Feeds.FeedDoc? doc, string? error,
+            IReadOnlyList<Perch.Feeds.FeedCandidate>? discovered = null, bool adding = false)
+        {
+            var w = adding
+                ? new FeedDialog(null, existing)
+                : new FeedDialog(new Perch.Feeds.FeedSubscription { Id = "edit", Url = url }, existing);
+            if (adding) w.SeedTextForRender(url);
+            w.SeedForRender(doc, error, discovered);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The feeds story player over a seeded host (no engine, no network, no read state written): the first card of an
+    // unread story, a long post mid-story (and scrolled), the "All caught up" end card, a failing feed's error card, a
+    // replay, and a card built from the hostile corpus through the real parser — dark and light where it matters.
+    private static void RenderFeedStory(string outDir)
+    {
+        var story = SampleData.FeedStory();
+        Capture("feed_story_first_1x.png", story, "rt", 0, dark: true);
+        Capture("feed_story_mid_1x.png", story, "av", 0, dark: true, start: "rt");
+        Capture("feed_story_mid_light_1x.png", story, "av", 0, dark: false, start: "rt");
+        Capture("feed_story_scrolled_1x.png", story, "av", 0, dark: true, start: "rt", scroll: 520);
+        Capture("feed_story_end_1x.png", story, null, 4, dark: true, start: "rt");
+        Capture("feed_story_error_1x.png", story, "st", 0, dark: true);
+        Capture("feed_story_replay_1x.png", story, "hn", 0, dark: false);
+        Capture("feed_story_hostile_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: true);
+        Capture("feed_story_hostile_light_1x.png", SampleData.FeedStoryHostile(), "ev", 0, dark: false);
+        // xkcd with images on (the comic, its hover text as the caption), and off (a stub plus the offer to turn them on).
+        Capture("feed_story_xkcd_1x.png", SampleData.FeedStoryXkcd(showImages: true), "xk", 0, dark: true);
+        Capture("feed_story_xkcd_light_1x.png", SampleData.FeedStoryXkcd(showImages: true), "xk", 0, dark: false);
+        Capture("feed_story_xkcd_off_1x.png", SampleData.FeedStoryXkcd(showImages: false), "xk", 0, dark: true);
+
+        // A stand-in comic (the render never touches the network): white panel, black border, a stick figure.
+        static Bitmap Comic()
+        {
+            var rtb = new RenderTargetBitmap(new PixelSize(360, 220), new Vector(96, 96));
+            using (var ctx = rtb.CreateDrawingContext())
+            {
+                var ink = new Pen(Brushes.Black, 2);
+                ctx.DrawRectangle(Brushes.White, ink, new Rect(1, 1, 358, 218));
+                ctx.DrawEllipse(null, ink, new Point(110, 70), 16, 16);
+                ctx.DrawLine(ink, new Point(110, 86), new Point(110, 150));
+                ctx.DrawLine(ink, new Point(110, 105), new Point(150, 120));
+                ctx.DrawLine(ink, new Point(110, 105), new Point(80, 125));
+                ctx.DrawLine(ink, new Point(110, 150), new Point(90, 195));
+                ctx.DrawLine(ink, new Point(110, 150), new Point(130, 195));
+                ctx.DrawRectangle(null, ink, new Rect(160, 95, 120, 70));
+                ctx.DrawEllipse(null, new Pen(Brushes.Black, 3), new Point(220, 130), 18, 18);
+            }
+            return rtb;
+        }
+
+        // Plays `start` (or `play`) and steps forward; for `start`, steps until `play`'s feed is on screen.
+        void Capture(string file, Perch.Feeds.FeedsSnapshot snap, string? play, int steps, bool dark, string? start = null, double scroll = 0)
+        {
+            var root = Path.Combine(Path.GetTempPath(), "perch-render-feeds-" + Guid.NewGuid().ToString("N"));
+            using var host = new FeedsMonitorHost(
+                new Perch.Feeds.FeedsService(new Perch.Feeds.FeedStore(root), new Perch.Feeds.FeedFetcher()), null);
+            host.SeedForRender(snap);
+            var w = new FeedStoryWindow(host, _ => null, SessionPalette.For(dark)) { RenderImage = _ => Comic() };
+            w.PrepareForRender();
+            w.Show();
+            w.Play(start ?? play);
+            if (start is not null && play is not null)
+            {
+                for (int i = 0; i < 20 && !w.ShowingFeedForRender(play); i++) w.StepForRender(1);
+            }
+            w.StepForRender(steps);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (scroll > 0)
+            {
+                w.ScrollForRender(scroll);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {

@@ -384,6 +384,34 @@ internal static class SettingsRegistry
             ["quick", "links", "launch", "apps", "shortcut", "icons", "tools"], PreviewTarget.QuickLinks,
             nameof(AppSettings.QuickLinks)),
 
+        Info("feed-subscriptions", "Feed subscriptions",
+            "The Atom and RSS feeds shown as story-style heads on the overlay. Add, edit, reorder or remove them, " +
+            "or import and export the list as OPML.",
+            SettingSurface.Integrations, SettingKind.List,
+            ["feed", "feeds", "atom", "rss", "blog", "news", "subscribe", "subscription", "stories", "releases",
+             "opml", "import", "export", "xkcd"],
+            PreviewTarget.Feeds, nameof(AppSettings.Feeds)),
+
+        Toggle("feeds", "Feeds",
+            "A one-line overlay row of story-style feed heads. A head's ring lights up when its feed has entries " +
+            "you haven't seen; click it to play them.",
+            SettingSurface.Integrations,
+            ["feed", "feeds", "atom", "rss", "blog", "news", "stories", "story", "heads", "ring", "unread"],
+            PreviewTarget.Feeds, nameof(AppSettings.ShowFeeds),
+            s => s.ShowFeeds, (s, v) => s.ShowFeeds = v),
+
+        Stepper("feeds-interval", "Feeds check interval",
+            "How often (minutes) each feed is checked for new entries. Feeds are also checked shortly after Perch starts.",
+            SettingSurface.Integrations, ["feed", "feeds", "atom", "rss", "interval", "minutes", "poll", "check"],
+            PreviewTarget.Feeds, nameof(AppSettings.FeedsIntervalMinutes),
+            s => s.FeedsIntervalMinutes, (s, v) => s.FeedsIntervalMinutes = v),
+
+        Toggle("feeds-notify", "Notify on new feed entries",
+            "A notification when a feed you follow publishes something new (one per feed per check).",
+            SettingSurface.Notifications, ["feed", "feeds", "atom", "rss", "notify", "notification", "toast", "new", "post"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnFeedEntry),
+            s => s.NotifyOnFeedEntry, (s, v) => s.NotifyOnFeedEntry = v, playful: true),   // Quiet mode holds feed toasts
+
         Info("config-dirs", "Config directories",
             "Extra Claude Code config directories (CLAUDE_CONFIG_DIR roots) Perch watches alongside " +
             "~/.claude, so sessions and transcripts in each are found and attributed. Rename each dir's " +

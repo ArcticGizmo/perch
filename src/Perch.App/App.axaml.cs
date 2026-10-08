@@ -100,6 +100,9 @@ public partial class App : Application
     private Services.TodoMonitorHost? _todoHost;
     // GitHub alerts: the poller behind the overlay's one-line GitHub strip, and the reused list window it opens.
     private Services.GitHubAlertsMonitorHost? _gitHubHost;
+    private Services.FeedsMonitorHost? _feedsHost;
+    private readonly Services.FeedIconCache _feedIcons = new();
+    private FeedStoryWindow? _feedStoryWindow;
     private GitHubAlertsWindow? _gitHubWindow;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
@@ -193,6 +196,7 @@ public partial class App : Application
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
                 _gitHubHost?.Dispose();
+                _feedsHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -482,6 +486,7 @@ public partial class App : Application
             _notifier = new Notifications.AvaloniaToastNotifier(toastScreen);
 #endif
             _notifier.SessionActivated += OnToastActivated;
+            _notifier.ActionActivated += OnToastAction;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
             _achievements = new AchievementService(AchievementStore.Load());
 
@@ -502,6 +507,23 @@ public partial class App : Application
             _gitHubHost = new Services.GitHubAlertsMonitorHost(
                 GitHubAlertsSeenStore.Load(), strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
             _overlay.Canvas.GitHubAlertsRequested += OpenGitHubAlerts;
+            // Feeds: the engine behind the overlay's story-heads row (started/stopped from ApplyDisplaySettings per
+            // ShowFeeds). Nothing is fetched while it's off. See docs/feeds-plan.md.
+            _feedsHost = new Services.FeedsMonitorHost(
+                new Perch.Feeds.FeedsService(Perch.Feeds.FeedStore.Default(), new Perch.Feeds.FeedFetcher()), _sessionLock);
+            _feedsHost.Changed += () => { PushFeedsRow(); _settings?.RefreshFeedStatus(); };
+            _feedsHost.Arrived += OnFeedsArrived;
+            _feedIcons.Loaded += () => { PushFeedsRow(); _feedStoryWindow?.RefreshIcons(); };
+            _overlay.Canvas.FeedStoryRequested += OpenFeedStory;
+            _overlay.Canvas.FeedAddRequested += () => OpenSettings("feeds");
+            _overlay.Canvas.FeedSettingsRequested += () => OpenSettings("feeds");
+            _overlay.Canvas.FeedEditRequested += _ => OpenSettings("feeds");
+            _overlay.Canvas.FeedRefreshRequested += id => _feedsHost?.RefreshNow(id);
+            _overlay.Canvas.FeedMarkAllReadRequested += id => _feedsHost?.MarkAllRead(id);
+            _overlay.Canvas.FeedOpenSiteRequested += id =>
+            {
+                if (_feedsHost?.Head(id)?.SiteUrl is { } site) PlatformServices.UrlOpener.Open(site);
+            };
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
@@ -737,6 +759,7 @@ public partial class App : Application
         _projectPicker?.Close();
         _todoWindow?.Close();
         _gitHubWindow?.Close();
+        _feedStoryWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
             note.CloseWithoutPrompt();
     }
@@ -1052,6 +1075,9 @@ public partial class App : Application
             if (s.ShowGitHubAlerts) gitHubHost.Start();
             else gitHubHost.Stop();
         }
+
+        // Feeds: subscriptions + interval + on/off into the engine (idempotent; off fetches nothing).
+        _feedsHost?.Apply(s);
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
@@ -1910,6 +1936,105 @@ public partial class App : Application
             () => new GitHubAlertsWindow(host),
             () => _gitHubWindow = null,
             w => w.Retarget());
+    }
+
+    // Pushes the feeds engine's heads onto the overlay row, with icons from the off-thread decode cache.
+    private void PushFeedsRow()
+    {
+        if (_overlay is null || _feedsHost is null) return;
+        var heads = _feedsHost.Current.Heads
+            .Select(h => new OverlayCanvas.FeedHeadView(h.SubId, h.Title, _feedIcons.Get(h.IconPath), h.UnreadCount,
+                h.LatestTitle, h.LatestUtc, h.Error, h.SiteUrl))
+            .ToList();
+        _overlay.Canvas.SetFeedsRow(heads);
+    }
+
+    // A check brought new entries (never a priming fetch): toast them, batched per feed (FeedNotice), when the user
+    // asked for feed notifications. NotifyOnFeedEntry is playful, so Quiet mode masks it on Effective; the master
+    // switch and Do Not Disturb hold them too. A click plays that feed's story (OnToastAction).
+    private void OnFeedsArrived(IReadOnlyList<Perch.Feeds.FeedArrivals> arrivals)
+    {
+        if (Effective is not { NotificationsEnabled: true, NotifyOnFeedEntry: true } || _notifier is null) return;
+        bool dnd;
+        try { dnd = PlatformServices.DoNotDisturb.IsActive; } catch { dnd = false; }
+        if (dnd) return;
+        foreach (var t in Perch.Feeds.FeedNotice.Build(arrivals))
+            _notifier.ShowAction(t.Title, t.Body, ToastLevel.Info, FeedToastPrefix + (t.SubId ?? ""));
+    }
+
+    private const string FeedToastPrefix = "feed:";
+
+    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news).
+    private void OnToastAction(string action)
+    {
+        if (action.StartsWith(FeedToastPrefix, StringComparison.Ordinal))
+        {
+            var id = action[FeedToastPrefix.Length..];
+            OpenFeedStory(id.Length > 0 ? id : null);
+        }
+    }
+
+    // A head (or the "+N" chip, null) was clicked: play its story in the one story window, opened centred on the
+    // overlay's monitor.
+    private void OpenFeedStory(string? subId)
+    {
+        if (_feedsHost is not { } host) return;
+        _feedStoryWindow = WindowHost.ShowOrFocus(_feedStoryWindow,
+            () =>
+            {
+                var w = new FeedStoryWindow(host, _feedIcons.Get);
+                w.EditRequested += _ => OpenSettings("feeds");
+                w.ImagesToggleRequested += SetFeedImages;
+                w.SizeChosen += (width, height) =>
+                {
+                    if (_appSettings is not { } s) return;
+                    s.FeedStoryWidthDip = Math.Round(width);
+                    s.FeedStoryHeightDip = Math.Round(height);
+                    s.Save();
+                };
+                SizeFeedStory(w);
+                CenterOnOverlayScreen(w);
+                return w;
+            },
+            () => _feedStoryWindow = null,
+            w => w.Play(subId));
+    }
+
+    // A feed's "Show images" was switched from the story player: save it on the subscription and re-apply, so the
+    // host's next snapshot carries it (the player rebuilds its card) and an open Settings page shows it.
+    private void SetFeedImages(string subId, bool on)
+    {
+        if (_appSettings is not { Feeds: { } feeds } s || feeds.FirstOrDefault(f => f.Id == subId) is not { } sub) return;
+        sub.ShowImages = on;
+        s.Save();
+        _feedsHost?.Apply(s);
+        _settings?.ReloadFeeds();
+    }
+
+    // The story player opens at the size the user last left it (else its default), never bigger than the overlay's
+    // screen allows — a size remembered on a large monitor mustn't overflow a laptop's.
+    private void SizeFeedStory(FeedStoryWindow w)
+    {
+        double width = _appSettings?.FeedStoryWidthDip ?? FeedStoryWindow.DefaultWidth;
+        double height = _appSettings?.FeedStoryHeightDip ?? FeedStoryWindow.DefaultHeight;
+        if (_overlay is not null && (_overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary) is { } screen)
+        {
+            double scale = screen.Scaling > 0 ? screen.Scaling : 1;
+            width = Math.Min(width, screen.WorkingArea.Width / scale - 40);
+            height = Math.Min(height, screen.WorkingArea.Height / scale - 40);
+        }
+        w.Width = Math.Max(FeedStoryWindow.MinSize.Width, width);
+        w.Height = Math.Max(FeedStoryWindow.MinSize.Height, height);
+    }
+
+    // Centres a not-yet-shown window on the monitor the overlay is on (else the primary).
+    private void CenterOnOverlayScreen(Window w)
+    {
+        if (_overlay is null || (_overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary) is not { } screen) return;
+        var wa = screen.WorkingArea;
+        int physW = (int)Math.Round(w.Width * screen.Scaling), physH = (int)Math.Round(w.Height * screen.Scaling);
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Position = new PixelPoint(wa.X + Math.Max(0, (wa.Width - physW) / 2), wa.Y + Math.Max(0, (wa.Height - physH) / 2));
     }
 
     private void OpenAchievements() =>
@@ -3237,6 +3362,10 @@ public partial class App : Application
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,
             OpenSocialDebug = OpenSocialDebug,
+            FeedsChanged = () => _feedsHost?.Apply(settings),
+            FeedStatus = id => _feedsHost?.Head(id),
+            FeedsMarkAllRead = () => _feedsHost?.MarkAllRead(),
+            FeedsRefresh = () => _feedsHost?.RefreshNow(),
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

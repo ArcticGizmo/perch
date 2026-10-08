@@ -39,6 +39,7 @@ internal sealed class PreviewPane : Border
         _canvas.SetHypertree(SampleData.Hypertree());
         _canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
         _canvas.SetGitHubStrip(SampleData.GitHubStrip());
+        _canvas.SetFeedsRow(SampleData.FeedHeads());
         _canvas.SetRecent(SampleData.RecentLines());
         _canvas.UpdateMedia(SampleData.Media());
         _canvas.UpdateMic(SampleData.Mic());

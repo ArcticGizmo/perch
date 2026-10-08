@@ -24,6 +24,7 @@ internal sealed class AvaloniaToastNotifier : INotifier
 
     public event Action<string, string?>? SessionActivated;
     public event Action? UpdateActivated;
+    public event Action<string>? ActionActivated;
 
     /// <param name="targetScreen">Resolves the screen to show toasts on (the overlay's current screen);
     /// falls back to primary when it returns null.</param>
@@ -48,6 +49,15 @@ internal sealed class AvaloniaToastNotifier : INotifier
         {
             _host ??= CreateHost();
             _host.AddToast(title, body, ToastLevel.Info, () => UpdateActivated?.Invoke());
+        });
+    }
+
+    public void ShowAction(string title, string body, ToastLevel level, string action)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            _host ??= CreateHost();
+            _host.AddToast(title, body, level, () => ActionActivated?.Invoke(action));
         });
     }
 

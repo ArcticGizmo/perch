@@ -22,6 +22,7 @@ public class QuietModeTests
         nameof(AppSettings.AchievementToasts),
         nameof(AppSettings.UpsideDownQuickLinks),
         nameof(AppSettings.BasketballEnabled),
+        nameof(AppSettings.NotifyOnFeedEntry),
     };
 
     [Fact]

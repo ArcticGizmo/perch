@@ -606,6 +606,27 @@ internal sealed class AppSettings
     // How often (minutes) the GitHub alerts poll runs. Clamped to 2–60 when applied. Defaults to 5.
     public int GitHubAlertsIntervalMinutes { get; set; } = 5;
 
+    // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
+    // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
+    // docs/feeds-plan.md.
+    public List<Perch.Feeds.FeedSubscription>? Feeds { get; set; }
+
+    // The overlay's one-line row of story-style feed heads. Off by default and load-bearing while off: no feed
+    // is fetched at all.
+    public bool ShowFeeds { get; set; }
+
+    // How often (minutes) each feed is checked, plus once (delayed + staggered) at startup. Clamped to 5–240
+    // when applied. Defaults to 30.
+    public int FeedsIntervalMinutes { get; set; } = 30;
+
+    // A toast when new feed entries arrive (batched per feed per check; never for a newly added feed's backlog).
+    public bool NotifyOnFeedEntry { get; set; }
+
+    // The feeds story player's size (DIP) as the user last resized it by its edges; null = the default. UI state,
+    // not a Settings control; clamped to the screen when the window opens.
+    public double? FeedStoryWidthDip { get; set; }
+    public double? FeedStoryHeightDip { get; set; }
+
     // Jira ticket deep-link. When on, a session whose git branch carries a Jira issue key (e.g.
     // SFTY-1234-add-audit-log) grows a small ticket glyph on its overlay row; clicking it opens the ticket at
     // https://{JiraSubdomain}.atlassian.net/browse/{KEY}. Pure and offline — the key is parsed from the branch

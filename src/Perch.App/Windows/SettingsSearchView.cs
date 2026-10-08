@@ -31,6 +31,7 @@ internal static class SettingsLiveApply
             case "session-metrics":
             case "include-subprocess-metrics": hooks.MetricsChanged?.Invoke(); break;
             case "upside-down-quick-links":    hooks.QuickLinksChanged?.Invoke(); break;
+            case "feeds":                      hooks.FeedsChanged?.Invoke(); break;
         }
 
         // Always re-push the overlay display gates: cheap, idempotent, and covers the git/stuck/PR data-layer
@@ -46,6 +47,7 @@ internal static class SettingsLiveApply
         switch (id)
         {
             case "service-status-interval": hooks.ServiceStatusIntervalChanged?.Invoke(); break;
+            case "feeds-interval":          hooks.FeedsChanged?.Invoke(); break;
         }
 
         hooks.DisplayChanged?.Invoke();
@@ -175,8 +177,9 @@ internal sealed class SettingsSearchView : StackPanel
     // page; config directories have their own editor. (Descriptor ids use hyphens; page keys don't.)
     private static string ListPageFor(string id) => id switch
     {
-        "config-dirs" => "configdirs",
-        _             => "quicklinks",
+        "config-dirs"        => "configdirs",
+        "feed-subscriptions" => "feeds",
+        _                    => "quicklinks",
     };
 
     private PerchToggle LiveToggle(SettingDescriptor d)

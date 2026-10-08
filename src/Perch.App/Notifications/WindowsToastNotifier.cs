@@ -16,6 +16,7 @@ internal sealed class WindowsToastNotifier : INotifier
 {
     public event Action<string, string?>? SessionActivated;
     public event Action? UpdateActivated;
+    public event Action<string>? ActionActivated;
 
     public WindowsToastNotifier()
     {
@@ -54,6 +55,19 @@ internal sealed class WindowsToastNotifier : INotifier
         catch { /* best-effort — a toast failure must never break the update flow */ }
     }
 
+    public void ShowAction(string title, string body, ToastLevel level, string action)
+    {
+        try
+        {
+            // A separate argument from "action" (which the update toast owns), so the two can't collide.
+            var builder = new ToastContentBuilder();
+            builder.AddArgument("perch", action);
+            builder.AddText(title).AddText(body);
+            builder.Show();
+        }
+        catch { /* best-effort */ }
+    }
+
     private void OnToastActivated(ToastNotificationActivatedEventArgsCompat e)
     {
         try
@@ -62,6 +76,11 @@ internal sealed class WindowsToastNotifier : INotifier
             if (args.TryGetValue("action", out var action) && action == "update")
             {
                 Dispatcher.UIThread.Post(() => UpdateActivated?.Invoke());
+                return;
+            }
+            if (args.TryGetValue("perch", out var token) && !string.IsNullOrEmpty(token))
+            {
+                Dispatcher.UIThread.Post(() => ActionActivated?.Invoke(token));
                 return;
             }
             if (!args.TryGetValue("pid", out var pid) || string.IsNullOrEmpty(pid)) return;

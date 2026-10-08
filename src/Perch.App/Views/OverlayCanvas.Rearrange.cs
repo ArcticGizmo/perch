@@ -61,6 +61,7 @@ public sealed partial class OverlayCanvas
         if (!UsageStripVisible)  _rearrangeDimmed.Add(OverlaySection.ClaudeMetrics);
         if (!TodosStripVisible)  _rearrangeDimmed.Add(OverlaySection.Todo);
         if (!GitHubStripVisible) _rearrangeDimmed.Add(OverlaySection.GitHub);
+        if (!FeedsRowVisible)    _rearrangeDimmed.Add(OverlaySection.Feeds);
         if (!MediaStripVisible)  _rearrangeDimmed.Add(OverlaySection.Media);
         if (!MicStripVisible)    _rearrangeDimmed.Add(OverlaySection.Call);
         if (!FeedStripVisible)   _rearrangeDimmed.Add(OverlaySection.Friends);
@@ -69,6 +70,7 @@ public sealed partial class OverlayCanvas
         _usageEnabled = true;
         _todosEnabled = true;
         _gitHubEnabled = true;
+        _feedsEnabled = true;
         _mediaEnabled = true;
         _micEnabled = true;
         _socialEnabled = true;
