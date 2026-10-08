@@ -1943,9 +1943,52 @@ public partial class App : Application
     {
         if (_gitHubHost is not { } host) return;
         _gitHubWindow = WindowHost.ShowOrFocus(_gitHubWindow,
-            () => new GitHubAlertsWindow(host),
+            () => new GitHubAlertsWindow(host) { StartSessionRequested = OpenPrSession },
             () => _gitHubWindow = null,
             w => w.Retarget());
+    }
+
+    // "Start session…" on a dashboard PR: the quick-prompt dialog, which prepares the folder (a per-PR worktree by
+    // default), then starts an ordinary Perch-controlled session with no window and sends the prompt. The session
+    // shows on the overlay and in the Roost like any other. See docs/github-dashboard-plan.md (part 3).
+    private void OpenPrSession(GhPrItem item)
+    {
+        var active = ActiveSessionIds();
+        var slug = GitRemote.FromPullRequestUrl(item.Pr.Url)?.Slug ?? item.Pr.Repo;
+        string? remembered = null;
+        _appSettings?.GitHubRepoCheckouts?.TryGetValue(slug, out remembered);
+        var w = new PrSessionWindow(item,
+            knownFolders: () => SessionHistory.DistinctFolders(SessionHistory.ListAll(active)),
+            remembered: remembered,
+            remember: (repo, folder) =>
+            {
+                if (_appSettings is not { } s) return;
+                var map = s.GitHubRepoCheckouts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (map.TryGetValue(repo, out var had) && had == folder) return;
+                map[repo] = folder;
+                s.GitHubRepoCheckouts = map;
+                s.Save();
+            },
+            rules: () => _appSettings?.AccountRules,
+            launch: LaunchPrSession);
+        if (_gitHubWindow is { IsVisible: true } owner) w.Show(owner);
+        else w.Show();
+    }
+
+    // Starts the PR session headless and hands it its first prompt. Null on success, else the error line to show.
+    private string? LaunchPrSession(PrSessionLaunch launch)
+    {
+        try
+        {
+            var session = StartPerchSession(new Services.SessionLaunchOptions(
+                launch.Cwd, PermissionMode: launch.PermissionMode, ConfigDir: launch.ConfigDir));
+            session.SendPrompt(launch.Prompt);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"Couldn't start the session: {ex.Message}";
+        }
     }
 
     // Pushes the feeds engine's heads onto the overlay row, with icons from the off-thread decode cache.

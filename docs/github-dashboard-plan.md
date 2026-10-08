@@ -105,6 +105,28 @@ open, and show its status (running / waiting / done) in the overlay. Alternative
 Optional heuristic: default to the host of your most recent session in that repo (Perch already records each
 session's host). One setting, "Start PR sessions in: Perch (default) / Terminal", is enough to start with.
 
+### Status (2026-10-08)
+
+S1–S4 are built on `github-dashboard` and S5 isn't started. The real app has never run any of it. Covered by unit
+tests (`GitHubCheckoutsTests`, `PrSessionPromptsTests`) and the render (`pr_session_*.png`). Differences from the
+phases below, settled while building:
+
+- **S1** reads remotes straight from `.git/config` (`GitCheckoutScanner`, following a linked worktree's
+  `commondir`) instead of running `git remote -v` per folder. Remembered folders are stored in
+  `AppSettings.GitHubRepoCheckouts`.
+- **S2** uses git only, not `gh pr checkout`: `git fetch <remote> pull/<n>/head:perch/pr-<n>` from whichever remote
+  names the PR's repo (works for PRs from forks), then `git worktree add`, both through `GitRunner` as a
+  `UserAction`. A plain fetch refuses to move a branch that has local commits, so an earlier session's work is
+  never discarded. An existing worktree is reused as it is. The branch doesn't track the PR head, so a user who
+  wants to push does it by hand (`git push <remote> HEAD:<head-branch>`). The worktree stays when the PR closes;
+  cleaning it up is still to do.
+- **S3**: the prompt text is shown in an editable box before starting, and that is how templates are edited for
+  now. Persisted custom templates are later. Conflicts are resolved by **merging** the base branch, not rebasing,
+  so nothing needs a force-push.
+- **S4** is `PrSessionWindow`, opened from **Start session…** on each dashboard row. Account selection reuses
+  `SessionAccountChoice` (guardrails included) and is resolved again for the worktree folder at launch. Folder
+  trust is asked for the worktree itself, because its code is the PR's.
+
 ### Phases
 
 - **S1, repo → local checkout.** A PR names `owner/repo`, not a folder. Build a map from the folders Perch has

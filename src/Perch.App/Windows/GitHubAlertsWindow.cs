@@ -175,6 +175,10 @@ internal sealed class GitHubAlertsWindow : Window
         Refresh();
     }
 
+    /// <summary>Set by the App to offer "Start session…" on each row (opens <see cref="PrSessionWindow"/>). Null
+    /// hides the button.</summary>
+    public Action<GhPrItem>? StartSessionRequested { get; set; }
+
     /// <summary>Re-renders from the host's current snapshot. Satisfies <c>WindowHost.ShowOrFocus</c>'s
     /// refresh-on-both-paths contract.</summary>
     public void Retarget() => Refresh();
@@ -392,8 +396,17 @@ internal sealed class GitHubAlertsWindow : Window
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 0, 0), Children = { dismiss, open },
+            Margin = new Thickness(12, 0, 0, 0), Children = { dismiss },
         };
+        if (StartSessionRequested is { } startSession)
+        {
+            var start = GhostButton("Start session…");
+            start.Foreground = Accent;
+            ToolTip.SetTip(start, "Start a background Claude session on this PR with a quick prompt");
+            start.Click += (_, _) => startSession(item);
+            actions.Children.Add(start);
+        }
+        actions.Children.Add(open);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(actions, 1);

@@ -3388,7 +3388,8 @@ internal sealed partial class SessionWindow : Window
     /// <see cref="RefreshAccounts"/> and once synchronously by <see cref="EffectiveConfigDir"/> so a
     /// single-allowed guardrail is honoured even on the quick CLI path where the selector was never shown. The
     /// resolver de-duplicates, so two dirs signed into the same account collapse to one choice.</summary>
-    private static IReadOnlyList<AccountChoice> ReadSignIns()
+    // Every config dir with its live sign-in. File IO: call off the UI thread. Shared with PrSessionWindow.
+    internal static IReadOnlyList<AccountChoice> ReadSignIns()
     {
         var list = new List<AccountChoice>();
         foreach (var dir in ClaudeConfigSet.Instance.All)

@@ -325,6 +325,7 @@ internal static class HeadlessRenderer
         GitHubProbe("overlay_github_error_1x.png",
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
+        RenderPrSessionWindow(outDir);
         RenderFeedDialog(outDir);
         RenderFeedStory(outDir);
         RenderLinkPopup(outDir);
@@ -2743,8 +2744,40 @@ internal static class HeadlessRenderer
             host.SeedForRender(SampleData.GitHubAlerts());
             if (options is not null) host.SeedOptions(options);
             foreach (var url in dismiss ?? []) host.Dismiss(url);
-            var w = new GitHubAlertsWindow(host);
+            var w = new GitHubAlertsWindow(host) { StartSessionRequested = _ => { } };
             w.SetViewForRender(view, search, includeDismissed);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // "Start a session" on a dashboard PR: failing checks (so "Fix failing checks" leads) with the checkout found; a
+    // review request with two checkouts to choose between and two accounts; and a repo with no checkout found.
+    // Seeded, so it reads no files and shows no real accounts.
+    private static void RenderPrSessionWindow(string outDir)
+    {
+        var sample = SampleData.GitHubAlerts();
+        var items = GitHubAlertsClassifier.Build(sample, new Dictionary<string, DateTime>()).Items;
+        GhPrItem Item(int n) => items.First(i => i.Pr.Number == n);
+        string src = OperatingSystem.IsWindows() ? @"C:\src" : "/Users/me/src";
+
+        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(Path.Combine(src, "api"), [Path.Combine(src, "api")]));
+        Capture("pr_session_choice_1x.png", Item(418),
+            new CheckoutMatch(null, [Path.Combine(src, "web"), Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"]);
+        Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None);
+
+        void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null)
+        {
+            var w = new PrSessionWindow(item, () => [], null, (_, _) => { }, () => null, _ => null);
+            w.SeedForRender(match, accounts);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

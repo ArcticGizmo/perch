@@ -613,6 +613,12 @@ internal sealed class AppSettings
     public GhSortBy GitHubDashboardSortBy { get; set; } = GhSortBy.Urgency;
     public int GitHubDashboardMaxAgeDays { get; set; }
 
+    // Where each repository is checked out (owner/repo → folder), remembered when the user starts a session from a
+    // dashboard PR, so the next one in that repo doesn't ask. Read by RepoCheckoutResolver; a folder that no longer
+    // exists is ignored. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? GitHubRepoCheckouts { get; set; }
+
     // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
     // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
     // docs/feeds-plan.md.

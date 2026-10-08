@@ -83,8 +83,9 @@ URL and pruned to the open set after each successful poll.
 - Only the newest 30 comments and 30 reviews per PR are read, and the first 50 PRs per search.
 - `committedDate` stands in for "when you last pushed". A rebase that keeps old commit dates won't count as a
   move.
-- No desktop notifications yet. Row actions are open and dismiss; starting a session from a PR is part 3 of
-  `docs/github-dashboard-plan.md`. The session-row PR glyph
+- No desktop notifications yet. Row actions: Dismiss, **Start session…** (`PrSessionWindow`: quick prompt →
+  per-PR worktree → background Perch session; part 3 of `docs/github-dashboard-plan.md`) and Open in GitHub.
+  The session-row PR glyph
   (`ShowPullRequests`) is a separate feature and is unchanged.
 - The window has no tests (UI). Check it with `render` (`overlay_github_*.png`, including the `_narrow` and
   `_two` chip probes, and `github_alerts_*.png`).
