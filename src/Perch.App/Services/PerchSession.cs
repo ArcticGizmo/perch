@@ -243,9 +243,9 @@ internal sealed class PerchSession : IDisposable
         var id = SessionId;
         if (string.IsNullOrEmpty(id)) return;
 
-        // A pending permission/question means the session is blocked on the user; otherwise a live turn is
-        // busy and a settled one idle.
-        var activity = Conversation.PendingPermission is not null ? ControlledActivity.Waiting
+        // A pending permission/question means the session is blocked on the user (here, or on a Remote Control
+        // client); otherwise a live turn is busy and a settled one idle.
+        var activity = Conversation.PendingPermission is not null || Conversation.WaitingElsewhere ? ControlledActivity.Waiting
             : Conversation.TurnActive ? ControlledActivity.Busy
             : ControlledActivity.Idle;
         ControlledSessions.SetActivity(id, activity);
@@ -302,7 +302,8 @@ internal sealed class PerchSession : IDisposable
     /// <summary>Allows/denies a permission card; on allow optionally switches to the CLI's suggested mode.</summary>
     public void AnswerPermission(PermissionItem item, bool allow, bool switchMode)
     {
-        if (_controller is not { } c) return;
+        // A card the CLI already withdrew (answered remotely, or expired) has no request left to answer.
+        if (_controller is not { } c || item.Resolution != PermissionResolution.Pending) return;
         c.RespondToPermission(item.Request, allow);
         string? switched = null;
         if (allow && switchMode && item.Request.SuggestedMode is { Length: > 0 } mode)
@@ -316,7 +317,7 @@ internal sealed class PerchSession : IDisposable
     /// <summary>Answers an AskUserQuestion card: allow, with the answers folded into the tool input.</summary>
     public void AnswerQuestion(PermissionItem item, IReadOnlyDictionary<string, IReadOnlyList<string>> answers)
     {
-        if (_controller is not { } c) return;
+        if (_controller is not { } c || item.Resolution != PermissionResolution.Pending) return;
         var questions = AskUserQuestionInput.Parse(item.Request.InputJson);
         JsonNode updated = AskUserQuestionInput.BuildAnswer(item.Request.InputJson, answers);
         c.RespondToPermission(item.Request, allow: true, updatedInput: updated);

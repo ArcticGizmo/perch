@@ -3123,6 +3123,7 @@ internal sealed partial class SessionWindow : Window
         if (conv.QueuedPrompts > 0) parts.Add($"{conv.QueuedPrompts} queued");
         if (_session is { HasEnded: true }) parts.Add("ended");
         else if (conv.PendingPermission is { } pending) parts.Add(pending.IsQuestion ? "asking you" : "awaiting you");
+        else if (conv.WaitingElsewhere) parts.Add("awaiting remote");
         else if (conv.TurnActive) parts.Add("working…");
         _statusText.Text = string.Join("  ·  ", parts);
 

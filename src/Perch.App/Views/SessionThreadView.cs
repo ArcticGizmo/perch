@@ -395,6 +395,7 @@ internal sealed class SessionThreadView : ScrollViewer
     // What the indicator says: the concrete running tool (its summary), else the phase of the open turn.
     private string ActivityLabel()
     {
+        if (_conv is { WaitingElsewhere: true }) return "Waiting on a Remote Control answer…";
         if (_conv?.Items is { Count: > 0 } items && items[^1] is AssistantMessageItem { Parts.Count: > 0 } a)
             return a.Parts[^1] switch
             {
@@ -2360,6 +2361,7 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             PermissionResolution.Allowed => ("✓", _p.Ok, item.IsQuestion ? "Answered" : item.IsPlan ? "Approved plan" : "Allowed"),
             PermissionResolution.Denied  => ("✕", _p.Err, item.IsQuestion ? "Skipped" : item.IsPlan ? "Kept planning" : "Denied"),
+            PermissionResolution.AnsweredElsewhere => ("↗", _p.Faint, item.IsQuestion || item.IsPlan ? "Answered remotely" : "Answered remotely for"),
             _                            => ("◌", _p.Faint, "Expired"),
         };
         bool prose = item.IsQuestion || item.IsPlan;   // question/plan detail reads as prose, not a mono command

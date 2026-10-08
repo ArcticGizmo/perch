@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.16] - 2026-10-08
+
+- Prompts answered from your phone show as "Answered remotely" instead of waiting forever
+- Session status keeps up with turns started over Remote Control (Perch was told nothing; it now asks)
+- Shows "awaiting remote" when Claude waits on an answer only the phone can give
+
+---
+
 ## [v0.5.15] - 2026-10-08
 
 - Feeds: follow Atom and RSS as story-style heads on the overlay

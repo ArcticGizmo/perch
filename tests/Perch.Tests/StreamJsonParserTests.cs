@@ -20,6 +20,31 @@ public class StreamJsonParserTests
         Assert.False(Assert.IsType<AssistantTextEvent>(Assert.Single(StreamJsonParser.Parse(main))).FromSubagent);
     }
 
+    // Remote Control (docs/remote-control-sync-plan.md). Shapes from the CLI's bundled protocol schema, not yet
+    // captured live.
+    [Fact]
+    public void ControlCancelRequest_YieldsCancelled()
+    {
+        var ev = Assert.IsType<ControlRequestCancelledEvent>(Assert.Single(StreamJsonParser.Parse(
+            """{"type":"control_cancel_request","request_id":"req-7"}""")));
+        Assert.Equal("req-7", ev.RequestId);
+        Assert.Empty(StreamJsonParser.Parse("""{"type":"control_cancel_request"}"""));
+    }
+
+    [Theory]
+    [InlineData("idle")]
+    [InlineData("running")]
+    [InlineData("requires_action")]
+    public void SessionStateChanged_YieldsState(string state)
+    {
+        var line = $$"""{"type":"system","subtype":"session_state_changed","state":"{{state}}","uuid":"u","session_id":"s"}""";
+        Assert.Equal(state, Assert.IsType<SessionStateEvent>(Assert.Single(StreamJsonParser.Parse(line))).State);
+    }
+
+    [Fact]
+    public void SessionStateChanged_UnknownState_IsIgnored() =>
+        Assert.Empty(StreamJsonParser.Parse("""{"type":"system","subtype":"session_state_changed","state":"sleeping"}"""));
+
     [Fact]
     public void Init_YieldsSessionInit()
     {
