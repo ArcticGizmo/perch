@@ -1985,7 +1985,7 @@ public partial class App : Application
                 var w = new FeedStoryWindow(host, _feedIcons.Get);
                 w.EditRequested += _ => OpenSettings("feeds");
                 w.ImagesToggleRequested += SetFeedImages;
-                w.Resized += (width, height) =>
+                w.SizeChosen += (width, height) =>
                 {
                     if (_appSettings is not { } s) return;
                     s.FeedStoryWidthDip = Math.Round(width);

@@ -154,8 +154,13 @@ links, and private candidates dropped. The private-candidate filter was mutation
   - The story player fetches a card's images only when it's shown (no prefetch). It decodes them off the UI
     thread through `BoundedBitmap.Load(bytes, …)` at 720 px wide and caches up to 40 in memory. A failure shows
     "couldn't be shown. Open it in the browser ↗".
-- **Suggestions.** `FeedSuggestions` (Core) offers **xkcd** (`https://xkcd.com/atom.xml`, images on) as a
-  one-click "Suggested" add on the Feeds page. It's hidden once followed. The Settings row says "images on".
+- **Known feeds.** `FeedSuggestions` (Core) is a short hand-checked list of Atom feeds (Claude Code releases,
+  Simon Willison, Julia Evans, Martin Fowler, Armin Ronacher, the .NET Blog, The Old New Thing, Karpathy,
+  and **xkcd**, the only one with images on). They're not a section of the Feeds page: the **Add feed** dialog's
+  address box is a searchable dropdown over the ones not yet followed (`FeedSuggestions.Matches`, every typed word
+  in the title, blurb or address). Clicking the empty box lists them all (it isn't opened when the dialog opens),
+  and a typed name isn't flagged as a bad address
+  while it matches. Picking one fills in its address, sets its images default and runs the normal check.
 
 Tests: `FeedImageTests` covers the xkcd shape, ordering, linked images, structure stubs, the cap, fallback,
 acceptance, the fetch path, suggestions and persistence. `FeedInjectionTests` adds unsafe sources, inert parts,

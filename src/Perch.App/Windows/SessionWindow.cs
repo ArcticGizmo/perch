@@ -3651,6 +3651,8 @@ internal sealed partial class SessionWindow : Window
             return;
         }
         if (e.Key != Key.Escape) return;
+        // A link popup closes first: Escape meant for it must never interrupt the turn or deny a permission.
+        if (LinkText.DismissPopup()) { e.Handled = true; return; }
         if (_findBar.IsVisible) { CloseFind(); e.Handled = true; return; }
         if (_usageOverlay.IsVisible) { CloseUsageOverlay(); e.Handled = true; return; }
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }

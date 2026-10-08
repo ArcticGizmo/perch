@@ -20,7 +20,6 @@ internal sealed partial class SettingsWindow
     private readonly List<FeedSubscription> _feeds = [];
     private StackPanel _feedsList = null!;
     private Button? _feedsMarkRead, _feedsCheckNow;
-    private StackPanel? _feedSuggestions;
     private Button? _feedsExport;
     private TextBlock? _feedsOpmlStatus;
 
@@ -70,9 +69,6 @@ internal sealed partial class SettingsWindow
         addRow.Children.Add(_feedsCheckNow);
         page.Children.Add(addRow);
 
-        _feedSuggestions = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
-        page.Children.Add(_feedSuggestions);
-
         // OPML: the subscription-list format every feed reader imports and exports.
         var opmlRow = SettingsUi.ButtonRow();
         var import = SettingsUi.FlatButton("Import OPML…");
@@ -121,7 +117,6 @@ internal sealed partial class SettingsWindow
         if (_feedsCheckNow is not null)
             _feedsCheckNow.IsEnabled = _settings.ShowFeeds && _feeds.Any(f => f.Enabled);
         if (_feedsExport is not null) _feedsExport.IsEnabled = _feeds.Count > 0;
-        RebuildFeedSuggestions();
         if (_feeds.Count == 0)
         {
             _feedsList.Children.Add(new TextBlock
@@ -287,37 +282,6 @@ internal sealed partial class SettingsWindow
         _feedsOpmlStatus.Text = text;
         _feedsOpmlStatus.Foreground = warn ? new SolidColorBrush(Palette.Yellow) : Palette.MutedBrush;
         _feedsOpmlStatus.IsVisible = true;
-    }
-
-    // "Suggested" one-click adds for feeds not yet followed (FeedSuggestions); the section goes once all are added.
-    private void RebuildFeedSuggestions()
-    {
-        if (_feedSuggestions is null) return;
-        _feedSuggestions.Children.Clear();
-        var open = FeedSuggestions.NotFollowed(_feeds).ToList();
-        if (open.Count == 0) return;
-        _feedSuggestions.Children.Add(SettingsUi.FieldCaption("Suggested"));
-        foreach (var s in open)
-        {
-            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            text.Children.Add(new TextBlock { Text = s.Title, FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush });
-            text.Children.Add(new TextBlock { Text = s.Blurb, FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap });
-            var add = SettingsUi.FlatButton("Add");
-            add.VerticalAlignment = VerticalAlignment.Center;
-            add.Margin = new Thickness(8, 0, 0, 0);
-            var suggestion = s;
-            add.Click += (_, _) =>
-            {
-                _feeds.Add(FeedSuggestions.Subscribe(suggestion, DateTime.UtcNow));
-                RebuildFeedsList();
-                RaiseFeedsChanged();
-            };
-            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-            DockPanel.SetDock(add, Dock.Right);
-            row.Children.Add(add);
-            row.Children.Add(text);
-            _feedSuggestions.Children.Add(row);
-        }
     }
 
     private static Button SmallButton(string glyph, bool enabled, Action click)

@@ -327,6 +327,7 @@ internal static class HeadlessRenderer
         RenderGitHubAlertsWindow(outDir);
         RenderFeedDialog(outDir);
         RenderFeedStory(outDir);
+        RenderLinkPopup(outDir);
 
         // Feeds row: heads with news (gradient ring + count; one in double figures → "9+"), read heads, a failing
         // one (yellow badge), one with a real icon clipped round; then a narrow panel where the tail folds into
@@ -2739,6 +2740,37 @@ internal static class HeadlessRenderer
         }
     }
 
+    // The "where does this link go?" popup: link text that isn't its address, and text naming another site (the
+    // warning). Shown over a plain host window, the way a click on a link in the story or a session shows it.
+    private static void RenderLinkPopup(string outDir)
+    {
+        Capture("link_popup_1x.png", "the release notes", "https://github.com/anthropics/claude-code/releases/tag/v2.1.0");
+        Capture("link_popup_other_site_1x.png", "github.com/anthropics", "https://github-login.evil.example/session?next=%2Fanthropics");
+
+        void Capture(string file, string label, string url)
+        {
+            var tb = new SelectableTextBlock { Text = label, Foreground = Palette.FgBrush, Margin = new Thickness(16) };
+            var w = new Window
+            {
+                Width = 480, Height = 240, Background = Palette.FormBgBrush, Content = tb,
+                WindowDecorations = WindowDecorations.None,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            LinkText.ShowConfirmForRender(tb, label, url);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            LinkText.DismissPopup();
+            w.Close();
+        }
+    }
+
     // The Add feed dialog after a check: a good feed, a web page given by mistake (with its hint), plain http (the
     // warning), and an address already followed. Seeded directly, so nothing touches the network.
     private static void RenderFeedDialog(string outDir)
@@ -2759,11 +2791,17 @@ internal static class HeadlessRenderer
                 new(new Uri("https://devblogs.microsoft.com/dotnet/comments/feed/"), ".NET Blog » Comments Feed", "RSS"),
                 new(new Uri("https://devblogs.microsoft.com/dotnet/feed/atom/"), null, "Atom"),
             ]);
+        // Adding: the address box doubles as a search over the known feeds (a typed name isn't flagged).
+        Capture("feed_dialog_add_1x.png", "", null, null, adding: true);
+        Capture("feed_dialog_add_search_1x.png", "julia", null, null, adding: true);
 
         void Capture(string file, string url, Perch.Feeds.FeedDoc? doc, string? error,
-            IReadOnlyList<Perch.Feeds.FeedCandidate>? discovered = null)
+            IReadOnlyList<Perch.Feeds.FeedCandidate>? discovered = null, bool adding = false)
         {
-            var w = new FeedDialog(new Perch.Feeds.FeedSubscription { Id = "edit", Url = url }, existing);
+            var w = adding
+                ? new FeedDialog(null, existing)
+                : new FeedDialog(new Perch.Feeds.FeedSubscription { Id = "edit", Url = url }, existing);
+            if (adding) w.SeedTextForRender(url);
             w.SeedForRender(doc, error, discovered);
             w.Show();
             Dispatcher.UIThread.RunJobs();

@@ -125,10 +125,34 @@ public class FeedImageTests
     public void Xkcd_is_suggested_with_images_until_followed()
     {
         var xkcd = Assert.Single(FeedSuggestions.NotFollowed([]), s => s.Title == "xkcd");
-        var sub = FeedSuggestions.Subscribe(xkcd, FeedTestSupport.T0);
-        Assert.True(sub.ShowImages);
-        Assert.Equal("https://xkcd.com/atom.xml", sub.Url);
+        Assert.True(xkcd.ShowImages);
+        Assert.Equal("https://xkcd.com/atom.xml", xkcd.Url);
         Assert.DoesNotContain(FeedSuggestions.NotFollowed([new FeedSubscription { Url = "https://xkcd.com/atom.xml/" }]), s => s.Title == "xkcd");
+    }
+
+    [Fact]
+    public void Known_feeds_are_safe_unique_and_only_xkcd_turns_images_on()
+    {
+        Assert.All(FeedSuggestions.All, s => Assert.NotNull(FeedUrl.Safe(s.Url, null)));
+        Assert.All(FeedSuggestions.All, s => Assert.StartsWith("https://", s.Url));
+        Assert.Equal(FeedSuggestions.All.Count, FeedSuggestions.All.Select(s => s.Url).Distinct().Count());
+        Assert.Equal(["xkcd"], FeedSuggestions.All.Where(s => s.ShowImages).Select(s => s.Title));
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("  ", true)]
+    [InlineData("SIMON", true)]            // title, any case
+    [InlineData("llms", true)]             // blurb
+    [InlineData("simonwillison.net", true)] // address
+    [InlineData("simon llms", true)]       // every word, anywhere
+    [InlineData("simon rust", false)]      // one word missing
+    [InlineData("kubernetes", false)]
+    public void Known_feed_search_matches_every_word_in_title_blurb_or_address(string? query, bool expected)
+    {
+        var simon = Assert.Single(FeedSuggestions.All, s => s.Title == "Simon Willison");
+        Assert.Equal(expected, FeedSuggestions.Matches(simon, query));
     }
 
     [Fact]

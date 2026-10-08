@@ -49,6 +49,10 @@ internal sealed record MarkdownStyle(
     /// code reads as a text-colour change rather than a highlighted block. The doc viewer opts back into a
     /// subtle fill for its VS Code-preview look.</summary>
     public IBrush? InlineCodeBg { get; init; }
+
+    /// <summary>A plain left-click follows a link (no Ctrl needed) — for reading surfaces like the feed story
+    /// player. Off by default, so selecting link text in a session stays a plain drag.</summary>
+    public bool PlainClickLinks { get; init; }
 }
 
 /// <summary>The per-token-kind colours for fenced-code syntax highlighting (<see cref="CodeHighlight"/>),
@@ -273,7 +277,7 @@ internal sealed class MarkdownView
         var sink = new InlineSink(this, size, brush);
         var map = MarkdownSourceMap.ForInlines(_doc, owner, inlines, style, sink, extendLead);
         tb.Inlines = sink.Inlines;
-        LinkText.Attach(tb, sink.Links);
+        LinkText.Attach(tb, sink.Links, _s.PlainClickLinks);
         AttachFileRefs(tb, sink);
         BlockSelection.SetSourceMap(tb, map);
     }

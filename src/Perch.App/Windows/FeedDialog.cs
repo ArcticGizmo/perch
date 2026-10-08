@@ -1,6 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
+using Avalonia.Data;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -26,7 +30,7 @@ internal sealed class FeedDialog : Window
     private readonly FeedFetcher _fetcher = new();
     private readonly CancellationTokenSource _cts = new();
 
-    private readonly TextBox _urlBox;
+    private readonly AutoCompleteBox _urlBox;   // an address, or a search over the feeds Perch knows (adding only)
     private readonly TextBox _nameBox;
     private readonly CheckBox _images;
     private readonly TextBlock _urlNote;
@@ -65,8 +69,8 @@ internal sealed class FeedDialog : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = Palette.FormBgBrush;
 
-        _urlBox = SettingsUi.ThemedTextBox(existing?.Url ?? "");
-        _urlBox.PlaceholderText = "https://example.com/feed";
+        _urlBox = BuildAddressBox(existing?.Url ?? "",
+            existing is null ? FeedSuggestions.NotFollowed(all).ToList() : []);
         _check = SettingsUi.FlatButton("Check");
         _check.Margin = new Thickness(8, 0, 0, 0);
         _check.Click += async (_, _) => await CheckAsync();
@@ -130,8 +134,10 @@ internal sealed class FeedDialog : Window
 
         var layout = new StackPanel { Margin = new Thickness(16) };
         layout.Children.Add(SettingsUi.BodyText(
-            "Paste the address of an Atom or RSS feed, or of a site that has one. Perch checks it before saving. " +
-            "Feeds you add start quiet — " +
+            (existing is null
+                ? "Search the feeds Perch knows, or paste the address of any Atom or RSS feed (or of a site that has one). "
+                : "Paste the address of an Atom or RSS feed, or of a site that has one. ") +
+            "Perch checks it before saving. Feeds you add start quiet — " +
             "only entries published after this light up."));
         layout.Children.Add(SettingsUi.FieldCaption("Feed address"));
         layout.Children.Add(urlRow);
@@ -145,8 +151,85 @@ internal sealed class FeedDialog : Window
         Content = layout;
 
         _urlBox.TextChanged += (_, _) => OnUrlChanged();
+        // Picking a known feed puts its address in the box and checks it like any typed one. Done on close, not on
+        // selection, so arrowing through the list doesn't fetch every feed it passes.
+        _urlBox.DropDownClosed += (_, _) =>
+        {
+            if (_urlBox.SelectedItem is not FeedSuggestion s || _urlBox.Text != s.Url || _checkedUrl == s.Url) return;
+            _images.IsChecked = s.ShowImages;
+            _ = CheckAsync();
+        };
+        // Clicking the empty box offers the whole list — a click, not focus, so the box focused on open stays closed.
+        // Tunnelled (the inner TextBox handles the press) and posted so it runs after the press settles.
+        _urlBox.AddHandler(PointerPressedEvent,
+            (_, _) => Dispatcher.UIThread.Post(OpenSuggestionsIfEmpty, DispatcherPriority.Input),
+            RoutingStrategies.Tunnel);
         OnUrlChanged();
     }
+
+    // The address box: a stock AutoCompleteBox themed like SettingsUi.ThemedTextBox, whose dropdown lists the known
+    // feeds matching what's typed (FeedSuggestions.Matches); choosing one fills in its address.
+    private static AutoCompleteBox BuildAddressBox(string text, IReadOnlyList<FeedSuggestion> known)
+    {
+        var box = new AutoCompleteBox
+        {
+            Text = text, FontSize = 13, Foreground = Palette.FgBrush,
+            ItemsSource = known,
+            FilterMode = AutoCompleteFilterMode.Custom,
+            ItemFilter = (query, item) => item is FeedSuggestion s && FeedSuggestions.Matches(s, query),
+            ValueMemberBinding = new Binding(nameof(FeedSuggestion.Url)),
+            MinimumPrefixLength = 0, IsTextCompletionEnabled = false, MaxDropDownHeight = 320,
+            ItemTemplate = new FuncDataTemplate<FeedSuggestion>((s, _) => new StackPanel
+            {
+                Margin = new Thickness(0, 2),
+                Children =
+                {
+                    new TextBlock { Text = s?.Title, FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush },
+                    new TextBlock
+                    {
+                        Text = s?.Blurb, FontSize = 11.5, Foreground = Palette.MutedBrush,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                    },
+                },
+            }, supportsRecycling: true),
+        };
+        box.TemplateApplied += (_, e) =>
+        {
+            if (e.NameScope.Find<TextBox>("PART_TextBox") is { } inner)
+            {
+                // AutoCompleteBox's own placeholder property is the obsolete one UiConventionTests bans.
+                inner.PlaceholderText = known.Count > 0 ? "Search known feeds, or paste an address" : "https://example.com/feed";
+                inner.Background = Palette.ButtonBgBrush;
+                inner.BorderBrush = Palette.BorderBrush;
+                inner.BorderThickness = new Thickness(1);
+                inner.CornerRadius = new CornerRadius(3);
+                inner.Padding = new Thickness(6, 4);
+                inner.VerticalContentAlignment = VerticalAlignment.Center;
+            }
+            // Keep the dropdown to the box's width, on the form's surface.
+            if (e.NameScope.Find<Border>("PART_SuggestionsContainer") is { } cont)
+            {
+                cont.Background = Palette.FormBgBrush;
+                cont.BorderBrush = Palette.BorderBrush;
+                cont.BorderThickness = new Thickness(1);
+                cont.Bind(Layoutable.MaxWidthProperty, new Binding("Bounds.Width") { Source = box });
+            }
+            if (e.NameScope.Find<ListBox>("PART_SelectingItemsControl") is { } list)
+                ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+        };
+        return box;
+    }
+
+    private void OpenSuggestionsIfEmpty()
+    {
+        if (IsVisible && !_seeded && string.IsNullOrEmpty(_urlBox.Text) && KnownFeeds.Count > 0)
+            _urlBox.IsDropDownOpen = true;
+    }
+
+    private IReadOnlyList<FeedSuggestion> KnownFeeds => _urlBox.ItemsSource as IReadOnlyList<FeedSuggestion> ?? [];
+
+    // Typing a name ("julia") to search the known feeds isn't a bad address yet.
+    private bool SearchingKnownFeeds() => KnownFeeds.Any(s => FeedSuggestions.Matches(s, _urlBox.Text));
 
     protected override void OnOpened(EventArgs e)
     {
@@ -177,7 +260,10 @@ internal sealed class FeedDialog : Window
         string? note = null;
         bool warn = false, valid = parsed.Url is not null;
 
-        if (parsed.Problem is { } problem) { note = problem; warn = true; }
+        if (parsed.Problem is { } problem)
+        {
+            if (!SearchingKnownFeeds()) { note = problem; warn = true; }
+        }
         else if (parsed.Url is { } url && FeedAddress.IsDuplicate(url, _others, _existing?.Id))
         {
             note = "You already follow this feed.";
@@ -333,6 +419,13 @@ internal sealed class FeedDialog : Window
         _previewHint.Text = hint ?? "";
         _previewHint.IsVisible = hint is not null;
         _candidates.IsVisible = false;
+    }
+
+    /// <summary>Headless-render seam: type into the address box (no check, no network).</summary>
+    internal void SeedTextForRender(string text)
+    {
+        _seeded = true;
+        _urlBox.Text = text;
     }
 
     /// <summary>Headless-render seam: show a finished check without the network.</summary>

@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.15] - 2026-10-08
+
+- Feeds: follow Atom and RSS as story-style heads on the overlay
+- A story player for new posts, with recent history to scroll back through
+- Paste a site's address and Perch finds its feed
+- Optional notifications for new posts
+- Images per feed, off by default (xkcd comes with them on, for obvious reasons)
+- OPML import and export, for refugees from other feed readers
+- Feed content is shown as plain text (no scripts, no surprises)
+
+---
+
 ## [v0.5.14] - 2026-10-07
 
 - `perch` in PowerShell or cmd hands the prompt back cleanly (it was there; the cursor just didn't know)

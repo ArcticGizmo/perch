@@ -93,7 +93,7 @@ internal sealed class FeedStoryWindow : Window
 
     /// <summary>Raised when the window closes after the user resized it, with its size (DIP), for the app to
     /// remember.</summary>
-    public event Action<double, double>? Resized;
+    public event Action<double, double>? SizeChosen;
 
     private bool _userResized;
 
@@ -102,7 +102,7 @@ internal sealed class FeedStoryWindow : Window
         _host = host;
         _icon = icon;
         _p = palette ?? SessionPalette.Current;
-        _prose = _p.Prose with { BodySize = 14, RootMargin = new Thickness(0) };
+        _prose = _p.Prose with { BodySize = 14, RootMargin = new Thickness(0), PlainClickLinks = true };
 
         Title = "Feeds";
         WindowDecorations = WindowDecorations.None;
@@ -119,10 +119,12 @@ internal sealed class FeedStoryWindow : Window
         FontFamily = _p.Body;
 
         // ── Tray: every feed, the current one enlarged; close on the right ──
+        // The scroller fills the row (the heads centre themselves): a centred one is arranged empty at zero height
+        // when the window shows, and keeps that slot once Play fills it — the tray stayed blank until a resize.
         _trayScroll = new ScrollViewer
         {
             Content = _tray, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalAlignment = VerticalAlignment.Center,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
         var close = GlyphButton("✕", 14);
         close.Click += (_, _) => Close();
@@ -205,7 +207,7 @@ internal sealed class FeedStoryWindow : Window
         _host.Changed += OnHostChanged;
         Closed += (_, _) =>
         {
-            if (_userResized) Resized?.Invoke(Bounds.Width, Bounds.Height);
+            if (_userResized) SizeChosen?.Invoke(Bounds.Width, Bounds.Height);
             _host.Changed -= OnHostChanged;
             _anim?.Stop();
             _closing.Cancel();
@@ -660,6 +662,8 @@ internal sealed class FeedStoryWindow : Window
             if (isCurrent) currentHit = hit;
             _tray.Children.Add(hit);
         }
+        // Filled while visible: re-arrange explicitly (CLAUDE.md, "Filling a window's content after Show()").
+        _trayScroll.InvalidateArrange();
         if (currentHit is not null) Dispatcher.UIThread.Post(() => currentHit.BringIntoView());
     }
 
@@ -838,6 +842,12 @@ internal sealed class FeedStoryWindow : Window
     private void OnKey(object? sender, KeyEventArgs e)
     {
         if (e.KeyModifiers != KeyModifiers.None) return;   // Ctrl+C on selected text etc. pass through
+        // A link popup is open: any key closes it, and Escape stops there rather than closing the player.
+        if (LinkText.DismissPopup() && e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            return;
+        }
         switch (e.Key)
         {
             case Key.Right or Key.Space: Next(); break;
