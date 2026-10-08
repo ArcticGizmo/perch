@@ -2711,22 +2711,35 @@ internal static class HeadlessRenderer
         }
     }
 
-    // The GitHub alerts window seeded with the sample poll, in its "Needs you" (default) and "All open" views. The
-    // host is seeded directly (no gh, no timer) over an in-memory seen store, so the render touches no files.
+    // The GitHub dashboard seeded with the sample poll, in its "Needs you" (default), "All open" and "Dismissed"
+    // views, plus each grouping and an age window. The host is seeded directly (no gh, no timer) over in-memory seen
+    // and dismiss stores, so the render touches no files.
     private static void RenderGitHubAlertsWindow(string outDir)
     {
-        Capture("github_alerts_1x.png", needsYouOnly: true);
-        Capture("github_alerts_all_1x.png", needsYouOnly: false);
+        Capture("github_alerts_1x.png", GhView.NeedsYou);
+        Capture("github_alerts_all_1x.png", GhView.All);
         // A search narrowing the list (tab counts follow it), and one that matches nothing needing you.
-        Capture("github_alerts_search_1x.png", needsYouOnly: false, search: "api");
-        Capture("github_alerts_search_empty_1x.png", needsYouOnly: true, search: "json");
+        Capture("github_alerts_search_1x.png", GhView.All, search: "api");
+        Capture("github_alerts_search_empty_1x.png", GhView.NeedsYou, search: "json");
+        // The other groupings, and a row order by time.
+        Capture("github_alerts_by_reason_1x.png", GhView.All, options: new(GhGroupBy.Reason));
+        Capture("github_alerts_by_role_1x.png", GhView.All, options: new(GhGroupBy.Role));
+        Capture("github_alerts_flat_oldest_1x.png", GhView.All, options: new(GhGroupBy.None, GhSortBy.Oldest));
+        // A "last day" age window: the two older PRs drop out and the foot says so.
+        Capture("github_alerts_last_day_1x.png", GhView.All, options: new(MaxAgeDays: 1));
+        // Two PRs dismissed: gone from Needs you, listed under Dismissed with Restore.
+        string[] dismiss = ["https://github.com/acme/web/pull/418", "https://github.com/acme/api/pull/69"];
+        Capture("github_alerts_after_dismiss_1x.png", GhView.NeedsYou, dismiss: dismiss);
+        Capture("github_alerts_dismissed_1x.png", GhView.Dismissed, dismiss: dismiss);
 
-        void Capture(string file, bool needsYouOnly, string? search = null)
+        void Capture(string file, GhView view, string? search = null, GhListOptions? options = null, string[]? dismiss = null)
         {
-            using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), _ => { }, null);
+            using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), GitHubAlertsDismissStore.InMemory(), _ => { }, null);
             host.SeedForRender(SampleData.GitHubAlerts());
+            if (options is not null) host.SeedOptions(options);
+            foreach (var url in dismiss ?? []) host.Dismiss(url);
             var w = new GitHubAlertsWindow(host);
-            w.SetNeedsYouOnlyForRender(needsYouOnly, search);
+            w.SetViewForRender(view, search);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

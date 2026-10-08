@@ -504,8 +504,18 @@ public partial class App : Application
             _overlay.Canvas.TodosRequested += OpenTodos;
             // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
             // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
-            _gitHubHost = new Services.GitHubAlertsMonitorHost(
-                GitHubAlertsSeenStore.Load(), strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
+            _gitHubHost = new Services.GitHubAlertsMonitorHost(GitHubAlertsSeenStore.Load(), GitHubAlertsDismissStore.Load(),
+                strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
+            _gitHubHost.SeedOptions(new GhListOptions(
+                settings.GitHubDashboardGroupBy, settings.GitHubDashboardSortBy, settings.GitHubDashboardMaxAgeDays));
+            _gitHubHost.OptionsChanged += o =>
+            {
+                if (_appSettings is not { } s) return;
+                s.GitHubDashboardGroupBy = o.GroupBy;
+                s.GitHubDashboardSortBy = o.SortBy;
+                s.GitHubDashboardMaxAgeDays = o.MaxAgeDays;
+                s.Save();
+            };
             _overlay.Canvas.GitHubAlertsRequested += OpenGitHubAlerts;
             // Feeds: the engine behind the overlay's story-heads row (started/stopped from ApplyDisplaySettings per
             // ShowFeeds). Nothing is fetched while it's off. See docs/feeds-plan.md.

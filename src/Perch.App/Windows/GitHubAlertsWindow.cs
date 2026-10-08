@@ -12,13 +12,15 @@ using Perch.Data;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The GitHub alerts list, opened by clicking the overlay's GitHub strip. Your open pull
-/// requests grouped by repository, each with the reasons it needs you ("Review requested", "Changes requested by
-/// alice", "Ready to merge" …) and an "Open in GitHub" button — the only action for now. A filter at the top
-/// switches between just the PRs needing you (the default) and every open PR that involves you.
+/// The GitHub dashboard, opened by clicking the overlay's GitHub strip. Your open pull requests, each with the
+/// reasons it needs you ("Review requested", "Changes requested by alice", "Ready to merge" …), an "Open in GitHub"
+/// button and a "Dismiss" that hides it until its state changes. Tabs switch between the PRs needing you (the
+/// default), every open PR that involves you, and the ones you dismissed (each with "Restore"). A toolbar picks the
+/// grouping (repo / reason / role / none), the row order and an "Updated within" age window.
 ///
 /// <para>Reused via <c>WindowHost.ShowOrFocus</c> (<see cref="Retarget"/> re-renders). It owns no data: it renders
-/// <see cref="GitHubAlertsMonitorHost.Current"/> and re-renders on the host's <c>Changed</c>. Opening a PR marks it
+/// <see cref="GitHubAlertsMonitorHost.Current"/> and re-renders on the host's <c>Changed</c>. The view options live
+/// on the host (the age window trims the strip too), which persists them through the App. Opening a PR marks it
 /// seen through the host, which reclassifies at once — so a PR that only had new comments drops out of "Needs
 /// you" as you go to read them. Styled off <see cref="TodoWindow"/> so the popups read as one app.</para>
 /// </summary>
@@ -31,30 +33,38 @@ internal sealed class GitHubAlertsWindow : Window
     private static readonly IBrush Accent   = Palette.AccentBrush;
     private static readonly IBrush RowHover = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
 
+    // The toolbar pickers' choices, index-aligned with their ComboBox items.
+    private static readonly (GhGroupBy Value, string Label)[] GroupChoices =
+        [(GhGroupBy.Repo, "Repo"), (GhGroupBy.Reason, "Reason"), (GhGroupBy.Role, "Role"), (GhGroupBy.None, "None")];
+    private static readonly (GhSortBy Value, string Label)[] SortChoices =
+        [(GhSortBy.Urgency, "Most urgent"), (GhSortBy.Updated, "Recently updated"), (GhSortBy.Oldest, "Oldest first")];
+
     private readonly GitHubAlertsMonitorHost _host;
     private readonly TextBlock _subhead;
     private readonly Button _refresh;
-    private readonly Button _needsYouTab, _allTab;
+    private readonly Button _needsYouTab, _allTab, _dismissedTab;
     private readonly TextBox _search;
+    private readonly ComboBox _groupBox, _sortBox, _ageBox;
     private readonly StackPanel _list = new();
-    private bool _needsYouOnly = true;
+    private GhView _view = GhView.NeedsYou;
+    private bool _syncingPickers;
 
     public GitHubAlertsWindow(GitHubAlertsMonitorHost host)
     {
         _host = host;
 
-        Title = "GitHub alerts";
+        Title = "GitHub dashboard";
         WindowDecorations = WindowDecorations.None;
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 640;
-        Height = 620;
+        Width = 680;
+        Height = 660;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         // ── Header (draggable): title + status line, Refresh and close on the right ──
-        var heading = new TextBlock { Text = "GitHub alerts", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
+        var heading = new TextBlock { Text = "GitHub dashboard", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
         _subhead = new TextBlock { Foreground = Muted, FontSize = 12, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
         _refresh = OutlineButton("Refresh", Fg);
         _refresh.Click += (_, _) => _host.RefreshNow();
@@ -76,15 +86,18 @@ internal sealed class GitHubAlertsWindow : Window
         header.Children.Add(titles);
         header.Children.Add(actions);
 
-        // ── Filter: Needs you | All open, and a search box filling the rest of the row ──
+        // ── Filter: Needs you | All open | Dismissed, and a search box filling the rest of the row ──
         _needsYouTab = TabButton();
         _allTab = TabButton();
-        _needsYouTab.Click += (_, _) => { _needsYouOnly = true; Refresh(); };
-        _allTab.Click += (_, _) => { _needsYouOnly = false; Refresh(); };
+        _dismissedTab = TabButton();
+        _needsYouTab.Click += (_, _) => { _view = GhView.NeedsYou; Refresh(); };
+        _allTab.Click += (_, _) => { _view = GhView.All; Refresh(); };
+        _dismissedTab.Click += (_, _) => { _view = GhView.Dismissed; Refresh(); };
+        ToolTip.SetTip(_dismissedTab, "PRs you dismissed. Each comes back on its own when its state changes.");
         var tabs = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-            Children = { _needsYouTab, _allTab },
+            Children = { _needsYouTab, _allTab, _dismissedTab },
         };
         _search = new TextBox
         {
@@ -98,16 +111,36 @@ internal sealed class GitHubAlertsWindow : Window
         filterRow.Children.Add(tabs);
         filterRow.Children.Add(_search);
 
+        // ── View: Group by · Sort · Updated within (persisted through the host) ──
+        _groupBox = Picker(GroupChoices.Select(c => c.Label));
+        _sortBox = Picker(SortChoices.Select(c => c.Label));
+        _ageBox = Picker(GhListOptions.AgeChoices.Select(AgeLabel));
+        _groupBox.SelectionChanged += (_, _) => PickerChanged();
+        _sortBox.SelectionChanged += (_, _) => PickerChanged();
+        _ageBox.SelectionChanged += (_, _) => PickerChanged();
+        ToolTip.SetTip(_ageBox, "Hide PRs not updated in this long, here and on the overlay.");
+        var viewRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(18, 0, 18, 12),
+            Children =
+            {
+                PickerLabel("Group by"), _groupBox,
+                PickerLabel("Sort", 10), _sortBox,
+                PickerLabel("Updated", 10), _ageBox,
+            },
+        };
+
         var headerBorder = new Border
         {
             Background = Bg, BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = new StackPanel { Children = { header, filterRow } },
+            Child = new StackPanel { Children = { header, filterRow, viewRow } },
         };
         // The Border has a Background, so its empty space is hit-testable and the whole band drags the window.
         headerBorder.PointerPressed += (_, e) =>
         {
             if (e.Source is Button || (e.Source is Visual v && v.FindAncestorOfType<Button>() is not null)) return;
             if (e.Source is Visual tv && (tv is TextBox || tv.FindAncestorOfType<TextBox>() is not null)) return;
+            if (e.Source is Visual cv && (cv is ComboBox || cv.FindAncestorOfType<ComboBox>() is not null)) return;
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
         };
 
@@ -137,10 +170,10 @@ internal sealed class GitHubAlertsWindow : Window
     /// refresh-on-both-paths contract.</summary>
     public void Retarget() => Refresh();
 
-    /// <summary>Headless-render seam: pick the filter tab and, optionally, a search.</summary>
-    internal void SetNeedsYouOnlyForRender(bool needsYouOnly, string? search = null)
+    /// <summary>Headless-render seam: pick the tab and, optionally, a search.</summary>
+    internal void SetViewForRender(GhView view, string? search = null)
     {
-        _needsYouOnly = needsYouOnly;
+        _view = view;
         _search.Text = search ?? "";
         Refresh();
     }
@@ -150,21 +183,52 @@ internal sealed class GitHubAlertsWindow : Window
         if (IsVisible) Refresh();
     }
 
+    // A picker moved: hand the new options to the host, which reclassifies, persists, and raises Changed (→ Refresh).
+    private void PickerChanged()
+    {
+        if (_syncingPickers) return;
+        var o = _host.Options;
+        _host.Options = o with
+        {
+            GroupBy = _groupBox.SelectedIndex >= 0 ? GroupChoices[_groupBox.SelectedIndex].Value : o.GroupBy,
+            SortBy = _sortBox.SelectedIndex >= 0 ? SortChoices[_sortBox.SelectedIndex].Value : o.SortBy,
+            MaxAgeDays = _ageBox.SelectedIndex >= 0 ? GhListOptions.AgeChoices[_ageBox.SelectedIndex] : o.MaxAgeDays,
+        };
+    }
+
+    // Shows the host's options in the pickers without feeding the change back. An age no picker offers (a hand-edited
+    // settings file) shows no selection but still applies.
+    private void SyncPickers(GhListOptions o)
+    {
+        _syncingPickers = true;
+        try
+        {
+            _groupBox.SelectedIndex = Array.FindIndex(GroupChoices, c => c.Value == o.GroupBy);
+            _sortBox.SelectedIndex = Array.FindIndex(SortChoices, c => c.Value == o.SortBy);
+            _ageBox.SelectedIndex = GhListOptions.AgeChoices.ToList().IndexOf(o.MaxAgeDays);
+        }
+        finally { _syncingPickers = false; }
+    }
+
     private void Refresh()
     {
         var snap = _host.Current;
+        var options = _host.Options;
         var now = DateTime.UtcNow;
 
         _subhead.Text = SubheadText(snap, now);
         _refresh.IsEnabled = !_host.Busy;
         _refresh.Content = _host.Busy ? "Checking…" : "Refresh";
+        SyncPickers(options);
 
         // The tab counts follow the search, so each says how many matches it holds.
         string query = _search.Text?.Trim() ?? "";
-        int needs = snap?.Filter(needsYouOnly: true, query).Count() ?? 0;
-        int all = snap?.Filter(needsYouOnly: false, query).Count() ?? 0;
-        StyleTab(_needsYouTab, $"Needs you  {needs}", _needsYouOnly);
-        StyleTab(_allTab, $"All open  {all}", !_needsYouOnly);
+        int needs = snap?.Filter(GhView.NeedsYou, query).Count() ?? 0;
+        int all = snap?.Filter(GhView.All, query).Count() ?? 0;
+        int dismissed = snap?.Filter(GhView.Dismissed, query).Count() ?? 0;
+        StyleTab(_needsYouTab, $"Needs you  {needs}", _view == GhView.NeedsYou);
+        StyleTab(_allTab, $"All open  {all}", _view == GhView.All);
+        StyleTab(_dismissedTab, $"Dismissed  {dismissed}", _view == GhView.Dismissed);
 
         _list.Children.Clear();
         if (snap is null)
@@ -173,33 +237,57 @@ internal sealed class GitHubAlertsWindow : Window
             return;
         }
 
-        var groups = snap.ByRepo(_needsYouOnly, query);
+        // What the age window is hiding, said once at the foot of the list (or in the empty text).
+        string? ageNote = snap.TooOldCount > 0
+            ? $"{Plural(snap.TooOldCount, "older PR")} hidden: not updated in the {AgeLabel(options.MaxAgeDays).ToLowerInvariant()}."
+            : null;
+
+        var groups = snap.Grouped(_view, options, query);
         if (groups.Count == 0)
         {
             if (snap.Error is { } err && snap.Items.Count == 0)
                 _list.Children.Add(EmptyText(err));
             else if (query.Length > 0)
-                _list.Children.Add(EmptyText(_needsYouOnly && all > 0
+                _list.Children.Add(EmptyText(_view == GhView.NeedsYou && all > 0
                     ? $"Nothing needing you matches \"{query}\". All open has {all}."
                     : $"No PRs match \"{query}\"."));
             else
-                _list.Children.Add(EmptyText(_needsYouOnly
-                    ? "Nothing needs you right now."
-                    : "No open pull requests involve you."));
+                _list.Children.Add(EmptyText(_view switch
+                {
+                    GhView.NeedsYou  => "Nothing needs you right now.",
+                    GhView.Dismissed => "Nothing dismissed. Dismiss a PR to hide it until something changes on it.",
+                    _                => "No open pull requests involve you.",
+                }));
+            if (ageNote is not null) _list.Children.Add(FootText(ageNote));
             return;
         }
 
-        foreach (var (repo, items) in groups)
+        foreach (var (title, items) in groups)
         {
-            _list.Children.Add(new TextBlock
-            {
-                FontSize = 10.5, FontWeight = FontWeight.SemiBold, Foreground = Muted, LetterSpacing = 0.6,
-                Margin = new Thickness(20, 14, 20, 6), TextTrimming = TextTrimming.CharacterEllipsis,
-                Text = $"{repo.ToUpperInvariant()}   {items.Count}",
-            });
-            foreach (var item in items) _list.Children.Add(BuildRow(item, now));
+            // GroupBy.None is one untitled group: no header, the rows start at the top.
+            if (title.Length > 0)
+                _list.Children.Add(new TextBlock
+                {
+                    FontSize = 10.5, FontWeight = FontWeight.SemiBold, Foreground = Muted, LetterSpacing = 0.6,
+                    Margin = new Thickness(20, 14, 20, 6), TextTrimming = TextTrimming.CharacterEllipsis,
+                    Text = $"{title.ToUpperInvariant()}   {items.Count}",
+                });
+            else
+                _list.Children.Add(new Border { Height = 8 });
+            foreach (var item in items) _list.Children.Add(BuildRow(item, now, options.GroupBy));
         }
+        if (ageNote is not null) _list.Children.Add(FootText(ageNote));
     }
+
+    private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+
+    private static string AgeLabel(int days) => days switch
+    {
+        <= 0 => "Any time",
+        1    => "Last day",
+        7    => "Last week",
+        _    => $"Last {days} days",
+    };
 
     private string SubheadText(GitHubAlertsSnapshot? snap, DateTime now)
     {
@@ -211,18 +299,19 @@ internal sealed class GitHubAlertsWindow : Window
         return string.Join(" · ", parts);
     }
 
-    private Control BuildRow(GhPrItem item, DateTime now)
+    private Control BuildRow(GhPrItem item, DateTime now, GhGroupBy groupBy)
     {
         var pr = item.Pr;
 
         var title = new TextBlock
         {
             Text = pr.Title.Length > 0 ? pr.Title : "(untitled)", FontSize = 13, FontWeight = FontWeight.SemiBold,
-            Foreground = item.NeedsYou ? Fg : Muted, TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = item.NeedsYou && !item.Dismissed ? Fg : Muted, TextTrimming = TextTrimming.CharacterEllipsis,
         };
 
-        // "#77 · yours" for your own PR; "#80 · frank · assigned" for someone else's.
-        var meta = new List<string> { $"#{pr.Number}" };
+        // "#77 · yours" for your own PR; "#80 · frank · assigned" for someone else's. When the groups aren't repos,
+        // the repo leads the line instead ("acme/api#77 · yours").
+        var meta = new List<string> { groupBy == GhGroupBy.Repo ? $"#{pr.Number}" : $"{pr.Repo}#{pr.Number}" };
         bool yours = pr.Relation.HasFlag(GhPrRelation.Author);
         if (!yours && pr.Author.Length > 0) meta.Add(pr.Author);
         meta.Add(Role(pr.Relation));
@@ -243,8 +332,6 @@ internal sealed class GitHubAlertsWindow : Window
         }
 
         var open = OutlineButton("Open in GitHub", Fg);
-        open.VerticalAlignment = VerticalAlignment.Center;
-        open.Margin = new Thickness(12, 0, 0, 0);
         ToolTip.SetTip(open, pr.Url);
         open.Click += (_, _) =>
         {
@@ -252,13 +339,31 @@ internal sealed class GitHubAlertsWindow : Window
             _host.MarkSeen(pr.Url);
         };
 
+        // Dismiss hides the PR until its state changes; in the Dismissed tab the same slot restores it.
+        var dismiss = GhostButton(item.Dismissed ? "Restore" : "Dismiss");
+        ToolTip.SetTip(dismiss, item.Dismissed
+            ? "Show this PR again now"
+            : "Hide until something changes: new comments or reviews, a review decision, checks starting or stopping " +
+              "failing, conflicts, a draft marked ready, or (on someone else's PR) a new push");
+        dismiss.Click += (_, _) =>
+        {
+            if (item.Dismissed) _host.Restore(pr.Url);
+            else _host.Dismiss(pr.Url);
+        };
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0), Children = { dismiss, open },
+        };
+
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        Grid.SetColumn(open, 1);
+        Grid.SetColumn(actions, 1);
         grid.Children.Add(body);
-        grid.Children.Add(open);
+        grid.Children.Add(actions);
 
         // The left rule carries the headline reason's colour, so the list scans by urgency.
-        var rule = item.NeedsYou ? new SolidColorBrush(KindColor(item.Reasons[0].Kind)) : (IBrush)Brushes.Transparent;
+        var rule = item.NeedsYou && !item.Dismissed ? new SolidColorBrush(KindColor(item.Reasons[0].Kind)) : (IBrush)Brushes.Transparent;
         var row = new Border
         {
             Child = grid, Padding = new Thickness(18, 9, 18, 9), Margin = new Thickness(0, 0, 0, 1),
@@ -293,6 +398,32 @@ internal sealed class GitHubAlertsWindow : Window
     private static TextBlock EmptyText(string text) => new()
     {
         Text = text, Foreground = Muted, FontSize = 12.5, Margin = new Thickness(20, 18), TextWrapping = TextWrapping.Wrap,
+    };
+
+    private static TextBlock FootText(string text) => new()
+    {
+        Text = text, Foreground = Muted, FontSize = 11.5, FontStyle = FontStyle.Italic,
+        Margin = new Thickness(20, 12, 20, 4), TextWrapping = TextWrapping.Wrap,
+    };
+
+    private static ComboBox Picker(IEnumerable<string> labels)
+    {
+        var box = new ComboBox { FontSize = 12, MinWidth = 96, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var l in labels) box.Items.Add(l);
+        return box;
+    }
+
+    private static TextBlock PickerLabel(string text, double leftGap = 0) => new()
+    {
+        Text = text, Foreground = Muted, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(leftGap, 0, 0, 0),
+    };
+
+    // A quieter, borderless button for the secondary row action, so "Open in GitHub" stays the obvious one.
+    private static Button GhostButton(string text) => new()
+    {
+        Content = text, Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+        CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 5), FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
     };
 
     private static Button TabButton() => new()

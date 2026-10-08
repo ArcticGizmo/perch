@@ -168,8 +168,8 @@ public class GitHubAlertsTests
             new GitHubFetchResult(Me, [quiet, review], null, T0), new Dictionary<string, DateTime>());
 
         Assert.Equal(1, snap.NeedsYouCount);
-        Assert.Equal(["zzz/busy", "aaa/quiet"], snap.ByRepo(needsYouOnly: false).Select(g => g.Repo));
-        Assert.Equal(["zzz/busy"], snap.ByRepo(needsYouOnly: true).Select(g => g.Repo));
+        Assert.Equal(["zzz/busy", "aaa/quiet"], snap.Grouped(GhView.All, new()).Select(g => g.Title));
+        Assert.Equal(["zzz/busy"], snap.Grouped(GhView.NeedsYou, new()).Select(g => g.Title));
     }
 
     [Fact]
@@ -223,10 +223,223 @@ public class GitHubAlertsTests
         var quiet = Pr(GhPrRelation.Author) with { Repo = "acme/api", Url = "b", Title = "Charts too" };
         var snap = GitHubAlertsClassifier.Build(new GitHubFetchResult(Me, [review, quiet], null, T0), new Dictionary<string, DateTime>());
 
-        Assert.Equal(2, snap.Filter(needsYouOnly: false, "charts").Count());
-        Assert.Single(snap.Filter(needsYouOnly: true, "charts"));
-        Assert.Equal(["acme/api"], snap.ByRepo(needsYouOnly: false, "api").Select(g => g.Repo));
-        Assert.Empty(snap.ByRepo(needsYouOnly: true, "api"));
+        Assert.Equal(2, snap.Filter(GhView.All, "charts").Count());
+        Assert.Single(snap.Filter(GhView.NeedsYou, "charts"));
+        Assert.Equal(["acme/api"], snap.Grouped(GhView.All, new(), "api").Select(g => g.Title));
+        Assert.Empty(snap.Grouped(GhView.NeedsYou, new(), "api"));
+    }
+
+    // ── Dashboard: grouping, sorting, age window ──
+
+    // Three PRs across two repos: a review request (bob, acme/web, updated an hour ago), your PR with failing checks
+    // (acme/api, two days ago), and your quiet PR (acme/web, ten days ago).
+    private static GitHubAlertsSnapshot Dashboard(IReadOnlyDictionary<string, string>? dismissed = null, DateTime? since = null)
+    {
+        var review = Pr(GhPrRelation.ReviewRequested, "bob") with { Repo = "acme/web", Number = 10, Url = "review", UpdatedUtc = T0.AddHours(-1) };
+        var failing = Pr(GhPrRelation.Author) with { Repo = "acme/api", Number = 20, Url = "failing", UpdatedUtc = T0.AddDays(-2), Checks = GhChecks.Failing };
+        var quiet = Pr(GhPrRelation.Author) with { Repo = "acme/web", Number = 30, Url = "quiet", UpdatedUtc = T0.AddDays(-10) };
+        return GitHubAlertsClassifier.Build(new GitHubFetchResult(Me, [quiet, failing, review], null, T0),
+            new Dictionary<string, DateTime>(), dismissed, since);
+    }
+
+    private static List<string> Urls(IEnumerable<GhPrItem> items) => items.Select(i => i.Pr.Url).ToList();
+
+    [Fact]
+    public void GroupByReasonOrdersByHeadlineThenNothingToDo()
+    {
+        var groups = Dashboard().Grouped(GhView.All, new(GhGroupBy.Reason));
+        Assert.Equal(["Review requested", "Checks failing", "Nothing to do"], groups.Select(g => g.Title));
+        Assert.Equal(["quiet"], Urls(groups[2].Items));
+    }
+
+    [Fact]
+    public void GroupByRolePutsYoursFirst()
+    {
+        var groups = Dashboard().Grouped(GhView.All, new(GhGroupBy.Role));
+        Assert.Equal(["Yours", "Review requested"], groups.Select(g => g.Title));
+        Assert.Equal(["failing", "quiet"], Urls(groups[0].Items));      // urgency: needing you first
+    }
+
+    [Theory]
+    [InlineData(GhSortBy.Urgency, new[] { "review", "failing", "quiet" })]   // headline priority: review before checks
+    [InlineData(GhSortBy.Updated, new[] { "review", "failing", "quiet" })]
+    [InlineData(GhSortBy.Oldest, new[] { "quiet", "failing", "review" })]
+    public void GroupByNoneIsOneUntitledListInTheChosenOrder(GhSortBy sort, string[] expected)
+    {
+        var groups = Dashboard().Grouped(GhView.All, new(GhGroupBy.None, sort));
+        var (title, items) = Assert.Single(groups);
+        Assert.Equal("", title);
+        Assert.Equal(expected, Urls(items));
+    }
+
+    [Fact]
+    public void UrgencyRanksByHeadlineReasonNotJustRecency()
+    {
+        // The failing PR is the most recently updated, but a review request outranks failing checks.
+        var review = Pr(GhPrRelation.ReviewRequested, "bob") with { Url = "review", UpdatedUtc = T0.AddDays(-3) };
+        var failing = Pr(GhPrRelation.Author) with { Url = "failing", UpdatedUtc = T0, Checks = GhChecks.Failing };
+        var snap = GitHubAlertsClassifier.Build(new GitHubFetchResult(Me, [failing, review], null, T0), new Dictionary<string, DateTime>());
+        Assert.Equal(["review", "failing"], Urls(Assert.Single(snap.Grouped(GhView.All, new(GhGroupBy.None))).Items));
+    }
+
+    [Fact]
+    public void AgeWindowHidesOldPrsFromEveryTabAndTheCounts()
+    {
+        var snap = Dashboard(since: T0.AddDays(-7));
+        Assert.Equal(1, snap.TooOldCount);
+        Assert.DoesNotContain("quiet", Urls(snap.Filter(GhView.All, null)));
+        Assert.Equal(2, snap.NeedsYouCount);
+
+        var tighter = Dashboard(since: T0.AddDays(-1));      // the failing PR (2 days old) goes too
+        Assert.Equal(1, tighter.NeedsYouCount);
+        Assert.Equal([(GhAlertKind.ReviewRequested, 1)], tighter.KindCounts());
+    }
+
+    [Fact]
+    public void AnUnreadableUpdateTimeIsNeverTooOld()
+    {
+        var pr = Pr(GhPrRelation.Author) with { UpdatedUtc = DateTime.MinValue };
+        var snap = GitHubAlertsClassifier.Build(new GitHubFetchResult(Me, [pr], null, T0),
+            new Dictionary<string, DateTime>(), updatedSinceUtc: T0);
+        Assert.False(Assert.Single(snap.Items).TooOld);
+    }
+
+    [Theory]
+    [InlineData((GhGroupBy)99, (GhSortBy)99, -5, GhGroupBy.Repo, GhSortBy.Urgency, 0)]
+    [InlineData(GhGroupBy.Role, GhSortBy.Oldest, 30, GhGroupBy.Role, GhSortBy.Oldest, 30)]
+    public void OptionsNormalizeUnknownValues(GhGroupBy g, GhSortBy s, int age, GhGroupBy eg, GhSortBy es, int eage) =>
+        Assert.Equal(new GhListOptions(eg, es, eage), new GhListOptions(g, s, age).Normalize());
+
+    [Fact]
+    public void UpdatedSinceIsNullForAnyAge()
+    {
+        Assert.Null(new GhListOptions().UpdatedSince(T0));
+        Assert.Equal(T0.AddDays(-7), new GhListOptions(MaxAgeDays: 7).UpdatedSince(T0));
+    }
+
+    // ── Dismiss ──
+
+    [Fact]
+    public void ADismissedPrLeavesTheTabsAndTheStripUntilItsFingerprintChanges()
+    {
+        var failing = Dashboard().Items.Single(i => i.Pr.Url == "failing").Pr;
+        var dismissed = new Dictionary<string, string> { ["failing"] = GitHubAlertsClassifier.Fingerprint(failing, Me) };
+        var snap = Dashboard(dismissed);
+
+        Assert.Equal(["review"], Urls(snap.Filter(GhView.NeedsYou, null)));
+        Assert.DoesNotContain("failing", Urls(snap.Filter(GhView.All, null)));
+        Assert.Equal(["failing"], Urls(snap.Filter(GhView.Dismissed, null)));
+        Assert.Equal(1, snap.NeedsYouCount);
+        Assert.Equal([(GhAlertKind.ReviewRequested, 1)], snap.KindCounts());
+
+        // A stale fingerprint no longer hides it.
+        var stale = Dashboard(new Dictionary<string, string> { ["failing"] = "something else" });
+        Assert.Empty(stale.Filter(GhView.Dismissed, null));
+        Assert.Equal(2, stale.NeedsYouCount);
+    }
+
+    public static TheoryData<string, Func<GhPullRequest, GhPullRequest>> FingerprintChanges => new()
+    {
+        { "new comment by someone else", p => p with { Events = [.. p.Events, Ev("alice", GhEventKind.Comment, 60)] } },
+        { "a review", p => p with { Events = [.. p.Events, Ev("alice", GhEventKind.Approved, 60)] } },
+        { "review decision", p => p with { ReviewDecision = "APPROVED" } },
+        { "checks start failing", p => p with { Checks = GhChecks.Failing } },
+        { "conflicts appear", p => p with { Mergeable = GhMergeable.Conflicting } },
+        { "draft marked ready", p => p with { IsDraft = !p.IsDraft } },
+        { "review re-requested", p => p with { Relation = p.Relation | GhPrRelation.ReviewRequested } },
+    };
+
+    [Theory]
+    [MemberData(nameof(FingerprintChanges))]
+    public void FingerprintChangesWhenTheStatusDoes(string why, Func<GhPullRequest, GhPullRequest> change)
+    {
+        var pr = Pr(GhPrRelation.Author, Me, Ev("alice", GhEventKind.Comment, 5));
+        Assert.True(GitHubAlertsClassifier.Fingerprint(pr, Me) != GitHubAlertsClassifier.Fingerprint(change(pr), Me), why);
+    }
+
+    public static TheoryData<string, Func<GhPullRequest, GhPullRequest>> FingerprintNoise => new()
+    {
+        { "your own comment", p => p with { Events = [.. p.Events, Ev(Me, GhEventKind.Comment, 60)] } },
+        { "a bot comment", p => p with { Events = [.. p.Events, Ev("ci", GhEventKind.Comment, 60, bot: true)] } },
+        { "a dismissed review", p => p with { Events = [.. p.Events, Ev("alice", GhEventKind.Dismissed, 60)] } },
+        { "base moved (BEHIND)", p => p with { MergeState = "BEHIND" } },
+        { "mergeable recomputing", p => p with { Mergeable = GhMergeable.Unknown } },
+        { "checks pending → passing", p => p with { Checks = GhChecks.Pending } },
+        { "your own push", p => p with { LastCommitUtc = T0.AddHours(3) } },
+        { "updated time alone", p => p with { UpdatedUtc = T0.AddHours(3) } },
+    };
+
+    [Theory]
+    [MemberData(nameof(FingerprintNoise))]
+    public void FingerprintIgnoresNoiseAndYourOwnMoves(string why, Func<GhPullRequest, GhPullRequest> change)
+    {
+        var pr = Pr(GhPrRelation.Author, Me, Ev("alice", GhEventKind.Comment, 5));
+        Assert.True(GitHubAlertsClassifier.Fingerprint(pr, Me) == GitHubAlertsClassifier.Fingerprint(change(pr), Me), why);
+    }
+
+    [Fact]
+    public void APushToSomeoneElsesPrChangesItsFingerprint()
+    {
+        var pr = Pr(GhPrRelation.ReviewRequested, "bob");
+        Assert.NotEqual(GitHubAlertsClassifier.Fingerprint(pr, Me),
+            GitHubAlertsClassifier.Fingerprint(pr with { LastCommitUtc = T0.AddHours(3) }, Me));
+    }
+
+    [Fact]
+    public void DismissStoreRoundTripsAndReconciles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "perch-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(dir, "github-alerts-dismissed.json");
+        try
+        {
+            var store = GitHubAlertsDismissStore.LoadFrom(path);
+            store.Dismiss("https://github.com/a/b/pull/1", "fp1", T0);
+            store.Dismiss("https://github.com/a/b/pull/2", "fp2", T0);
+            store.Dismiss("https://github.com/a/b/pull/3", "fp3", T0);
+            store.Save();
+
+            var reloaded = GitHubAlertsDismissStore.LoadFrom(path);
+            Assert.Equal(new GhDismissal("fp1", T0), reloaded.All["https://github.com/a/b/pull/1"]);
+            Assert.Equal(DateTimeKind.Utc, reloaded.All["https://github.com/a/b/pull/1"].AtUtc.Kind);
+            Assert.Equal("fp2", reloaded.Fingerprints["HTTPS://github.com/a/b/pull/2"]);   // URL case-insensitive
+
+            // #1 unchanged → kept; #2 moved on → dropped; #3 closed (absent) → dropped.
+            var now = new Dictionary<string, string>
+            {
+                ["https://github.com/a/b/pull/1"] = "fp1",
+                ["https://github.com/a/b/pull/2"] = "fp2-changed",
+            };
+            Assert.True(reloaded.Reconcile(now));
+            Assert.False(reloaded.Reconcile(now));
+            Assert.Equal(["https://github.com/a/b/pull/1"], reloaded.All.Keys);
+
+            Assert.True(reloaded.Restore("https://github.com/a/b/pull/1"));
+            Assert.False(reloaded.Restore("https://github.com/a/b/pull/1"));
+            Assert.Empty(reloaded.All);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DismissStoreToleratesAGarbledFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "perch-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "github-alerts-dismissed.json");
+        try
+        {
+            File.WriteAllText(path, """{ "u": { "Fingerprint": "" , "AtUtc": "2026-10-01T00:00:00Z" }, "v": null }""");
+            Assert.Empty(GitHubAlertsDismissStore.LoadFrom(path).All);     // empty fingerprint and null are dropped
+            File.WriteAllText(path, "{ not json");
+            Assert.Empty(GitHubAlertsDismissStore.LoadFrom(path).All);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
     }
 
     // ── Parsing ──

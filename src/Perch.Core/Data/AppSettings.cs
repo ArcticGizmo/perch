@@ -606,6 +606,13 @@ internal sealed class AppSettings
     // How often (minutes) the GitHub alerts poll runs. Clamped to 2–60 when applied. Defaults to 5.
     public int GitHubAlertsIntervalMinutes { get; set; } = 5;
 
+    // The GitHub dashboard window's view: grouping, row order, and "Updated within" days (0 = any; otherwise older
+    // PRs are hidden from the window and the overlay strip alike). Set from the window's own toolbar — UI state, not
+    // Settings-window controls. Read through GhListOptions.Normalize. See docs/github-dashboard-plan.md.
+    public GhGroupBy GitHubDashboardGroupBy { get; set; } = GhGroupBy.Repo;
+    public GhSortBy GitHubDashboardSortBy { get; set; } = GhSortBy.Urgency;
+    public int GitHubDashboardMaxAgeDays { get; set; }
+
     // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
     // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
     // docs/feeds-plan.md.

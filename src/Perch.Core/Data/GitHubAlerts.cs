@@ -81,10 +81,49 @@ public enum GhAlertKind
 /// <summary>One reason a PR needs you, with its one-line human text ("Changes requested by alice").</summary>
 public readonly record struct GhAlertReason(GhAlertKind Kind, string Text);
 
-/// <summary>A PR plus the reasons (possibly none) it needs you.</summary>
+/// <summary>A PR plus the reasons (possibly none) it needs you, and whether the user's view hides it: dismissed until
+/// its state changes, or not updated within the dashboard's age window.</summary>
 public sealed record GhPrItem(GhPullRequest Pr, IReadOnlyList<GhAlertReason> Reasons)
 {
     public bool NeedsYou => Reasons.Count > 0;
+
+    /// <summary>Dismissed, and its state fingerprint still matches the one it was dismissed at.</summary>
+    public bool Dismissed { get; init; }
+
+    /// <summary>Not updated within the "Updated within" window — hidden from every tab and the strip.</summary>
+    public bool TooOld { get; init; }
+
+    /// <summary>Counts on the strip and shows under Needs you / All open.</summary>
+    public bool Shown => !Dismissed && !TooOld;
+}
+
+/// <summary>The window's tabs: what needs you, every open PR, or the ones you dismissed. Too-old PRs are in none.</summary>
+public enum GhView { NeedsYou, All, Dismissed }
+
+/// <summary>How the window groups its rows. <see cref="None"/> is one flat list with no headers.</summary>
+public enum GhGroupBy { Repo, Reason, Role, None }
+
+/// <summary>How rows are ordered within a group: most urgent first, most recently updated first, or stalest first.</summary>
+public enum GhSortBy { Urgency, Updated, Oldest }
+
+/// <summary>
+/// The dashboard's view options, persisted as UI state on <see cref="AppSettings"/>. <see cref="MaxAgeDays"/> of 0
+/// means any age; otherwise PRs not updated in that many days are hidden everywhere, strip included.
+/// </summary>
+public sealed record GhListOptions(GhGroupBy GroupBy = GhGroupBy.Repo, GhSortBy SortBy = GhSortBy.Urgency, int MaxAgeDays = 0)
+{
+    /// <summary>The choices the window's "Updated within" picker offers (0 = any).</summary>
+    public static readonly IReadOnlyList<int> AgeChoices = [0, 1, 7, 30, 90];
+
+    /// <summary>Values read back from a settings file as real ones: an enum value no build defines falls back to the
+    /// default, and an age that isn't positive means "any".</summary>
+    public GhListOptions Normalize() => new(
+        Enum.IsDefined(GroupBy) ? GroupBy : GhGroupBy.Repo,
+        Enum.IsDefined(SortBy) ? SortBy : GhSortBy.Urgency,
+        Math.Max(0, MaxAgeDays));
+
+    /// <summary>The oldest "updated" time still shown, or null when any age is.</summary>
+    public DateTime? UpdatedSince(DateTime nowUtc) => MaxAgeDays > 0 ? nowUtc.AddDays(-MaxAgeDays) : null;
 }
 
 /// <summary>The raw result of one poll: who you are, the open PRs that involve you, and an error line when
@@ -95,26 +134,96 @@ public sealed record GitHubFetchResult(string? Login, IReadOnlyList<GhPullReques
 /// first, plus the fetch's time and any error.</summary>
 public sealed record GitHubAlertsSnapshot(string? Login, IReadOnlyList<GhPrItem> Items, string? Error, DateTime FetchedUtc)
 {
-    public int NeedsYouCount => Items.Count(i => i.NeedsYou);
+    /// <summary>PRs needing you that aren't dismissed or too old — the strip's headline count.</summary>
+    public int NeedsYouCount => Items.Count(i => i.Shown && i.NeedsYou);
 
-    /// <summary>The PRs grouped by repository for the window: repos with something needing you first, then
-    /// alphabetical; within a repo, PRs needing you first, then most recently updated. When
-    /// <paramref name="needsYouOnly"/> is set, PRs (and so repos) with nothing to do are dropped; a non-empty
-    /// <paramref name="query"/> keeps only the PRs it <see cref="Matches"/>.</summary>
-    public IReadOnlyList<(string Repo, IReadOnlyList<GhPrItem> Items)> ByRepo(bool needsYouOnly, string? query = null) =>
-        Filter(needsYouOnly, query)
-             .GroupBy(i => i.Pr.Repo, StringComparer.OrdinalIgnoreCase)
-             .Select(g => (Repo: g.First().Pr.Repo, Items: (IReadOnlyList<GhPrItem>)g
-                 .OrderByDescending(i => i.NeedsYou)
-                 .ThenByDescending(i => i.Pr.UpdatedUtc)
-                 .ToList()))
-             .OrderByDescending(g => g.Items.Any(i => i.NeedsYou))
-             .ThenBy(g => g.Repo, StringComparer.OrdinalIgnoreCase)
-             .ToList();
+    /// <summary>How many PRs the "Updated within" window hides, across every tab.</summary>
+    public int TooOldCount => Items.Count(i => i.TooOld);
 
-    /// <summary>The items the window would show for a tab + search, ungrouped — its tab counts read this.</summary>
-    public IEnumerable<GhPrItem> Filter(bool needsYouOnly, string? query) =>
-        Items.Where(i => (!needsYouOnly || i.NeedsYou) && Matches(i, query));
+    /// <summary>The items the window would show for a tab + search, ungrouped — its tab counts read this. Too-old PRs
+    /// are in no tab; dismissed ones only in <see cref="GhView.Dismissed"/>.</summary>
+    public IEnumerable<GhPrItem> Filter(GhView view, string? query) =>
+        Items.Where(i => !i.TooOld && view switch
+        {
+            GhView.NeedsYou  => !i.Dismissed && i.NeedsYou,
+            GhView.All       => !i.Dismissed,
+            GhView.Dismissed => i.Dismissed,
+            _                => false,
+        } && Matches(i, query));
+
+    /// <summary>
+    /// The window's rows for a tab + search, grouped and sorted per <paramref name="options"/>. Group order:
+    /// by repo, repos with something needing you first then A–Z; by reason, the headline reason in priority order
+    /// with "Nothing to do" last; by role, yours → review requested → assigned. <see cref="GhGroupBy.None"/> yields
+    /// one group with an empty title (the window draws no header for it). Within a group rows follow
+    /// <see cref="GhListOptions.SortBy"/>; ties fall back to most recently updated, then PR number.
+    /// </summary>
+    public IReadOnlyList<(string Title, IReadOnlyList<GhPrItem> Items)> Grouped(GhView view, GhListOptions options, string? query = null)
+    {
+        var rows = Filter(view, query).ToList();
+        if (rows.Count == 0) return [];
+
+        IReadOnlyList<GhPrItem> Sort(IEnumerable<GhPrItem> items) => (options.SortBy switch
+        {
+            GhSortBy.Updated => items.OrderByDescending(i => i.Pr.UpdatedUtc),
+            GhSortBy.Oldest  => items.OrderBy(i => i.Pr.UpdatedUtc),
+            _                => items.OrderByDescending(i => i.NeedsYou)
+                                     .ThenBy(i => i.NeedsYou ? (int)i.Reasons[0].Kind : int.MaxValue)
+                                     .ThenByDescending(i => i.Pr.UpdatedUtc),
+        }).ThenByDescending(i => i.Pr.UpdatedUtc).ThenBy(i => i.Pr.Number).ToList();
+
+        switch (options.GroupBy)
+        {
+            case GhGroupBy.None:
+                return [("", Sort(rows))];
+
+            case GhGroupBy.Reason:
+                return rows.GroupBy(i => i.NeedsYou ? (int)i.Reasons[0].Kind : int.MaxValue)
+                           .OrderBy(g => g.Key)
+                           .Select(g => (g.Key == int.MaxValue ? "Nothing to do" : ReasonGroupTitle((GhAlertKind)g.Key), Sort(g)))
+                           .ToList();
+
+            case GhGroupBy.Role:
+                return rows.GroupBy(i => RoleRank(i.Pr.Relation))
+                           .OrderBy(g => g.Key)
+                           .Select(g => (RoleGroupTitle(g.Key), Sort(g)))
+                           .ToList();
+
+            default:
+                return rows.GroupBy(i => i.Pr.Repo, StringComparer.OrdinalIgnoreCase)
+                           .Select(g => (Title: g.First().Pr.Repo, Items: Sort(g)))
+                           .OrderByDescending(g => g.Items.Any(i => i.NeedsYou))
+                           .ThenBy(g => g.Title, StringComparer.OrdinalIgnoreCase)
+                           .ToList();
+        }
+    }
+
+    // "Yours" wins over the other relations, as on the row's meta line.
+    private static int RoleRank(GhPrRelation r) =>
+        r.HasFlag(GhPrRelation.Author) ? 0
+        : r.HasFlag(GhPrRelation.ReviewRequested) ? 1
+        : r.HasFlag(GhPrRelation.Assignee) ? 2
+        : 3;
+
+    private static string RoleGroupTitle(int rank) => rank switch
+    {
+        0 => "Yours",
+        1 => "Review requested",
+        2 => "Assigned to you",
+        _ => "Other",
+    };
+
+    private static string ReasonGroupTitle(GhAlertKind kind) => kind switch
+    {
+        GhAlertKind.ReviewRequested  => "Review requested",
+        GhAlertKind.ChangesRequested => "Changes requested",
+        GhAlertKind.NewActivity      => "New comments or reviews",
+        GhAlertKind.ChecksFailing    => "Checks failing",
+        GhAlertKind.Conflicts        => "Merge conflicts",
+        GhAlertKind.ReadyToMerge     => "Ready to merge",
+        GhAlertKind.Assigned         => "Assigned to you",
+        _                            => kind.ToString(),
+    };
 
     /// <summary>
     /// Whether <paramref name="item"/> matches a search: every whitespace-separated word must appear (ignoring
@@ -141,9 +250,11 @@ public sealed record GitHubAlertsSnapshot(string? Login, IReadOnlyList<GhPrItem>
 
     /// <summary>How many PRs carry each kind of reason, in priority order, omitting kinds with none — the overlay
     /// strip's symbol + count chips. A PR with two reasons (changes requested <em>and</em> failing checks) counts
-    /// under both, so each chip reads as "PRs in this state"; the chips needn't sum to <see cref="NeedsYouCount"/>.</summary>
+    /// under both, so each chip reads as "PRs in this state"; the chips needn't sum to <see cref="NeedsYouCount"/>.
+    /// Dismissed and too-old PRs don't count.</summary>
     public IReadOnlyList<(GhAlertKind Kind, int Count)> KindCounts() =>
-        Items.SelectMany(i => i.Reasons.Select(r => r.Kind).Distinct())
+        Items.Where(i => i.Shown)
+             .SelectMany(i => i.Reasons.Select(r => r.Kind).Distinct())
              .GroupBy(k => k)
              .OrderBy(g => g.Key)
              .Select(g => (g.Key, g.Count()))
@@ -243,14 +354,50 @@ public static class GitHubAlertsClassifier
             || (pr.ReviewDecision.Length == 0 && pr.HasApproval);
     }
 
-    /// <summary>Classifies every PR in a fetch against the seen markers into the rendered snapshot.</summary>
-    public static GitHubAlertsSnapshot Build(GitHubFetchResult fetch, IReadOnlyDictionary<string, DateTime> seen)
+    /// <summary>
+    /// Classifies every PR in a fetch against the seen markers into the rendered snapshot. A PR is
+    /// <see cref="GhPrItem.Dismissed"/> when <paramref name="dismissed"/> (URL → fingerprint) holds its current
+    /// <see cref="Fingerprint"/>, and <see cref="GhPrItem.TooOld"/> when it was last updated before
+    /// <paramref name="updatedSinceUtc"/> (a PR with no readable update time is never too old).
+    /// </summary>
+    public static GitHubAlertsSnapshot Build(GitHubFetchResult fetch, IReadOnlyDictionary<string, DateTime> seen,
+        IReadOnlyDictionary<string, string>? dismissed = null, DateTime? updatedSinceUtc = null)
     {
         var login = fetch.Login ?? "";
         var items = fetch.Prs
-            .Select(pr => new GhPrItem(pr, Classify(pr, login, seen.TryGetValue(pr.Url, out var s) ? s : null)))
+            .Select(pr => new GhPrItem(pr, Classify(pr, login, seen.TryGetValue(pr.Url, out var s) ? s : null))
+            {
+                Dismissed = dismissed is not null && dismissed.TryGetValue(pr.Url, out var fp) && fp == Fingerprint(pr, login),
+                TooOld = updatedSinceUtc is { } since && pr.UpdatedUtc > DateTime.MinValue && pr.UpdatedUtc < since,
+            })
             .ToList();
         return new GitHubAlertsSnapshot(fetch.Login, items, fetch.Error, fetch.FetchedUtc);
+    }
+
+    /// <summary>
+    /// A PR's state as it matters to someone who has handed it off — a dismissal holds while this is unchanged. In:
+    /// your relation to it, draft, review decision, checks failing or not, conflicting or not, the head commit
+    /// (only on someone else's PR — on yours a push is your own move) and the newest non-bot activity by someone
+    /// else. Out, because they churn without news: merge state (BEHIND whenever the base moves), an unknown
+    /// mergeable (GitHub computes it lazily), pending → green checks, your own activity, bots and seen markers.
+    /// </summary>
+    public static string Fingerprint(GhPullRequest pr, string login)
+    {
+        bool mine = pr.Relation.HasFlag(GhPrRelation.Author) || SameUser(pr.Author, login);
+        var theirs = pr.Events
+            .Where(e => !e.IsBot && !SameUser(e.Actor, login) && e.Kind != GhEventKind.Dismissed)
+            .Select(e => e.AtUtc)
+            .DefaultIfEmpty(DateTime.MinValue)
+            .Max();
+        long commit = !mine && pr.LastCommitUtc is { } c ? c.Ticks : 0;
+        return string.Join('|',
+            (int)pr.Relation,
+            pr.IsDraft ? 1 : 0,
+            pr.ReviewDecision,
+            pr.Checks == GhChecks.Failing ? 1 : 0,
+            pr.Mergeable == GhMergeable.Conflicting ? 1 : 0,
+            commit,
+            theirs.Ticks);
     }
 
     // "3 new comments · alice, bob" — counted and attributed, newest actor first, at most two names.

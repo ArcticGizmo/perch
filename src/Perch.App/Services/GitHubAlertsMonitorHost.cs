@@ -14,11 +14,16 @@ namespace Perch.Avalonia.Services;
 /// <para>One fetch at a time; a tick that lands while one is in flight is skipped. Ticks are skipped while the
 /// desktop is locked (nobody is looking, and it spares the rate limit); the first tick after unlocking catches
 /// up. A failed poll keeps the last good list on screen, so a network blip doesn't blank the strip. Marking a PR
-/// seen (opening it from the window) reclassifies the cached fetch at once, with no extra gh call.</para>
+/// seen (opening it from the window), dismissing or restoring one, or changing the view options reclassifies the
+/// cached fetch at once, with no extra gh call.</para>
+///
+/// <para>The host owns the dashboard's <see cref="Options"/> (not just the window) because the "Updated within"
+/// window also trims the overlay strip's counts, so the strip and the window always agree.</para>
 /// </summary>
 internal sealed class GitHubAlertsMonitorHost : IDisposable
 {
     private readonly GitHubAlertsSeenStore _seen;
+    private readonly GitHubAlertsDismissStore _dismissed;
     private readonly Action<OverlayCanvas.GitHubStrip> _onStrip;
     private readonly ISessionLock? _lock;
     private readonly DispatcherTimer _timer;
@@ -26,6 +31,7 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
     private GitHubFetchResult? _last;       // the latest fetch (on error, the last good list carrying the error)
     private bool _running, _inFlight;
     private int _generation;                // bumped by Stop, so a fetch from before it is dropped
+    private GhListOptions _options = new();
 
     /// <summary>The latest classified snapshot, or null before the first answer / while stopped.</summary>
     public GitHubAlertsSnapshot? Current { get; private set; }
@@ -36,13 +42,40 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
     /// <summary>Raised on the UI thread whenever <see cref="Current"/> or <see cref="Busy"/> changes.</summary>
     public event Action? Changed;
 
-    public GitHubAlertsMonitorHost(GitHubAlertsSeenStore seen, Action<OverlayCanvas.GitHubStrip> onStrip, ISessionLock? sessionLock)
+    /// <summary>Raised when the window changes <see cref="Options"/>, so the App can persist them.</summary>
+    public event Action<GhListOptions>? OptionsChanged;
+
+    public GitHubAlertsMonitorHost(GitHubAlertsSeenStore seen, GitHubAlertsDismissStore dismissed,
+        Action<OverlayCanvas.GitHubStrip> onStrip, ISessionLock? sessionLock)
     {
         _seen = seen;
+        _dismissed = dismissed;
         _onStrip = onStrip;
         _lock = sessionLock;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
         _timer.Tick += (_, _) => Poll(force: false);
+    }
+
+    /// <summary>The dashboard's grouping, order and age window. Setting it reclassifies at once (the age window
+    /// trims the strip) and, when it actually changed, raises <see cref="OptionsChanged"/>.</summary>
+    public GhListOptions Options
+    {
+        get => _options;
+        set
+        {
+            var next = value.Normalize();
+            if (next == _options) return;
+            _options = next;
+            Publish();
+            OptionsChanged?.Invoke(next);
+        }
+    }
+
+    /// <summary>Adopts persisted options at startup without raising <see cref="OptionsChanged"/>.</summary>
+    public void SeedOptions(GhListOptions options)
+    {
+        _options = options.Normalize();
+        if (_running) Publish();
     }
 
     /// <summary>The poll interval, clamped to 2–60 minutes. Takes effect from the next tick.</summary>
@@ -84,6 +117,24 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
         Publish();
     }
 
+    /// <summary>Hides the PR until its state changes (see <see cref="GitHubAlertsClassifier.Fingerprint"/>). A no-op
+    /// for a PR the latest fetch doesn't hold.</summary>
+    public void Dismiss(string url)
+    {
+        if (_last?.Prs.FirstOrDefault(p => string.Equals(p.Url, url, StringComparison.OrdinalIgnoreCase)) is not { } pr) return;
+        _dismissed.Dismiss(pr.Url, GitHubAlertsClassifier.Fingerprint(pr, _last.Login ?? ""), DateTime.UtcNow);
+        _dismissed.Save();
+        Publish();
+    }
+
+    /// <summary>Brings a dismissed PR back.</summary>
+    public void Restore(string url)
+    {
+        if (!_dismissed.Restore(url)) return;
+        _dismissed.Save();
+        Publish();
+    }
+
     /// <summary>Headless-render seam: adopt <paramref name="fetch"/> as the latest poll without a timer or gh.</summary>
     internal void SeedForRender(GitHubFetchResult fetch)
     {
@@ -113,8 +164,16 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
             var result = t.IsCompletedSuccessfully ? t.Result : new GitHubFetchResult(null, [], "GitHub check failed", DateTime.UtcNow);
             if (result.Error is not null && _last is { Error: null } good)
                 result = good with { Error = result.Error };
-            else if (result.Error is null && _seen.Prune(result.Prs.Select(p => p.Url)))
-                _seen.Save();
+            else if (result.Error is null)
+            {
+                if (_seen.Prune(result.Prs.Select(p => p.Url))) _seen.Save();
+                // Only a full, successful open set may expire dismissals: closed PRs and ones whose state moved on.
+                var login = result.Login ?? "";
+                var now = result.Prs
+                    .GroupBy(p => p.Url, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => GitHubAlertsClassifier.Fingerprint(g.First(), login), StringComparer.OrdinalIgnoreCase);
+                if (_dismissed.Reconcile(now)) _dismissed.Save();
+            }
             _last = result;
             Publish();
         }));
@@ -123,7 +182,9 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
     // Reclassifies the cached fetch into Current, pushes the overlay strip, and tells the window.
     private void Publish()
     {
-        Current = _running && _last is { } fetch ? GitHubAlertsClassifier.Build(fetch, _seen.All) : null;
+        Current = _running && _last is { } fetch
+            ? GitHubAlertsClassifier.Build(fetch, _seen.All, _dismissed.Fingerprints, _options.UpdatedSince(DateTime.UtcNow))
+            : null;
         _onStrip(ToStrip(Current));
         Changed?.Invoke();
     }
@@ -135,7 +196,7 @@ internal sealed class GitHubAlertsMonitorHost : IDisposable
         if (s is null) return new(OverlayCanvas.GitHubStripStatus.Checking, 0, 0, "");
         if (s.Error is { } err && s.Items.Count == 0)
             return new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, err);
-        return new(OverlayCanvas.GitHubStripStatus.Ok, s.NeedsYouCount, s.Items.Count, "", s.KindCounts());
+        return new(OverlayCanvas.GitHubStripStatus.Ok, s.NeedsYouCount, s.Items.Count(i => i.Shown), "", s.KindCounts());
     }
 
     public void Dispose()

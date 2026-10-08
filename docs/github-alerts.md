@@ -14,12 +14,29 @@ Setting: **Settings → Integrations → GitHub alerts** (`AppSettings.ShowGitHu
   shows a tooltip spelling each symbol out. Otherwise "No PRs need you · 5 open", "checking…", or a one-line error
   (gh not found / not signed in / GitHub didn't respond). Clicking anywhere on the line opens the window, whose
   reason pills use the same colours as the symbols.
-- **Window** (`GitHubAlertsWindow`): PRs grouped by repo (repos needing you first), each row showing the title,
-  `#number · author/yours · role · updated …`, a pill per reason, and **Open in GitHub**, the only action for
-  now. Filter tabs: **Needs you** (default) and **All open**, beside a search box (Ctrl+F) that keeps PRs where
-  every word appears in the title, repo, author, number (`#412` or `412`) or reason text
-  (`GitHubAlertsSnapshot.Matches`); the tab counts follow the search. Refresh button. Esc clears the search,
-  then closes.
+- **Window** (`GitHubAlertsWindow`, titled "GitHub dashboard"): each row shows the title,
+  `#number · author/yours · role · updated …` (with the repo in front when not grouping by repo), a pill per
+  reason, **Dismiss** and **Open in GitHub**. Filter tabs: **Needs you** (default), **All open** and
+  **Dismissed** (rows there offer **Restore**), beside a search box (Ctrl+F) that keeps PRs where every word
+  appears in the title, repo, author, number (`#412` or `412`) or reason text (`GitHubAlertsSnapshot.Matches`).
+  The tab counts follow the search. A toolbar picks **Group by** (Repo / Reason / Role / None), **Sort** (Most
+  urgent / Recently updated / Oldest first) and **Updated** (Any time / last day / week / 30 / 90 days). Refresh
+  button. Esc clears the search, then closes.
+
+## Dismiss and view options
+
+See `docs/github-dashboard-plan.md` (parts 1 and 2) for the design.
+
+- **Dismiss** hides a PR until its `GitHubAlertsClassifier.Fingerprint` changes: new non-bot activity by someone
+  else, review decision, checks starting or stopping failing, conflicts, draft flag, your relation to it, or a new
+  push on someone else's PR. Your own moves, bots, merge-state churn and pending → green checks don't count. Stored
+  in `%AppData%/<profile>/github-alerts-dismissed.json` (`GitHubAlertsDismissStore`). After each successful poll
+  `Reconcile` deletes entries whose PR closed or whose fingerprint moved on, so a PR doesn't quietly vanish again
+  if its state swings back.
+- **View options** (`GhListOptions`) live on the monitor host, because the age window also trims the overlay
+  strip's counts, so the strip and the window always agree. They persist as UI state on `AppSettings`
+  (`GitHubDashboardGroupBy` / `SortBy` / `MaxAgeDays`, in `SettingsRegistryTests.NotSettings`). The age window is
+  applied on the client only, on top of the first 50 PRs per search.
 
 ## Where the data comes from
 
@@ -62,7 +79,8 @@ URL and pruned to the open set after each successful poll.
 - Only the newest 30 comments and 30 reviews per PR are read, and the first 50 PRs per search.
 - `committedDate` stands in for "when you last pushed". A rebase that keeps old commit dates won't count as a
   move.
-- No desktop notifications yet, and no actions besides opening the PR. The session-row PR glyph
+- No desktop notifications yet. Row actions are open and dismiss; starting a session from a PR is part 3 of
+  `docs/github-dashboard-plan.md`. The session-row PR glyph
   (`ShowPullRequests`) is a separate feature and is unchanged.
 - The window has no tests (UI). Check it with `render` (`overlay_github_*.png`, including the `_narrow` and
   `_two` chip probes, and `github_alerts_*.png`).
