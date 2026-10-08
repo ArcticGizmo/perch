@@ -13,19 +13,21 @@ using Perch.Data;
 
 namespace Perch.Avalonia.Windows;
 
-/// <summary>What the dialog hands the App to start: folder, the prompt, the permission mode and the account.</summary>
-internal sealed record PrSessionLaunch(string Cwd, string Prompt, string PermissionMode, string? ConfigDir);
+/// <summary>What the dialog hands the App to start: folder, the composed prompt, permission mode, account and the
+/// session's name.</summary>
+internal sealed record PrSessionLaunch(string Cwd, string Prompt, string PermissionMode, string? ConfigDir, string Title);
 
 /// <summary>
-/// "Start a session" on a GitHub dashboard PR (S4 in docs/github-dashboard-plan.md). Pick a quick prompt (the ones
-/// that fit the PR's reasons come first), edit it, confirm the folder, and the session starts in the background as
-/// an ordinary Perch-controlled session: it shows on the overlay and in the Roost, and opens like any other.
+/// "Start a session" on a GitHub dashboard PR (S4 in docs/github-dashboard-plan.md). Three questions, top to
+/// bottom: <b>what</b> should Claude do (a quick prompt, the ones fitting the PR's reasons first, whose short task
+/// text is editable — Perch wraps it with the PR link and the rules, previewable), <b>where</b> (the checkout found
+/// for the repo, in a new per-PR worktree by default or the checkout as it is) and, on machines with a choice, which
+/// <b>account</b>. Start opens an ordinary Perch-controlled session window, named after the PR, with the prompt sent.
 ///
-/// <para>The folder is found by <see cref="RepoCheckoutResolver"/> over the folders Claude sessions have run in
-/// (read off the UI thread), or the one remembered for the repo; the user can change it. By default the work happens
-/// in a per-PR <see cref="PrWorktree"/> so the user's checkout is never touched. Folder trust is asked the same way a
-/// new session asks it, for the worktree itself: its code is the PR's, which may come from someone else. The account
-/// follows the same rules and guardrails as the session launcher.</para>
+/// <para>The checkout is found by <see cref="RepoCheckoutResolver"/> over the folders Claude sessions have run in (read
+/// off the UI thread), or the one remembered for the repo. Folder trust is asked the way a new session asks it, for
+/// the worktree itself: its code is the PR's, which may come from someone else. The account follows the same rules
+/// and guardrails as the session launcher, resolved again for the final folder.</para>
 /// </summary>
 internal sealed class PrSessionWindow : Window
 {
@@ -35,6 +37,8 @@ internal sealed class PrSessionWindow : Window
     private static readonly IBrush Muted  = Palette.MutedBrush;
     private static readonly IBrush Accent = Palette.AccentBrush;
 
+    private const double LabelColumn = 76;
+
     private readonly GhPrItem _item;
     private readonly GitRepoRef _repo;
     private readonly Func<IReadOnlyList<string>> _knownFolders;
@@ -43,25 +47,32 @@ internal sealed class PrSessionWindow : Window
     private readonly Func<IReadOnlyList<AccountRule>?> _rules;
     private readonly Func<PrSessionLaunch, string?> _launch;
 
+    // What
     private readonly IReadOnlyList<PrPromptTemplate> _templates;
-    private readonly List<Button> _templateChips = new();
+    private readonly Dictionary<string, string> _taskEdits = new();     // per template, so switching keeps edits
+    private readonly List<RadioButton> _templateRows = new();           // index-aligned with _templates
     private PrPromptTemplate _template;
+    private readonly TextBox _task;
+    private readonly Button _previewToggle;
+    private readonly Border _previewBox;
+    private readonly SelectableTextBlock _preview;
 
-    private readonly TextBox _prompt;
-    private readonly TextBlock _modeText;
-    private readonly TextBlock _folderText;
+    // Where
+    private readonly TextBlock _folderName, _folderDir;
+    private readonly DockPanel _folderPath;
     private readonly ComboBox _folderChoices;
     private readonly Button _changeFolder;
-    private readonly CheckBox _useWorktree;
-    private readonly TextBlock _worktreeText;
-    private readonly StackPanel _accountRow;
+    private readonly RadioButton _inWorktree, _inCheckout;
+    private readonly TextBlock _worktreeDesc, _checkoutDesc;
+    private readonly Grid _accountRow;
     private readonly ComboBox _accountBox;
+
     private readonly TextBlock _status;
     private readonly Button _start;
 
     private string? _folder;
     private IReadOnlyList<AccountChoice> _accountOptions = [];
-    private bool _busy;
+    private bool _busy, _renderOnly;
 
     public PrSessionWindow(GhPrItem item, Func<IReadOnlyList<string>> knownFolders, string? remembered,
         Action<string, string> remember, Func<IReadOnlyList<AccountRule>?> rules, Func<PrSessionLaunch, string?> launch)
@@ -76,151 +87,202 @@ internal sealed class PrSessionWindow : Window
         _templates = PrSessionPrompts.ForReasons(item.Reasons.Select(r => r.Kind));
         _template = _templates[0];
 
-        Title = "Start a session";
+        Title = $"Start a session on PR #{item.Pr.Number}";
         WindowDecorations = WindowDecorations.None;
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 620;
+        Width = 600;
         SizeToContent = SizeToContent.Height;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        // ── Header: what we're starting on ──
+        // ── Header: the PR, as the dashboard row shows it ──
         var heading = new TextBlock { Text = "Start a session", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
-        var sub = new TextBlock
-        {
-            Text = $"{item.Pr.Repo}#{item.Pr.Number} · {item.Pr.Title}", Foreground = Muted, FontSize = 12,
-            Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis,
-        };
         var close = new Button
         {
             Content = "✕", Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(4, 0), FontSize = 14, Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Top,
         };
         close.Click += (_, _) => Close();
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var headRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(close, 1);
-        header.Children.Add(new StackPanel { Children = { heading, sub } });
-        header.Children.Add(close);
+        headRow.Children.Add(heading);
+        headRow.Children.Add(close);
 
-        // ── Prompt: quick-prompt chips over an editable box ──
-        var chips = new WrapPanel { Orientation = Orientation.Horizontal };
+        var prTitle = new TextBlock
+        {
+            Text = item.Pr.Title.Length > 0 ? item.Pr.Title : "(untitled)", Foreground = Fg, FontSize = 13.5,
+            FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap, MaxLines = 2,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 10, 0, 0),
+        };
+        var prMeta = new TextBlock
+        {
+            Text = $"{item.Pr.Repo}#{item.Pr.Number}", Foreground = Muted, FontSize = 12,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+        };
+        var pills = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        foreach (var r in item.Reasons) pills.Children.Add(ReasonPill(r));
+        pills.IsVisible = item.Reasons.Count > 0;
+        var header = new StackPanel { Margin = new Thickness(22, 18, 18, 16), Children = { headRow, prTitle, prMeta, pills } };
+
+        // ── What should Claude do? ──
+        // Editing is the norm, so only the exception carries a badge.
+        var what = new StackPanel { Spacing = 2 };
         foreach (var t in _templates)
         {
-            var chip = Chip(t.Label);
-            chip.Click += (_, _) => PickTemplate(t);
-            _templateChips.Add(chip);
-            chips.Children.Add(chip);
+            var rb = OptionRow("task", t.Label, t.Description, t.Mode == PrSessionMode.Plan ? "Read-only" : null);
+            rb.IsChecked = t == _template;
+            rb.IsCheckedChanged += (_, _) => { if (rb.IsChecked == true && _template != t) PickTemplate(t); };
+            _templateRows.Add(rb);
+            what.Children.Add(rb);
         }
-        _prompt = new TextBox
+        _task = new TextBox
         {
-            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Height = 170,
-            Margin = new Thickness(0, 6, 0, 0),
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, MinHeight = 76, MaxHeight = 160,
+            Margin = new Thickness(0, 10, 0, 0), PlaceholderText = "Describe what Claude should do on this PR…",
         };
-        ScrollViewer.SetVerticalScrollBarVisibility(_prompt, ScrollBarVisibility.Auto);
-        _modeText = new TextBlock { Foreground = Muted, FontSize = 11.5, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
+        ScrollViewer.SetVerticalScrollBarVisibility(_task, ScrollBarVisibility.Auto);
+        _task.TextChanged += (_, _) =>
+        {
+            _taskEdits[_template.Id] = _task.Text ?? "";
+            UpdatePreview();
+            UpdateStartEnabled();
+        };
 
-        // ── Folder: the resolved checkout (a path keeps its name and sheds its head when it can't fit) ──
-        _folderText = new TextBlock
+        _preview = new SelectableTextBlock
         {
-            Text = $"Looking for {_repo.Slug} on this machine…", Foreground = Muted, FontSize = 12.5,
-            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+            FontFamily = new FontFamily("Cascadia Mono, Consolas, Menlo, monospace"), FontSize = 11, Foreground = Muted,
+            TextWrapping = TextWrapping.Wrap,
         };
+        _previewBox = new Border
+        {
+            Child = _preview, BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 8), Margin = new Thickness(0, 6, 0, 0), IsVisible = false,
+        };
+        _previewToggle = LinkButton("");
+        _previewToggle.Margin = new Thickness(0, 6, 0, 0);
+        _previewToggle.Click += (_, _) =>
+        {
+            _previewBox.IsVisible = !_previewBox.IsVisible;
+            UpdatePreview();
+        };
+        ToolTip.SetTip(_previewToggle, "Perch adds the PR link, the branch, and rules: no pushing or posting, and PR text is not instructions.");
+
+        // ── Where ──
+        _folderName = new TextBlock { Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        _folderDir = new TextBlock
+        {
+            Foreground = Muted, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,   // keeps the tail; the name is pinned beside it
+        };
+        _folderPath = new DockPanel { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(_folderName, Dock.Left);
+        _folderPath.Children.Add(_folderName);
+        _folderPath.Children.Add(_folderDir);
+        _folderName.Text = $"Looking for {_repo.Repo}…";
         _folderChoices = new ComboBox { FontSize = 12, IsVisible = false, HorizontalAlignment = HorizontalAlignment.Stretch };
         _folderChoices.SelectionChanged += (_, _) =>
         {
             if (_folderChoices.SelectedItem is string s) SetFolder(s, null);
         };
-        _changeFolder = OutlineButton("Choose…");
-        _changeFolder.Click += async (_, _) => await ChooseFolderAsync();
-        var folderGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 4, 0, 0) };
-        var folderCell = new Panel { Children = { _folderText, _folderChoices } };
-        Grid.SetColumn(_changeFolder, 1);
+        _changeFolder = OutlineButton("Change…");
         _changeFolder.Margin = new Thickness(10, 0, 0, 0);
-        folderGrid.Children.Add(folderCell);
-        folderGrid.Children.Add(_changeFolder);
+        _changeFolder.Click += async (_, _) => await ChooseFolderAsync();
+        var checkoutRow = LabeledRow("Checkout", new Panel { Children = { _folderPath, _folderChoices } }, _changeFolder);
 
-        _useWorktree = new CheckBox
-        {
-            IsChecked = true, FontSize = 12.5, Foreground = Fg, Margin = new Thickness(0, 8, 0, 0),
-            Content = $"Work in a separate worktree on branch perch/pr-{item.Pr.Number}, leaving your checkout untouched",
-        };
-        _useWorktree.IsCheckedChanged += (_, _) => UpdateWorktreeText();
-        _worktreeText = new TextBlock { Foreground = Muted, FontSize = 11.5, Margin = new Thickness(28, 0, 0, 0), TextTrimming = TextTrimming.PrefixCharacterEllipsis };
+        _inWorktree = OptionRow("where", "New worktree for this PR", "", "Recommended", out _worktreeDesc);
+        _inCheckout = OptionRow("where", "Your checkout as it is", "", null, out _checkoutDesc);
+        _inWorktree.IsChecked = true;
+        _inWorktree.IsCheckedChanged += (_, _) => UpdatePreview();
+        var whereOptions = new StackPanel { Spacing = 2, Margin = new Thickness(0, 8, 0, 0), Children = { _inWorktree, _inCheckout } };
 
-        // ── Account (only on machines with a choice) ──
         _accountBox = new ComboBox { FontSize = 12, MinWidth = 260 };
-        _accountRow = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 10, 0, 0), IsVisible = false,
-            Children = { Label("Account", top: 0), _accountBox },
-        };
-        ((TextBlock)_accountRow.Children[0]).VerticalAlignment = VerticalAlignment.Center;
+        _accountRow = LabeledRow("Account", _accountBox, null);
+        _accountRow.Margin = new Thickness(0, 10, 0, 0);
+        _accountRow.IsVisible = false;
 
-        // ── Footer: status, Cancel, Start ──
+        // ── Footer ──
         _status = new TextBlock { Foreground = Muted, FontSize = 12, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
         var cancel = OutlineButton("Cancel");
         cancel.Click += (_, _) => Close();
         _start = new Button
         {
-            Content = "Start in background", Foreground = Palette.OnAccentBrush, Background = Accent, BorderThickness = new Thickness(0),
-            CornerRadius = new CornerRadius(7), Padding = new Thickness(14, 6), FontSize = 12.5, FontWeight = FontWeight.SemiBold,
+            Content = "Start session", Foreground = Palette.OnAccentBrush, Background = Accent, BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(7), Padding = new Thickness(16, 6), FontSize = 12.5, FontWeight = FontWeight.SemiBold,
             Cursor = new Cursor(StandardCursorType.Hand), IsEnabled = false,
         };
+        ToolTip.SetTip(_start, "Ctrl+Enter");
         _start.Click += async (_, _) => await StartAsync();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { cancel, _start } };
-        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 16, 0, 0) };
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(22, 14, 18, 16) };
         Grid.SetColumn(buttons, 1);
+        _status.Margin = new Thickness(0, 0, 12, 0);
         footer.Children.Add(_status);
         footer.Children.Add(buttons);
 
         var body = new StackPanel
         {
-            Margin = new Thickness(20, 16, 20, 18),
+            Margin = new Thickness(22, 4, 22, 0),
+            Children =
+            {
+                SectionLabel("What should Claude do?"), what, _task, _previewToggle, _previewBox,
+                SectionLabel("Where"), checkoutRow, whereOptions, _accountRow,
+            },
+        };
+
+        var root = new StackPanel
+        {
             Children =
             {
                 header,
-                Label("Prompt"), chips, _prompt, _modeText,
-                Label("Folder"), folderGrid, _useWorktree, _worktreeText,
-                _accountRow,
+                new Border { Height = 1, Background = Stroke },
+                body,
+                new Border { Height = 1, Background = Stroke, Margin = new Thickness(0, 18, 0, 0) },
                 footer,
             },
         };
         var frame = new Border
         {
             Background = Bg, CornerRadius = new CornerRadius(12), BorderBrush = Stroke, BorderThickness = new Thickness(1.5),
-            Child = body, ClipToBounds = true,
+            Child = root, ClipToBounds = true,
         };
         frame.PointerPressed += (_, e) =>
         {
-            if (e.Source is Visual v && (v is Button or TextBox or ComboBox or CheckBox
+            if (e.Source is Visual v && (v is Button or TextBox or ComboBox or RadioButton or SelectableTextBlock
                 || v.FindAncestorOfType<Button>() is not null || v.FindAncestorOfType<TextBox>() is not null
-                || v.FindAncestorOfType<ComboBox>() is not null || v.FindAncestorOfType<CheckBox>() is not null)) return;
+                || v.FindAncestorOfType<ComboBox>() is not null || v.FindAncestorOfType<RadioButton>() is not null)) return;
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
         };
         Content = frame;
 
         PickTemplate(_template);
+        UpdateWhereText(null);
         // Deferred to Opened, so the render seam can claim the dialog first.
-        Opened += (_, _) => { if (!_renderOnly) ResolveFolderAsync(); };
+        Opened += (_, _) =>
+        {
+            if (!_renderOnly) ResolveFolderAsync();
+            _task.Focus();
+        };
     }
-
-    private bool _renderOnly;
 
     /// <summary>Headless-render seam: show the dialog with a resolved folder (or a choice) and sample accounts,
     /// touching no files (no folder scan, no sign-in reads — so a render never shows the machine's real accounts).
-    /// Call right after construction, before the background folder scan can land.</summary>
-    internal void SeedForRender(CheckoutMatch match, IReadOnlyList<string>? accounts = null)
+    /// Call right after construction.</summary>
+    internal void SeedForRender(CheckoutMatch match, IReadOnlyList<string>? accounts = null, bool showPreview = false,
+        string? template = null, string? branch = "main")
     {
         _renderOnly = true;
+        if (template is not null && _templates.FirstOrDefault(t => t.Id == template) is { } t) PickTemplate(t);
         ApplyMatch(match);
+        UpdateWhereText(match.Path is null ? null : branch);
         if (accounts is { Count: > 1 })
         {
             _accountBox.ItemsSource = accounts;
             _accountBox.SelectedIndex = 0;
             _accountRow.IsVisible = true;
         }
+        if (showPreview) { _previewBox.IsVisible = true; UpdatePreview(); }
     }
 
     // owner/repo from the PR URL, else from the Repo field ("owner/repo").
@@ -231,14 +293,36 @@ internal sealed class PrSessionWindow : Window
         return new GitRepoRef("github.com", parts[0], parts.Length > 1 ? parts[1] : parts[0]);
     }
 
+    private string? WorktreeBranch => _inWorktree.IsChecked == true ? $"perch/pr-{_item.Pr.Number}" : null;
+
     private void PickTemplate(PrPromptTemplate t)
     {
         _template = t;
-        _prompt.Text = PrSessionPrompts.Fill(t.Text, _item.Pr);
-        for (int i = 0; i < _templates.Count; i++) StyleChip(_templateChips[i], _templates[i] == t);
-        _modeText.Text = t.Mode == PrSessionMode.Plan
-            ? "Runs read-only (plan mode): Claude can read and run commands to look around, but won't edit files."
-            : "Claude can edit files in the folder without asking (accept edits). Commands still ask first.";
+        int i = _templates.ToList().IndexOf(t);
+        if (i >= 0 && i < _templateRows.Count && _templateRows[i].IsChecked != true) _templateRows[i].IsChecked = true;
+        _task.Text = _taskEdits.TryGetValue(t.Id, out var edited) ? edited : PrSessionPrompts.Fill(t.Task, _item.Pr);
+        UpdatePreview();
+        UpdateStartEnabled();
+    }
+
+    private void UpdatePreview()
+    {
+        _previewToggle.Content = _previewBox.IsVisible ? "Hide the full prompt" : "Show the full prompt Perch will send";
+        if (_previewBox.IsVisible)
+            _preview.Text = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, WorktreeBranch);
+    }
+
+    private void UpdateStartEnabled() =>
+        _start.IsEnabled = !_busy && _folder is not null && !string.IsNullOrWhiteSpace(_task.Text);
+
+    // The two "where" choices, spelled out for this PR and checkout.
+    private void UpdateWhereText(string? branch)
+    {
+        _worktreeDesc.Text = $"Checks out the PR on branch perch/pr-{_item.Pr.Number} in .perch-worktrees beside your checkout. "
+            + "Your own working copy isn't touched.";
+        _checkoutDesc.Text = branch is { Length: > 0 }
+            ? $"Works in the folder on {branch}, its current branch, not the PR's. Changes land in your working copy."
+            : "Works in the folder on whatever is checked out there, not the PR's branch. Changes land in your working copy.";
     }
 
     // Finds the checkout off the UI thread: the remembered folder, else a scan of the folders sessions ran in.
@@ -263,43 +347,52 @@ internal sealed class PrSessionWindow : Window
     {
         if (match.Path is { } path)
         {
+            ShowFolderPath(true);
             SetFolder(path, null);
             return;
         }
         if (match.NeedsChoice)
         {
+            ShowFolderPath(false);
             _folderChoices.ItemsSource = match.Candidates;
-            _folderChoices.IsVisible = true;
-            _folderText.IsVisible = false;
             _folderChoices.SelectedIndex = 0;    // → SetFolder
-            _status.Text = $"{match.Candidates.Count} checkouts of {_repo.Slug} found. Pick one.";
+            SetStatus($"Found {match.Candidates.Count} checkouts of {_repo.Slug}. Pick the one to use.", error: false);
             return;
         }
-        _folderText.Text = $"No checkout of {_repo.Slug} found among your Claude project folders.";
-        _status.Text = "Choose the folder it's checked out in.";
-        UpdateWorktreeText();
+        ShowFolderPath(true);
+        _folderName.Text = "Not found";
+        _folderName.Foreground = Muted;
+        _folderDir.Text = $"no Claude project folder has a remote for {_repo.Slug}";
+        _changeFolder.Content = "Choose…";
+        SetStatus("Choose the folder it's checked out in.", error: false);
+    }
+
+    private void ShowFolderPath(bool path)
+    {
+        _folderPath.IsVisible = path;
+        _folderChoices.IsVisible = !path;
     }
 
     private void SetFolder(string folder, string? status)
     {
         _folder = folder;
-        if (!_folderChoices.IsVisible)
+        if (_folderPath.IsVisible)
         {
-            _folderText.Text = folder;
-            _folderText.Foreground = Fg;
+            var trimmed = Path.TrimEndingDirectorySeparator(folder);
+            _folderName.Text = Path.GetFileName(trimmed) is { Length: > 0 } n ? n : trimmed;
+            _folderName.Foreground = Fg;
+            _folderDir.Text = Path.GetDirectoryName(trimmed) ?? "";
+            ToolTip.SetTip(_folderPath, folder);
         }
-        _status.Text = status ?? "";
-        _status.Foreground = Muted;
-        _start.IsEnabled = !_busy;
-        UpdateWorktreeText();
-        if (!_renderOnly) ResolveAccountsAsync(folder);
-    }
-
-    private void UpdateWorktreeText()
-    {
-        var plan = _folder is { } f ? PrWorktree.PlanFor(f, _repo, _item.Pr.Number) : null;
-        _worktreeText.IsVisible = _useWorktree.IsChecked == true && plan is not null;
-        _worktreeText.Text = plan?.Path ?? "";
+        _changeFolder.Content = "Change…";
+        SetStatus(status ?? "", error: status is not null);
+        UpdateStartEnabled();
+        if (_renderOnly) return;
+        ResolveAccountsAsync(folder);
+        Task.Run(() => GitCheckoutScanner.ReadBranch(folder)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (IsVisible && _folder == folder) UpdateWhereText(t.IsCompletedSuccessfully ? t.Result : null);
+        }));
     }
 
     private async Task ChooseFolderAsync()
@@ -311,20 +404,20 @@ internal sealed class PrSessionWindow : Window
         if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } picked) return;
 
         // Check it's really that repo before taking it (a wrong folder would only fail later, at the fetch).
-        var remotes = await Task.Run(() => GitCheckoutScanner.FindRoot(picked) is { } root
+        var found = await Task.Run(() => GitCheckoutScanner.FindRoot(picked) is { } root
             ? (Root: root, Remote: PrWorktree.RemoteFor(GitCheckoutScanner.ReadRemotes(root), _repo))
             : (Root: (string?)null, Remote: (string?)null));
         if (!IsVisible) return;
-        if (remotes.Root is null)
+        if (found.Root is null)
         {
-            _status.Text = "That folder isn't inside a git checkout.";
+            SetStatus("That folder isn't inside a git checkout.", error: true);
             return;
         }
-        _folderChoices.IsVisible = false;
-        _folderText.IsVisible = true;
-        SetFolder(remotes.Root, remotes.Remote is null
-            ? $"No remote there points at {_repo.Slug}. A worktree needs one; untick it to work in the folder as it is."
+        ShowFolderPath(true);
+        SetFolder(found.Root, found.Remote is null
+            ? $"No remote there points at {_repo.Slug}, so a worktree can't fetch the PR. Use the checkout as it is, or pick another folder."
             : null);
+        if (found.Remote is null) _inCheckout.IsChecked = true;
     }
 
     // The accounts this folder may use (the same rules and guardrails as the session launcher), off the UI thread.
@@ -345,18 +438,14 @@ internal sealed class PrSessionWindow : Window
 
     private async Task StartAsync()
     {
-        if (_busy || _folder is not { } root) return;
-        var prompt = _prompt.Text?.Trim() ?? "";
-        if (prompt.Length == 0)
-        {
-            _status.Text = "The prompt is empty.";
-            return;
-        }
-        SetBusy(true, _useWorktree.IsChecked == true ? "Preparing the worktree…" : "Starting…");
+        if (_busy || _folder is not { } root || string.IsNullOrWhiteSpace(_task.Text)) return;
+        bool useWorktree = _inWorktree.IsChecked == true;
+        var prompt = PrSessionPrompts.Compose(_task.Text, _template.Mode, _item.Pr, WorktreeBranch);
+        SetBusy(true, useWorktree ? "Preparing the worktree…" : "Starting…");
 
         var repo = _repo;
         int number = _item.Pr.Number;
-        var wt = _useWorktree.IsChecked == true
+        var wt = useWorktree
             ? await Task.Run(() => PrWorktree.Ensure(root, repo, number))
             : new PrWorktreeResult(root, true, null);
         if (!IsVisible) return;
@@ -393,7 +482,7 @@ internal sealed class PrSessionWindow : Window
         }
 
         var mode = _template.Mode == PrSessionMode.Plan ? "plan" : "acceptEdits";
-        if (_launch(new PrSessionLaunch(cwd, prompt, mode, configDir)) is { } launchError)
+        if (_launch(new PrSessionLaunch(cwd, prompt, mode, configDir, PrSessionPrompts.SessionTitle(_item.Pr))) is { } launchError)
         {
             SetBusy(false, launchError);
             return;
@@ -404,10 +493,15 @@ internal sealed class PrSessionWindow : Window
     private void SetBusy(bool busy, string status)
     {
         _busy = busy;
-        _status.Text = status;
-        _status.Foreground = busy ? Muted : Palette.ErrorBrush;
-        _start.IsEnabled = !busy && _folder is not null;
-        _start.Content = busy ? "Starting…" : "Start in background";
+        SetStatus(status, error: !busy);
+        _start.Content = busy ? "Starting…" : "Start session";
+        UpdateStartEnabled();
+    }
+
+    private void SetStatus(string text, bool error)
+    {
+        _status.Text = text;
+        _status.Foreground = error ? Palette.ErrorBrush : Muted;
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -417,27 +511,87 @@ internal sealed class PrSessionWindow : Window
             Close();
             e.Handled = true;
         }
+        else if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _start.IsEnabled)
+        {
+            _ = StartAsync();
+            e.Handled = true;
+        }
         base.OnKeyDown(e);
     }
 
-    private static TextBlock Label(string text, double top = 14) => new()
+    // ── Building blocks ──
+
+    private static TextBlock SectionLabel(string text) => new()
     {
-        Text = text.ToUpperInvariant(), Foreground = Muted, FontSize = 10.5, FontWeight = FontWeight.SemiBold,
-        LetterSpacing = 0.6, Margin = new Thickness(0, top, 0, 6),
+        Text = text, Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 16, 0, 8),
     };
 
-    private static Button Chip(string text) => new()
-    {
-        Content = text, FontSize = 12, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7),
-        Padding = new Thickness(10, 4), Margin = new Thickness(0, 0, 6, 6), Cursor = new Cursor(StandardCursorType.Hand),
-    };
+    // A radio row: label (semibold) over a muted description, with an optional badge on the right.
+    private static RadioButton OptionRow(string group, string label, string description, string? badge) =>
+        OptionRow(group, label, description, badge, out _);
 
-    private static void StyleChip(Button b, bool on)
+    private static RadioButton OptionRow(string group, string label, string description, string? badge, out TextBlock desc)
     {
-        b.Background = on ? new SolidColorBrush(Palette.Active.Accent.ToColor()) { Opacity = 0.16 } : Brushes.Transparent;
-        b.Foreground = on ? Accent : Muted;
-        b.BorderBrush = on ? Accent : Stroke;
+        desc = new TextBlock { Text = description, Foreground = Muted, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0) };
+        var text = new StackPanel
+        {
+            Children = { new TextBlock { Text = label, Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold }, desc },
+        };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        grid.Children.Add(text);
+        if (badge is not null)
+        {
+            var b = new Border
+            {
+                CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 1), Margin = new Thickness(10, 0, 0, 0),
+                BorderBrush = Stroke, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock { Text = badge, Foreground = Muted, FontSize = 11 },
+            };
+            Grid.SetColumn(b, 1);
+            grid.Children.Add(b);
+        }
+        return new RadioButton
+        {
+            GroupName = group, Content = grid, HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(6, 3, 0, 3),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
     }
+
+    // "Label   content   [action]" on a fixed label column, so Checkout and Account line up.
+    private static Grid LabeledRow(string label, Control content, Control? action)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions($"{LabelColumn},*,Auto") };
+        var l = new TextBlock { Text = label, Foreground = Muted, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center };
+        grid.Children.Add(l);
+        Grid.SetColumn(content, 1);
+        content.VerticalAlignment = VerticalAlignment.Center;
+        grid.Children.Add(content);
+        if (action is not null)
+        {
+            Grid.SetColumn(action, 2);
+            grid.Children.Add(action);
+        }
+        return grid;
+    }
+
+    private static Control ReasonPill(GhAlertReason r)
+    {
+        var c = Views.OverlayCanvas.GitHubKindColor(r.Kind);
+        return new Border
+        {
+            CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 2), Margin = new Thickness(0, 0, 6, 4),
+            Background = new SolidColorBrush(c) { Opacity = 0.16 },
+            Child = new TextBlock { Text = r.Text, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = new SolidColorBrush(c) },
+        };
+    }
+
+    private static Button LinkButton(string text) => new()
+    {
+        Content = text, Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+        Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
+        HorizontalAlignment = HorizontalAlignment.Left,
+    };
 
     private static Button OutlineButton(string text) => new()
     {

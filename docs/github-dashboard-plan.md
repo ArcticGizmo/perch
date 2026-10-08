@@ -120,12 +120,20 @@ phases below, settled while building:
   never discarded. An existing worktree is reused as it is. The branch doesn't track the PR head, so a user who
   wants to push does it by hand (`git push <remote> HEAD:<head-branch>`). The worktree stays when the PR closes;
   cleaning it up is still to do.
-- **S3**: the prompt text is shown in an editable box before starting, and that is how templates are edited for
-  now. Persisted custom templates are later. Conflicts are resolved by **merging** the base branch, not rebasing,
+- **S3**: each template is a short **task** ("Find out why CI is failing and fix it", with the `gh` commands),
+  editable in the dialog. `PrSessionPrompts.Compose` wraps it with the PR reference and branch, and the rules (no
+  push or post, read-only in plan mode, the untrusted-text guard). The dialog previews the full prompt on request.
+  Persisted custom templates are later. Conflicts are resolved by **merging** the base branch, not rebasing,
   so nothing needs a force-push.
-- **S4** is `PrSessionWindow`, opened from **Start session…** on each dashboard row. Account selection reuses
+- **S4** is `PrSessionWindow`, opened from **Start session…** on each dashboard row. It asks three things: *what*
+  (a radio list of quick prompts, the ones fitting the PR first, with only "Read-only" badged), *where* (the
+  checkout with its name pinned, then "New worktree for this PR" or "Your checkout as it is", which names the
+  branch the checkout is on), and the *account* on machines with a choice. Account selection reuses
   `SessionAccountChoice` (guardrails included) and is resolved again for the worktree folder at launch. Folder
   trust is asked for the worktree itself, because its code is the PR's.
+- **Not in the background after all** (user feedback): Start opens an ordinary Perch-controlled **session window**,
+  named after the PR with `/rename PR #<n> · <title>` (sent before the prompt; the CLI queues both), so the name
+  is kept in the transcript and survives a resume.
 
 ### Phases
 

@@ -1949,8 +1949,8 @@ public partial class App : Application
     }
 
     // "Start session…" on a dashboard PR: the quick-prompt dialog, which prepares the folder (a per-PR worktree by
-    // default), then starts an ordinary Perch-controlled session with no window and sends the prompt. The session
-    // shows on the overlay and in the Roost like any other. See docs/github-dashboard-plan.md (part 3).
+    // default), then starts an ordinary Perch-controlled session named after the PR, sends the prompt and opens its
+    // window. See docs/github-dashboard-plan.md (part 3).
     private void OpenPrSession(GhPrItem item)
     {
         var active = ActiveSessionIds();
@@ -1975,14 +1975,21 @@ public partial class App : Application
         else w.Show();
     }
 
-    // Starts the PR session headless and hands it its first prompt. Null on success, else the error line to show.
+    // Starts the PR session, names it (/rename, which the CLI records in the transcript so the name survives a resume),
+    // hands it the prompt — the CLI queues the two in order — and opens its window. Null on success, else the error
+    // line to show in the dialog.
     private string? LaunchPrSession(PrSessionLaunch launch)
     {
         try
         {
             var session = StartPerchSession(new Services.SessionLaunchOptions(
                 launch.Cwd, PermissionMode: launch.PermissionMode, ConfigDir: launch.ConfigDir));
+            session.SendPrompt($"/rename {launch.Title}");
             session.SendPrompt(launch.Prompt);
+            var w = NewSessionWindow();
+            w.Show();
+            w.Attach(session);
+            ForceFront(w);
             return null;
         }
         catch (Exception ex)

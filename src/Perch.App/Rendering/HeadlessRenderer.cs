@@ -2759,25 +2759,28 @@ internal static class HeadlessRenderer
         }
     }
 
-    // "Start a session" on a dashboard PR: failing checks (so "Fix failing checks" leads) with the checkout found; a
-    // review request with two checkouts to choose between and two accounts; and a repo with no checkout found.
+    // "Start a session" on a dashboard PR: new comments + failing checks with the checkout found (a long path, to
+    // show the name staying while the directory trims); a review request with two checkouts to choose between, two
+    // accounts and the full-prompt preview open; "Something else" (empty task, Start disabled) with no checkout found.
     // Seeded, so it reads no files and shows no real accounts.
     private static void RenderPrSessionWindow(string outDir)
     {
         var sample = SampleData.GitHubAlerts();
         var items = GitHubAlertsClassifier.Build(sample, new Dictionary<string, DateTime>()).Items;
         GhPrItem Item(int n) => items.First(i => i.Pr.Number == n);
-        string src = OperatingSystem.IsWindows() ? @"C:\src" : "/Users/me/src";
+        string src = OperatingSystem.IsWindows() ? @"C:\Users\me\Documents\git\work\clients" : "/Users/me/Documents/git/work/clients";
 
-        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(Path.Combine(src, "api"), [Path.Combine(src, "api")]));
+        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(Path.Combine(src, "acme-api"), [Path.Combine(src, "acme-api")]));
         Capture("pr_session_choice_1x.png", Item(418),
-            new CheckoutMatch(null, [Path.Combine(src, "web"), Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"]);
-        Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None);
+            new CheckoutMatch(null, [Path.Combine(src, "web"), Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"],
+            showPreview: true);
+        Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None, template: "free");
 
-        void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null)
+        void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
+            bool showPreview = false, string? template = null)
         {
             var w = new PrSessionWindow(item, () => [], null, (_, _) => { }, () => null, _ => null);
-            w.SeedForRender(match, accounts);
+            w.SeedForRender(match, accounts, showPreview, template);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

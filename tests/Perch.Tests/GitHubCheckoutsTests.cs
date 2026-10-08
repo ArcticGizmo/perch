@@ -190,6 +190,15 @@ public class GitHubCheckoutsTests
 
             Assert.Equal([main, wt], found.Select(c => c.Root));
             Assert.All(found, c => Assert.Equal("https://github.com/acme/web.git", Assert.Single(c.Remotes).Url));
+
+            // HEAD is per-worktree: main's own, and the linked worktree's in its gitdir; detached reads as null.
+            File.WriteAllText(Path.Combine(main, ".git", "HEAD"), "ref: refs/heads/main\n");
+            File.WriteAllText(Path.Combine(main, ".git", "worktrees", "pr-1", "HEAD"), "ref: refs/heads/perch/pr-1\n");
+            File.WriteAllText(Path.Combine(local, ".git", "HEAD"), "3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a\n");
+            Assert.Equal("main", GitCheckoutScanner.ReadBranch(main));
+            Assert.Equal("perch/pr-1", GitCheckoutScanner.ReadBranch(wt));
+            Assert.Null(GitCheckoutScanner.ReadBranch(local));
+            Assert.Null(GitCheckoutScanner.ReadBranch(loose));
         }
         finally
         {
