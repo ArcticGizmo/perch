@@ -33,6 +33,10 @@ See `docs/github-dashboard-plan.md` (parts 1 and 2) for the design.
   in `%AppData%/<profile>/github-alerts-dismissed.json` (`GitHubAlertsDismissStore`). After each successful poll
   `Reconcile` deletes entries whose PR closed or whose fingerprint moved on, so a PR doesn't quietly vanish again
   if its state swings back.
+- **Include dismissed** (a toggle in the toolbar, not persisted) lets dismissed PRs back into Needs you / All
+  open, marked "dismissed" with Restore, for hunting down a PR you hid. The strip still ignores them. When a search
+  matches dismissed PRs the current view hides, a "N dismissed PRs also match · Include them" link turns it on
+  (`GitHubAlertsSnapshot.HiddenDismissedMatches`).
 - **View options** (`GhListOptions`) live on the monitor host, because the age window also trims the overlay
   strip's counts, so the strip and the window always agree. They persist as UI state on `AppSettings`
   (`GitHubDashboardGroupBy` / `SortBy` / `MaxAgeDays`, in `SettingsRegistryTests.NotSettings`). The age window is

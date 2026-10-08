@@ -141,15 +141,24 @@ public sealed record GitHubAlertsSnapshot(string? Login, IReadOnlyList<GhPrItem>
     public int TooOldCount => Items.Count(i => i.TooOld);
 
     /// <summary>The items the window would show for a tab + search, ungrouped — its tab counts read this. Too-old PRs
-    /// are in no tab; dismissed ones only in <see cref="GhView.Dismissed"/>.</summary>
-    public IEnumerable<GhPrItem> Filter(GhView view, string? query) =>
+    /// are in no tab; dismissed ones only in <see cref="GhView.Dismissed"/>, unless
+    /// <paramref name="includeDismissed"/> (the window's "Include dismissed", for hunting a PR down) lets them back
+    /// into Needs you / All open as well.</summary>
+    public IEnumerable<GhPrItem> Filter(GhView view, string? query, bool includeDismissed = false) =>
         Items.Where(i => !i.TooOld && view switch
         {
-            GhView.NeedsYou  => !i.Dismissed && i.NeedsYou,
-            GhView.All       => !i.Dismissed,
+            GhView.NeedsYou  => (includeDismissed || !i.Dismissed) && i.NeedsYou,
+            GhView.All       => includeDismissed || !i.Dismissed,
             GhView.Dismissed => i.Dismissed,
             _                => false,
         } && Matches(i, query));
+
+    /// <summary>Dismissed PRs a search turns up that <paramref name="view"/> is hiding — the window's "N dismissed
+    /// PRs also match" hint. Zero with no search, or when the view already shows dismissed ones.</summary>
+    public int HiddenDismissedMatches(GhView view, string? query, bool includeDismissed) =>
+        string.IsNullOrWhiteSpace(query) || includeDismissed || view == GhView.Dismissed
+            ? 0
+            : Filter(view, query, includeDismissed: true).Count(i => i.Dismissed);
 
     /// <summary>
     /// The window's rows for a tab + search, grouped and sorted per <paramref name="options"/>. Group order:
@@ -158,9 +167,10 @@ public sealed record GitHubAlertsSnapshot(string? Login, IReadOnlyList<GhPrItem>
     /// one group with an empty title (the window draws no header for it). Within a group rows follow
     /// <see cref="GhListOptions.SortBy"/>; ties fall back to most recently updated, then PR number.
     /// </summary>
-    public IReadOnlyList<(string Title, IReadOnlyList<GhPrItem> Items)> Grouped(GhView view, GhListOptions options, string? query = null)
+    public IReadOnlyList<(string Title, IReadOnlyList<GhPrItem> Items)> Grouped(GhView view, GhListOptions options,
+        string? query = null, bool includeDismissed = false)
     {
-        var rows = Filter(view, query).ToList();
+        var rows = Filter(view, query, includeDismissed).ToList();
         if (rows.Count == 0) return [];
 
         IReadOnlyList<GhPrItem> Sort(IEnumerable<GhPrItem> items) => (options.SortBy switch

@@ -27,6 +27,8 @@ Parts 1 and 2 are small and build on what already exists. Part 3 is larger and g
   and appears under a third tab, **Dismissed**, where **Restore** brings it back.
 - It returns on its own when its **state fingerprint** changes. Merged or closed PRs drop out of the store
   with the open-set prune, the same way seen markers do.
+- **Include dismissed** (a non-persisted toolbar toggle) ignores dismissals in Needs you / All open, so you can
+  find a PR you hid. A search that only dismissed PRs match offers a one-click "Include them" link.
 - Once the fingerprint has changed, the dismissal is deleted, not just ignored. So a PR whose checks go red and
   then green again doesn't quietly disappear a second time.
 

@@ -2731,15 +2731,20 @@ internal static class HeadlessRenderer
         string[] dismiss = ["https://github.com/acme/web/pull/418", "https://github.com/acme/api/pull/69"];
         Capture("github_alerts_after_dismiss_1x.png", GhView.NeedsYou, dismiss: dismiss);
         Capture("github_alerts_dismissed_1x.png", GhView.Dismissed, dismiss: dismiss);
+        // Hunting a dismissed PR: a search that only a dismissed PR matches offers "Include them"; with the toggle on,
+        // dismissed rows rejoin All open, marked "dismissed" with Restore.
+        Capture("github_alerts_search_dismissed_hint_1x.png", GhView.All, search: "dashboard", dismiss: dismiss);
+        Capture("github_alerts_include_dismissed_1x.png", GhView.All, dismiss: dismiss, includeDismissed: true);
 
-        void Capture(string file, GhView view, string? search = null, GhListOptions? options = null, string[]? dismiss = null)
+        void Capture(string file, GhView view, string? search = null, GhListOptions? options = null, string[]? dismiss = null,
+            bool includeDismissed = false)
         {
             using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), GitHubAlertsDismissStore.InMemory(), _ => { }, null);
             host.SeedForRender(SampleData.GitHubAlerts());
             if (options is not null) host.SeedOptions(options);
             foreach (var url in dismiss ?? []) host.Dismiss(url);
             var w = new GitHubAlertsWindow(host);
-            w.SetViewForRender(view, search);
+            w.SetViewForRender(view, search, includeDismissed);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

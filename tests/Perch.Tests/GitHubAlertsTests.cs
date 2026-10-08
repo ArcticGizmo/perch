@@ -338,6 +338,28 @@ public class GitHubAlertsTests
         Assert.Equal(2, stale.NeedsYouCount);
     }
 
+    [Fact]
+    public void IncludeDismissedLetsDismissedPrsBackIntoTheTabsForASearch()
+    {
+        var failing = Dashboard().Items.Single(i => i.Pr.Url == "failing").Pr;
+        var snap = Dashboard(new Dictionary<string, string> { ["failing"] = GitHubAlertsClassifier.Fingerprint(failing, Me) });
+
+        Assert.Equal(["failing", "review"], Urls(snap.Filter(GhView.NeedsYou, null, includeDismissed: true)));   // fetch order
+        Assert.Contains("failing", Urls(snap.Filter(GhView.All, null, includeDismissed: true)));
+        Assert.Equal(["failing"], Urls(snap.Filter(GhView.Dismissed, null, includeDismissed: true)));   // unchanged
+        Assert.Equal(["failing"], Urls(Assert.Single(snap.Grouped(GhView.All, new(), "api", includeDismissed: true)).Items));
+        // The strip still ignores it: including dismissed is a window filter, not a restore.
+        Assert.Equal(1, snap.NeedsYouCount);
+
+        // The hint: only for a search, only where the view hides them.
+        Assert.Equal(1, snap.HiddenDismissedMatches(GhView.All, "api", includeDismissed: false));
+        Assert.Equal(1, snap.HiddenDismissedMatches(GhView.NeedsYou, "api", includeDismissed: false));
+        Assert.Equal(0, snap.HiddenDismissedMatches(GhView.All, null, includeDismissed: false));
+        Assert.Equal(0, snap.HiddenDismissedMatches(GhView.All, "api", includeDismissed: true));
+        Assert.Equal(0, snap.HiddenDismissedMatches(GhView.Dismissed, "api", includeDismissed: false));
+        Assert.Equal(0, snap.HiddenDismissedMatches(GhView.All, "web", includeDismissed: false));   // no dismissed match
+    }
+
     public static TheoryData<string, Func<GhPullRequest, GhPullRequest>> FingerprintChanges => new()
     {
         { "new comment by someone else", p => p with { Events = [.. p.Events, Ev("alice", GhEventKind.Comment, 60)] } },

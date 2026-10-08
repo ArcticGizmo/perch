@@ -45,8 +45,10 @@ internal sealed class GitHubAlertsWindow : Window
     private readonly Button _needsYouTab, _allTab, _dismissedTab;
     private readonly TextBox _search;
     private readonly ComboBox _groupBox, _sortBox, _ageBox;
+    private readonly Button _includeDismissedToggle;
     private readonly StackPanel _list = new();
     private GhView _view = GhView.NeedsYou;
+    private bool _includeDismissed;
     private bool _syncingPickers;
 
     public GitHubAlertsWindow(GitHubAlertsMonitorHost host)
@@ -119,6 +121,12 @@ internal sealed class GitHubAlertsWindow : Window
         _sortBox.SelectionChanged += (_, _) => PickerChanged();
         _ageBox.SelectionChanged += (_, _) => PickerChanged();
         ToolTip.SetTip(_ageBox, "Hide PRs not updated in this long, here and on the overlay.");
+        // Ignore dismissals for a while, to hunt a PR down. Not persisted: a dismissal should keep hiding by default.
+        _includeDismissedToggle = TabButton();
+        _includeDismissedToggle.Margin = new Thickness(10, 0, 0, 0);
+        _includeDismissedToggle.VerticalAlignment = VerticalAlignment.Center;
+        _includeDismissedToggle.Click += (_, _) => SetIncludeDismissed(!_includeDismissed);
+        ToolTip.SetTip(_includeDismissedToggle, "Show dismissed PRs in Needs you and All open too, to find one you hid.");
         var viewRow = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(18, 0, 18, 12),
@@ -127,6 +135,7 @@ internal sealed class GitHubAlertsWindow : Window
                 PickerLabel("Group by"), _groupBox,
                 PickerLabel("Sort", 10), _sortBox,
                 PickerLabel("Updated", 10), _ageBox,
+                _includeDismissedToggle,
             },
         };
 
@@ -170,10 +179,11 @@ internal sealed class GitHubAlertsWindow : Window
     /// refresh-on-both-paths contract.</summary>
     public void Retarget() => Refresh();
 
-    /// <summary>Headless-render seam: pick the tab and, optionally, a search.</summary>
-    internal void SetViewForRender(GhView view, string? search = null)
+    /// <summary>Headless-render seam: pick the tab and, optionally, a search and "Include dismissed".</summary>
+    internal void SetViewForRender(GhView view, string? search = null, bool includeDismissed = false)
     {
         _view = view;
+        _includeDismissed = includeDismissed;
         _search.Text = search ?? "";
         Refresh();
     }
@@ -221,14 +231,16 @@ internal sealed class GitHubAlertsWindow : Window
         _refresh.Content = _host.Busy ? "Checking…" : "Refresh";
         SyncPickers(options);
 
-        // The tab counts follow the search, so each says how many matches it holds.
+        // The tab counts follow the search (and "Include dismissed"), so each says how many rows it holds.
         string query = _search.Text?.Trim() ?? "";
-        int needs = snap?.Filter(GhView.NeedsYou, query).Count() ?? 0;
-        int all = snap?.Filter(GhView.All, query).Count() ?? 0;
+        int needs = snap?.Filter(GhView.NeedsYou, query, _includeDismissed).Count() ?? 0;
+        int all = snap?.Filter(GhView.All, query, _includeDismissed).Count() ?? 0;
         int dismissed = snap?.Filter(GhView.Dismissed, query).Count() ?? 0;
         StyleTab(_needsYouTab, $"Needs you  {needs}", _view == GhView.NeedsYou);
         StyleTab(_allTab, $"All open  {all}", _view == GhView.All);
         StyleTab(_dismissedTab, $"Dismissed  {dismissed}", _view == GhView.Dismissed);
+        StyleTab(_includeDismissedToggle, _includeDismissed ? "✓ Include dismissed" : "Include dismissed", _includeDismissed);
+        _includeDismissedToggle.IsEnabled = _view != GhView.Dismissed;   // that tab is nothing but dismissed PRs
 
         _list.Children.Clear();
         if (snap is null)
@@ -242,7 +254,10 @@ internal sealed class GitHubAlertsWindow : Window
             ? $"{Plural(snap.TooOldCount, "older PR")} hidden: not updated in the {AgeLabel(options.MaxAgeDays).ToLowerInvariant()}."
             : null;
 
-        var groups = snap.Grouped(_view, options, query);
+        // A search that turns up dismissed PRs this view hides offers to show them (one click on the hint).
+        int hiddenDismissed = snap.HiddenDismissedMatches(_view, query, _includeDismissed);
+
+        var groups = snap.Grouped(_view, options, query, _includeDismissed);
         if (groups.Count == 0)
         {
             if (snap.Error is { } err && snap.Items.Count == 0)
@@ -258,6 +273,7 @@ internal sealed class GitHubAlertsWindow : Window
                     GhView.Dismissed => "Nothing dismissed. Dismiss a PR to hide it until something changes on it.",
                     _                => "No open pull requests involve you.",
                 }));
+            if (hiddenDismissed > 0) _list.Children.Add(IncludeDismissedHint(hiddenDismissed));
             if (ageNote is not null) _list.Children.Add(FootText(ageNote));
             return;
         }
@@ -276,7 +292,28 @@ internal sealed class GitHubAlertsWindow : Window
                 _list.Children.Add(new Border { Height = 8 });
             foreach (var item in items) _list.Children.Add(BuildRow(item, now, options.GroupBy));
         }
+        if (hiddenDismissed > 0) _list.Children.Add(IncludeDismissedHint(hiddenDismissed));
         if (ageNote is not null) _list.Children.Add(FootText(ageNote));
+    }
+
+    private void SetIncludeDismissed(bool on)
+    {
+        _includeDismissed = on;
+        Refresh();
+    }
+
+    // "2 dismissed PRs also match · Include them": a link-style button that flips "Include dismissed" on.
+    private Control IncludeDismissedHint(int n)
+    {
+        var link = new Button
+        {
+            Content = $"{(n == 1 ? "1 dismissed PR also matches" : $"{n} dismissed PRs also match")} · Include them",
+            Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
+            Margin = new Thickness(20, 12, 20, 4), HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        link.Click += (_, _) => SetIncludeDismissed(true);
+        return link;
     }
 
     private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
@@ -316,6 +353,7 @@ internal sealed class GitHubAlertsWindow : Window
         if (!yours && pr.Author.Length > 0) meta.Add(pr.Author);
         meta.Add(Role(pr.Relation));
         if (pr.IsDraft) meta.Add("draft");
+        if (item.Dismissed && _view != GhView.Dismissed) meta.Add("dismissed");   // shown via "Include dismissed"
         if (pr.UpdatedUtc > DateTime.MinValue) meta.Add($"updated {RelativeTime.Ago(now, pr.UpdatedUtc)}");
         var metaText = new TextBlock
         {
