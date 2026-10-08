@@ -6,14 +6,18 @@ internal sealed record StoryFeed(string SubId, IReadOnlyList<FeedEntry> Entries,
 
 internal enum StoryCardKind { Entry, Error, CaughtUp, Empty }
 
-/// <summary>One card. <see cref="Entry"/> is set for <see cref="StoryCardKind.Entry"/> cards.</summary>
-internal sealed record StoryCard(StoryCardKind Kind, string SubId, FeedEntry? Entry = null, string? Error = null);
+/// <summary>One card. <see cref="Entry"/> is set for <see cref="StoryCardKind.Entry"/> cards; <see cref="IsNew"/>
+/// marks an entry that was unread when it joined the plan (it stays marked once watched, so the progress segments
+/// keep showing what was new).</summary>
+internal sealed record StoryCard(StoryCardKind Kind, string SubId, FeedEntry? Entry = null, string? Error = null, bool IsNew = false);
 
-/// <summary>One feed's run of cards in the plan. The progress segments are the cards of the current run.</summary>
-internal sealed class StoryRun(string subId, List<StoryCard> cards)
+/// <summary>One feed's run of cards in the plan. The progress segments are the cards of the current run;
+/// <see cref="StartIndex"/> is where playback enters it (its first new entry, or its error card).</summary>
+internal sealed class StoryRun(string subId, List<StoryCard> cards, int startIndex = 0)
 {
     public string SubId { get; } = subId;
     public List<StoryCard> Cards { get; } = cards;
+    public int StartIndex { get; } = startIndex;
 }
 
 internal enum StoryMove { None, Moved, FeedChanged, Ended }
@@ -22,8 +26,10 @@ internal enum StoryMove { None, Moved, FeedChanged, Ended }
 /// What plays, in what order, and where next/previous go (docs/feeds-plan.md §3.6). Pure; the window just renders
 /// <see cref="Current"/> and calls <see cref="Next"/>/<see cref="Prev"/>/<see cref="JumpTo"/>.
 /// <list type="bullet">
-///   <item><b>A head with unread entries:</b> those entries oldest → newest, then every other feed with unread
-///   entries (the ones after it in row order, then wrapping round), then an "All caught up" card.</item>
+///   <item><b>A head with unread entries:</b> its entries in time order, entered at the first unread one (marked
+///   <see cref="StoryCard.IsNew"/>) with up to <see cref="HistoryCount"/> already-read entries behind it, so ←
+///   walks back in time. Then every other feed with unread entries (the ones after it in row order, then wrapping
+///   round), each entered at its own first new entry, then an "All caught up" card.</item>
 ///   <item><b>A head with nothing unread:</b> a replay of its newest <see cref="ReplayCount"/>, opened on the
 ///   newest; ← walks back. A replay doesn't chain into other feeds.</item>
 ///   <item><b>A failing feed</b> leads its run with an error card.</item>
@@ -34,6 +40,9 @@ internal enum StoryMove { None, Moved, FeedChanged, Ended }
 internal sealed class StoryPlan
 {
     public const int ReplayCount = 10;
+
+    /// <summary>Read entries kept behind a feed's first new one, to go back to.</summary>
+    public const int HistoryCount = 10;
 
     private readonly List<StoryRun> _runs;
 
@@ -71,7 +80,7 @@ internal sealed class StoryPlan
                 if (Unread(other).Count > 0) runs.Add(UnreadRun(other, withError: false));
             }
             runs.Add(new StoryRun("", [new StoryCard(StoryCardKind.CaughtUp, "")]));
-            return new StoryPlan(runs, 0, 0, replay: false);
+            return new StoryPlan(runs, 0, runs[0].StartIndex, replay: false);
         }
 
         // Replay: newest N, shown oldest → newest, opened on the newest.
@@ -103,12 +112,20 @@ internal sealed class StoryPlan
     private static List<FeedEntry> Unread(StoryFeed f) =>
         f.Entries.Where(e => f.UnreadIds.Contains(e.Id)).Reverse().ToList();
 
+    // A feed with news: its entries oldest → newest, from up to HistoryCount read ones before the first unread to the
+    // newest (a read entry newer than the first unread one stays in its place in time). Entered at the first unread,
+    // or at the error card leading it.
     private static StoryRun UnreadRun(StoryFeed f, bool withError)
     {
-        var cards = new List<StoryCard>();
-        if (withError && f.Error is not null) cards.Add(new StoryCard(StoryCardKind.Error, f.SubId, Error: f.Error));
-        cards.AddRange(Unread(f).Select(e => new StoryCard(StoryCardKind.Entry, f.SubId, e)));
-        return new StoryRun(f.SubId, cards);
+        var ordered = f.Entries.Reverse().ToList();
+        int firstNew = ordered.FindIndex(e => f.UnreadIds.Contains(e.Id));
+        int from = Math.Max(0, firstNew - HistoryCount);
+        var cards = ordered.Skip(from)
+            .Select(e => new StoryCard(StoryCardKind.Entry, f.SubId, e, IsNew: f.UnreadIds.Contains(e.Id)))
+            .ToList();
+        int start = firstNew - from;
+        if (withError && f.Error is not null) cards.Insert(start, new StoryCard(StoryCardKind.Error, f.SubId, Error: f.Error));
+        return new StoryRun(f.SubId, cards, start);
     }
 
     // ── Navigation ──────────────────────────────────────────────────────────────────────────────────────────
@@ -116,7 +133,7 @@ internal sealed class StoryPlan
     public StoryMove Next()
     {
         if (CardIndex + 1 < CurrentRun.Cards.Count) { CardIndex++; return StoryMove.Moved; }
-        if (RunIndex + 1 < _runs.Count) { RunIndex++; CardIndex = 0; return StoryMove.FeedChanged; }
+        if (RunIndex + 1 < _runs.Count) { RunIndex++; CardIndex = CurrentRun.StartIndex; return StoryMove.FeedChanged; }
         return StoryMove.Ended;
     }
 
@@ -155,9 +172,14 @@ internal sealed class StoryPlan
             if (r >= 0)
             {
                 if (r < RunIndex) continue;   // already watched past it
-                var have = new HashSet<string>(_runs[r].Cards.Where(c => c.Entry is not null).Select(c => c.Entry!.Id), StringComparer.Ordinal);
+                var cards = _runs[r].Cards;
+                var newIds = unread.Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
+                // A card ahead of the cursor whose entry has since turned unread is marked new; behind it, nothing moves.
+                for (int i = r == RunIndex ? CardIndex + 1 : 0; i < cards.Count; i++)
+                    if (cards[i] is { Entry: { } ce, IsNew: false } c && newIds.Contains(ce.Id)) cards[i] = c with { IsNew = true };
+                var have = new HashSet<string>(cards.Where(c => c.Entry is not null).Select(c => c.Entry!.Id), StringComparer.Ordinal);
                 foreach (var e in unread)
-                    if (!have.Contains(e.Id)) _runs[r].Cards.Add(new StoryCard(StoryCardKind.Entry, feed.SubId, e));
+                    if (!have.Contains(e.Id)) cards.Add(new StoryCard(StoryCardKind.Entry, feed.SubId, e, IsNew: true));
             }
             else if (!planned.Contains(feed.SubId))
             {

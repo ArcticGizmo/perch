@@ -622,6 +622,11 @@ internal sealed class AppSettings
     // A toast when new feed entries arrive (batched per feed per check; never for a newly added feed's backlog).
     public bool NotifyOnFeedEntry { get; set; }
 
+    // The feeds story player's size (DIP) as the user last resized it by its edges; null = the default. UI state,
+    // not a Settings control; clamped to the screen when the window opens.
+    public double? FeedStoryWidthDip { get; set; }
+    public double? FeedStoryHeightDip { get; set; }
+
     // Jira ticket deep-link. When on, a session whose git branch carries a Jira issue key (e.g.
     // SFTY-1234-add-audit-log) grows a small ticket glyph on its overlay row; clicking it opens the ticket at
     // https://{JiraSubdomain}.atlassian.net/browse/{KEY}. Pure and offline — the key is parsed from the branch

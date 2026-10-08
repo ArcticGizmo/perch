@@ -37,6 +37,11 @@ internal sealed class FeedStoryWindow : Window
     private const double SlideMs = 150, FeedSlideMs = 230;
     private const double MarkdownInset = 11;   // MarkdownView's per-block anchor bar + padding; the title lines up with it
 
+    /// <summary>The opening size (DIP) before the user has resized it; the app clamps it to the screen.</summary>
+    public const double DefaultWidth = 560, DefaultHeight = 820;
+    public static readonly Size MinSize = new(380, 480);
+    private const double GripThickness = 6;
+
     private readonly FeedsMonitorHost _host;
     private readonly Func<string?, Bitmap?> _icon;
     private readonly SessionPalette _p;
@@ -61,7 +66,9 @@ internal sealed class FeedStoryWindow : Window
     private List<string> _trayOrder = [];
     private readonly Dictionary<string, IReadOnlyList<FeedCardPart>> _bodies = new(StringComparer.Ordinal);
 
-    private const int ImageDecodeWidth = 720;   // the card body is ~340 DIP wide: crisp at 200%
+    // The card grows with the window, so decode wide enough for a large window at 200%. Smaller images decode at their
+    // own size; the pixel cap (FeedFetcher.MaxImagePixels) still bounds the memory.
+    private const int ImageDecodeWidth = 1800;
     private const int MaxCachedImages = 40;
     private readonly Dictionary<Uri, Bitmap?> _imageCache = new();
     private readonly CancellationTokenSource _closing = new();
@@ -84,6 +91,12 @@ internal sealed class FeedStoryWindow : Window
     /// <summary>Headless-render seam: the image for a source, instead of the network.</summary>
     internal Func<Uri, Bitmap?>? RenderImage { get; set; }
 
+    /// <summary>Raised when the window closes after the user resized it, with its size (DIP), for the app to
+    /// remember.</summary>
+    public event Action<double, double>? Resized;
+
+    private bool _userResized;
+
     public FeedStoryWindow(FeedsMonitorHost host, Func<string?, Bitmap?> icon, SessionPalette? palette = null)
     {
         _host = host;
@@ -95,9 +108,12 @@ internal sealed class FeedStoryWindow : Window
         WindowDecorations = WindowDecorations.None;
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
-        CanResize = false;
-        Width = 440;
-        Height = 640;
+        // Frameless, so there's no system resize border: the grips laid over the edges (ResizeGrips) drive it.
+        CanResize = true;
+        Width = DefaultWidth;
+        Height = DefaultHeight;
+        MinWidth = MinSize.Width;
+        MinHeight = MinSize.Height;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         FontFamily = _p.Body;
@@ -174,11 +190,14 @@ internal sealed class FeedStoryWindow : Window
         root.Children.Add(_open);
         root.Children.Add(middle);
 
-        Content = new Border
+        var frame = new Border
         {
             Background = _p.Surface, CornerRadius = new CornerRadius(14), BorderBrush = _p.Border,
             BorderThickness = new Thickness(1.5), Child = root, ClipToBounds = true,
         };
+        var layers = new Grid { Children = { frame } };
+        foreach (var grip in ResizeGrips()) layers.Children.Add(grip);
+        Content = layers;
 
         // Tunnel, so the keys work wherever focus sits (a selected run of body text, the scroller) and a focused
         // button can't also act on Space/Enter.
@@ -186,6 +205,7 @@ internal sealed class FeedStoryWindow : Window
         _host.Changed += OnHostChanged;
         Closed += (_, _) =>
         {
+            if (_userResized) Resized?.Invoke(Bounds.Width, Bounds.Height);
             _host.Changed -= OnHostChanged;
             _anim?.Stop();
             _closing.Cancel();
@@ -333,6 +353,15 @@ internal sealed class FeedStoryWindow : Window
         }
 
         var stack = new StackPanel { Margin = new Thickness(20, 18, 20, 20), Children = { title, meta, _bodySlot } };
+        // A "New" tag over an entry that arrived since you last looked (the history behind it has none).
+        if (card.IsNew)
+            stack.Children.Insert(0, new Border
+            {
+                Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(8, 1),
+                Margin = new Thickness(MarkdownInset, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left,
+                Child = new TextBlock { Text = "New", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = _p.Brand },
+            });
         // Images are off for this feed but the post has some: say so, with the switch right there.
         if (!ImagesOn(card.SubId) && e.ContentHtml?.Contains("<img", StringComparison.OrdinalIgnoreCase) == true)
             stack.Children.Add(ShowImagesOffer(card.SubId));
@@ -444,9 +473,16 @@ internal sealed class FeedStoryWindow : Window
         var image = new Image
         {
             Source = bmp, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Left, Cursor = new Cursor(StandardCursorType.Hand),
         };
-        if ((img.Caption ?? img.Alt) is { } tip) ToolTip.SetTip(image, tip);
+        // Hover: the caption (xkcd's hover text) and how to see it full size; click: the original in the browser.
+        ToolTip.SetTip(image, ((img.Caption ?? img.Alt) is { } tip ? tip + "\n\n" : "") + "Click to open full size");
+        image.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(image).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            PlatformServices.UrlOpener.Open(img.Src.AbsoluteUri);
+        };
         slot.Background = Brushes.Transparent;
         slot.MinHeight = 0;
         slot.MinWidth = 0;
@@ -640,16 +676,24 @@ internal sealed class FeedStoryWindow : Window
         for (int i = 0; i < n; i++)
         {
             _segments.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+            // The card on screen is solid accent. What arrived new stays accent-tinted, watched or not, so the run
+            // shows where the news is; older entries (the history behind it) are neutral — brighter once passed.
+            var card = _plan.CurrentRun.Cards[i];
+            bool current = i == _plan.CardIndex, isNew = card.IsNew || card.Kind == StoryCardKind.Error;
             var bar = new Border
             {
-                Height = 3, CornerRadius = new CornerRadius(1.5),
-                Background = i == _plan.CardIndex ? _p.Brand : i < _plan.CardIndex ? _p.Muted : _p.Border,
+                Height = isNew ? 4 : 3, CornerRadius = new CornerRadius(2), VerticalAlignment = VerticalAlignment.Center,
+                Background = current ? _p.Brand
+                    : isNew ? (card.Kind == StoryCardKind.Error ? _p.Await : _p.BrandLine)
+                    : i < _plan.CardIndex ? _p.Muted : _p.Border,
             };
             var hit = new Border
             {
                 Child = bar, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
-                Padding = new Thickness(i == 0 ? 0 : 1.5, 5, i == n - 1 ? 0 : 1.5, 5),
+                Padding = new Thickness(i == 0 ? 0 : 1.5, 5, i == n - 1 ? 0 : 1.5, 5), Height = 14,
             };
+            if (card.Entry is { } entry)
+                ToolTip.SetTip(hit, (card.IsNew ? "New · " : "") + entry.Title);
             int k = i;
             hit.PointerPressed += (_, e) =>
             {
@@ -820,6 +864,40 @@ internal sealed class FeedStoryWindow : Window
         if (_cardScroll is not { } sv) return;
         double max = Math.Max(0, sv.Extent.Height - sv.Viewport.Height);
         sv.Offset = new Vector(0, Math.Clamp(sv.Offset.Y + dy, 0, max));
+    }
+
+    // Invisible strips along every edge and squares at every corner that start the OS resize loop — the
+    // StickyNoteWindow approach, all the way round. They sit over the frame's outer few pixels only.
+    private IEnumerable<Control> ResizeGrips()
+    {
+        Control Grip(WindowEdge edge, HorizontalAlignment h, VerticalAlignment v, double w, double ht, StandardCursorType cursor)
+        {
+            var grip = new Border
+            {
+                Background = Brushes.Transparent, HorizontalAlignment = h, VerticalAlignment = v,
+                Cursor = new Cursor(cursor),
+            };
+            if (!double.IsNaN(w)) grip.Width = w;
+            if (!double.IsNaN(ht)) grip.Height = ht;
+            grip.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+                _userResized = true;
+                BeginResizeDrag(edge, e);
+                e.Handled = true;   // never a move-drag as well
+            };
+            return grip;
+        }
+
+        const double t = GripThickness, c = GripThickness * 2;
+        yield return Grip(WindowEdge.West, HorizontalAlignment.Left, VerticalAlignment.Stretch, t, double.NaN, StandardCursorType.LeftSide);
+        yield return Grip(WindowEdge.East, HorizontalAlignment.Right, VerticalAlignment.Stretch, t, double.NaN, StandardCursorType.RightSide);
+        yield return Grip(WindowEdge.North, HorizontalAlignment.Stretch, VerticalAlignment.Top, double.NaN, t, StandardCursorType.TopSide);
+        yield return Grip(WindowEdge.South, HorizontalAlignment.Stretch, VerticalAlignment.Bottom, double.NaN, t, StandardCursorType.BottomSide);
+        yield return Grip(WindowEdge.NorthWest, HorizontalAlignment.Left, VerticalAlignment.Top, c, c, StandardCursorType.TopLeftCorner);
+        yield return Grip(WindowEdge.NorthEast, HorizontalAlignment.Right, VerticalAlignment.Top, c, c, StandardCursorType.TopRightCorner);
+        yield return Grip(WindowEdge.SouthWest, HorizontalAlignment.Left, VerticalAlignment.Bottom, c, c, StandardCursorType.BottomLeftCorner);
+        yield return Grip(WindowEdge.SouthEast, HorizontalAlignment.Right, VerticalAlignment.Bottom, c, c, StandardCursorType.BottomRightCorner);
     }
 
     // The tray / segments / header band drags the window (buttons and heads keep their clicks).

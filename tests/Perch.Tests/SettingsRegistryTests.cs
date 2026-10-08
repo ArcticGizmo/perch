@@ -28,6 +28,9 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
+        // The feeds story player's size, set by dragging the window's own edges.
+        nameof(AppSettings.FeedStoryWidthDip),
+        nameof(AppSettings.FeedStoryHeightDip),
         // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),
         // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.

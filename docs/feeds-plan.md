@@ -181,6 +181,23 @@ Tests: `FeedOpmlTests` (a reader-style export with nested folders, duplicates, u
 refusal, the depth, size and count caps, cleaned titles, non-OPML files, and an export → import round trip).
 The Feeds page isn't render-verified (no Settings harness).
 
+**Follow-ups (2026-10-08, from the user):**
+
+- **The story player opens larger and is resizable.** It defaults to 560×820 (was 440×640), clamped to the
+  overlay's screen. It's frameless, so invisible grips on every edge and corner start the OS resize loop, the
+  `StickyNoteWindow` approach.
+  - A size you drag to is remembered in `AppSettings.FeedStoryWidthDip`/`HeightDip`. That's UI state, so it's in
+    `SettingsRegistryTests.NotSettings`.
+  - Post images decode up to 1800 px wide (still pixel-capped), so a comic fills a wider card. Clicking an image
+    opens the original full size.
+- **A feed's story keeps its history.** `StoryPlan` runs are now the feed's entries in time order, from up to
+  `HistoryCount` (10) read entries before the first unread one. `StoryRun.StartIndex` is where playback enters:
+  the first new entry, or the error card just ahead of it. Chained feeds are entered at their own start.
+  - `StoryCard.IsNew` marks entries that were unread when they joined the plan. `Merge` also marks entries ahead
+    of the cursor that have since turned unread, never those behind it.
+  - The segments show new entries accent-tinted (the error card amber); history is neutral. New cards get a
+    "New" tag, and segment tooltips name each entry.
+
 Still not built from F7: authenticated feeds.
 
 **Owed for F4:** the manual live check against real feeds (GitHub releases, a Blogger/WordPress Atom feed, a
@@ -297,9 +314,12 @@ A single reused window (`WindowHost.ShowOrFocus`, closed in `CloseAuxWindows`). 
 
 **What plays**
 
-- **A head with unread entries**: its unread entries, **oldest to newest** (stories order). When they run out,
-  the player moves on to the next feed with unread entries, in row order. After the last one comes an "All caught
-  up" end card that closes on the next advance.
+- **A head with unread entries**: its entries **oldest to newest** (stories order), entered **at the first unread
+  one**. Up to 10 already-read entries sit behind it, so `‹` walks back in time. The new entries are marked: an
+  accent-tinted progress segment (kept after you've watched it) and a "New" tag on the card. When the feed runs out,
+  the player moves on to the next feed with unread entries, in row order, entering each at its own first new entry.
+  After the last one comes an "All caught up" end card that closes on the next advance. (Changed 2026-10-08 at the
+  user's request; it used to play only the unread entries, with no way back.)
 - **A head with nothing unread**: a replay of that feed's newest 10 entries. It opens on the newest, and `‹`
   walks back through older ones. When the replay ends, the player stops; it doesn't chain into other feeds.
 - **The `+N` chip**: plays the next feed with unread entries, or opens the tray on the first feed if none have

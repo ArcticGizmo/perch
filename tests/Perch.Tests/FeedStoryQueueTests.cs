@@ -20,16 +20,48 @@ public class FeedStoryQueueTests
     private static List<string> Ids(StoryRun run) =>
         run.Cards.Select(c => c.Entry?.Id ?? c.Kind.ToString()).ToList();
 
+    private static List<bool> NewFlags(StoryRun run) => run.Cards.Select(c => c.IsNew).ToList();
+
     [Fact]
-    public void Unread_head_plays_oldest_first_then_chains_then_ends()
+    public void Unread_head_starts_at_its_first_new_entry_then_chains_then_ends()
     {
         var feeds = new[] { Feed("a", 5, 4, 5), Feed("b", 3), Feed("c", 3, 1, 3) };
         var plan = StoryPlan.ForHead(feeds, "a");
         Assert.False(plan.IsReplay);
-        Assert.Equal(["a4", "a5"], Ids(plan.Runs[0]));
-        Assert.Equal(["c1", "c3"], Ids(plan.Runs[1]));         // b has nothing unread: skipped
+        Assert.Equal(["a1", "a2", "a3", "a4", "a5"], Ids(plan.Runs[0]));   // read history behind the new ones
+        Assert.Equal([false, false, false, true, true], NewFlags(plan.Runs[0]));
+        Assert.Equal("a4", plan.Current.Entry!.Id);                          // entered at the first new one
+        Assert.Equal(["c1", "c2", "c3"], Ids(plan.Runs[1]));                 // b has nothing unread: skipped
+        Assert.Equal([true, false, true], NewFlags(plan.Runs[1]));           // a read entry keeps its place in time
         Assert.Equal(StoryCardKind.CaughtUp, plan.Runs[2].Cards.Single().Kind);
-        Assert.Equal("a4", plan.Current.Entry!.Id);
+    }
+
+    [Fact]
+    public void Back_goes_into_read_history_before_the_previous_feed()
+    {
+        var plan = StoryPlan.ForHead([Feed("a", 2, 2), Feed("b", 3, 3)], "a");
+        Assert.Equal("a2", plan.Current.Entry!.Id);
+        Assert.Equal(StoryMove.Moved, plan.Prev());            // back in time, same feed
+        Assert.Equal("a1", plan.Current.Entry!.Id);
+        Assert.Equal(StoryMove.None, plan.Prev());
+
+        plan.Next();
+        Assert.Equal(StoryMove.FeedChanged, plan.Next());      // into b at its first new entry, not its oldest
+        Assert.Equal("b3", plan.Current.Entry!.Id);
+        Assert.Equal(StoryMove.Moved, plan.Prev());            // b's history first…
+        Assert.Equal("b2", plan.Current.Entry!.Id);
+        plan.Prev();
+        Assert.Equal(StoryMove.FeedChanged, plan.Prev());      // …then back to a
+        Assert.Equal("a2", plan.Current.Entry!.Id);
+    }
+
+    [Fact]
+    public void History_is_capped()
+    {
+        var plan = StoryPlan.ForHead([Feed("a", 30, 30)], "a");
+        Assert.Equal(StoryPlan.HistoryCount + 1, plan.CurrentRun.Cards.Count);
+        Assert.Equal("a20", plan.CurrentRun.Cards[0].Entry!.Id);
+        Assert.Equal(StoryPlan.HistoryCount, plan.CardIndex);
     }
 
     [Fact]
@@ -59,10 +91,13 @@ public class FeedStoryQueueTests
     public void Failing_feed_leads_with_an_error_card()
     {
         var plan = StoryPlan.ForHead([Feed("a", 2, "404 Not Found", 2)], "a");
-        Assert.Equal(StoryCardKind.Error, plan.Current.Kind);
+        Assert.Equal(StoryCardKind.Error, plan.Current.Kind);   // just ahead of the new entries, after the history
         Assert.Equal("404 Not Found", plan.Current.Error);
         Assert.Equal(StoryMove.Moved, plan.Next());
         Assert.Equal("a2", plan.Current.Entry!.Id);
+        plan.Prev();
+        Assert.Equal(StoryMove.Moved, plan.Prev());
+        Assert.Equal("a1", plan.Current.Entry!.Id);
 
         var empty = StoryPlan.ForHead([Feed("x", 0, "Timed out")], "x");
         Assert.Equal(StoryCardKind.Error, empty.Current.Kind);
@@ -114,17 +149,27 @@ public class FeedStoryQueueTests
     [Fact]
     public void Merge_only_adds_ahead_of_the_cursor()
     {
-        var plan = StoryPlan.ForHead([Feed("a", 3, 1, 2), Feed("b", 2, 1)], "a");
+        var plan = StoryPlan.ForHead([Feed("a", 2, 1, 2), Feed("b", 2, 1)], "a");
         plan.Next(); plan.Next();                     // a1, a2 watched; now on b1
         Assert.Equal("b1", plan.Current.Entry!.Id);
 
-        // New arrivals: a3 (behind the cursor), b2 (current run), and a new feed c.
-        plan.Merge([Feed("a", 3, 1, 2, 3), Feed("b", 2, 1, 2), Feed("c", 1, 1)]);
+        // New arrivals: a3 (behind the cursor), b3 (current run), and a new feed c.
+        plan.Merge([Feed("a", 3, 1, 2, 3), Feed("b", 3, 1, 3), Feed("c", 1, 1)]);
         Assert.Equal(["a1", "a2"], Ids(plan.Runs[0]));          // untouched
-        Assert.Equal(["b1", "b2"], Ids(plan.Runs[1]));          // appended after the cursor
+        Assert.Equal(["b1", "b2", "b3"], Ids(plan.Runs[1]));    // appended after the cursor
+        Assert.True(plan.Runs[1].Cards[^1].IsNew);
         Assert.Equal("c", plan.Runs[2].SubId);                   // inserted before the end card
         Assert.Equal(StoryCardKind.CaughtUp, plan.Runs[^1].Cards.Single().Kind);
         Assert.Equal("b1", plan.Current.Entry!.Id);              // cursor unmoved
+    }
+
+    [Fact]
+    public void Merge_marks_entries_ahead_that_turned_unread_but_never_those_behind()
+    {
+        var plan = StoryPlan.ForHead([Feed("a", 4, 2)], "a");   // a1 a2* a3 a4, on a2
+        Assert.Equal([false, true, false, false], NewFlags(plan.CurrentRun));
+        plan.Merge([Feed("a", 4, 1, 2, 4)]);                    // a1 (behind) and a4 (ahead) now unread too
+        Assert.Equal([false, true, false, true], NewFlags(plan.CurrentRun));
     }
 
     [Fact]

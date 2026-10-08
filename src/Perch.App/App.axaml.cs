@@ -1985,6 +1985,14 @@ public partial class App : Application
                 var w = new FeedStoryWindow(host, _feedIcons.Get);
                 w.EditRequested += _ => OpenSettings("feeds");
                 w.ImagesToggleRequested += SetFeedImages;
+                w.Resized += (width, height) =>
+                {
+                    if (_appSettings is not { } s) return;
+                    s.FeedStoryWidthDip = Math.Round(width);
+                    s.FeedStoryHeightDip = Math.Round(height);
+                    s.Save();
+                };
+                SizeFeedStory(w);
                 CenterOnOverlayScreen(w);
                 return w;
             },
@@ -2001,6 +2009,22 @@ public partial class App : Application
         s.Save();
         _feedsHost?.Apply(s);
         _settings?.ReloadFeeds();
+    }
+
+    // The story player opens at the size the user last left it (else its default), never bigger than the overlay's
+    // screen allows — a size remembered on a large monitor mustn't overflow a laptop's.
+    private void SizeFeedStory(FeedStoryWindow w)
+    {
+        double width = _appSettings?.FeedStoryWidthDip ?? FeedStoryWindow.DefaultWidth;
+        double height = _appSettings?.FeedStoryHeightDip ?? FeedStoryWindow.DefaultHeight;
+        if (_overlay is not null && (_overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary) is { } screen)
+        {
+            double scale = screen.Scaling > 0 ? screen.Scaling : 1;
+            width = Math.Min(width, screen.WorkingArea.Width / scale - 40);
+            height = Math.Min(height, screen.WorkingArea.Height / scale - 40);
+        }
+        w.Width = Math.Max(FeedStoryWindow.MinSize.Width, width);
+        w.Height = Math.Max(FeedStoryWindow.MinSize.Height, height);
     }
 
     // Centres a not-yet-shown window on the monitor the overlay is on (else the primary).
