@@ -117,7 +117,9 @@ internal sealed class TaskNoticeItem(BackgroundTask task, string? eventText = nu
     public bool IsEvent => EventText is not null;
 }
 
-internal enum PermissionResolution { Pending, Allowed, Denied, Expired }
+/// <summary><see cref="AnsweredElsewhere"/>: the CLI withdrew the prompt because another client (Remote Control's
+/// claude.ai / phone side) answered it first.</summary>
+internal enum PermissionResolution { Pending, Allowed, Denied, Expired, AnsweredElsewhere }
 
 /// <summary>A <c>can_use_tool</c> prompt as a first-class item. The turn is paused until it resolves. When the
 /// tool is <c>AskUserQuestion</c> (<see cref="IsQuestion"/>) it is Claude asking the user something, not a
@@ -212,6 +214,12 @@ internal sealed class SessionConversation
     /// turn of their own; a result clears the count either way.</summary>
     public int QueuedPrompts { get; private set; }
     public PermissionItem? PendingPermission { get; private set; }
+    /// <summary>The CLI's last reported turn state (<c>idle</c> / <c>running</c> / <c>requires_action</c>), or null
+    /// when it hasn't reported one (an older CLI, or a tailed transcript).</summary>
+    public string? CliState { get; private set; }
+    /// <summary>The CLI is blocked on an answer Perch wasn't asked for — a prompt only a Remote Control client
+    /// sees. Still "waiting", just not on Perch.</summary>
+    public bool WaitingElsewhere => CliState == "requires_action" && PendingPermission is null;
     /// <summary>The last result closed a turn during which prompts were sent. The CLI either absorbed them into
     /// that turn or runs them as a turn of its own next, and stdout doesn't say which; cleared when that turn
     /// starts or a later turn settles with nothing sent mid-turn.</summary>
@@ -356,6 +364,23 @@ internal sealed class SessionConversation
                 StateChanged?.Invoke();
                 break;
             }
+
+            case ControlRequestCancelledEvent cancelled:
+            {
+                // Only a still-pending prompt can be withdrawn; one the user already answered here stays as it is.
+                var item = _items.OfType<PermissionItem>().LastOrDefault(p => p.Request.RequestId == cancelled.RequestId);
+                if (item is not { Resolution: PermissionResolution.Pending }) break;
+                item.Resolution = PermissionResolution.AnsweredElsewhere;
+                if (ReferenceEquals(PendingPermission, item)) PendingPermission = null;
+                Changed?.Invoke(item, ConversationChange.Updated);
+                StateChanged?.Invoke();
+                break;
+            }
+
+            case SessionStateEvent state:
+                ApplyCliState(state.State);
+                StateChanged?.Invoke();
+                break;
 
             case StatusEvent status:
                 // Only meaningful while a /compact is running: advance its meter when a percentage is read.
@@ -795,11 +820,37 @@ internal sealed class SessionConversation
         TurnActive = false;
         QueuedPrompts = 0;
         MayHaveQueuedTurn = false;
+        CliState = null;
         BackgroundTasks.SessionEnded();   // the CLI's background work dies with it
         Append(new NoteItem(
             exitCode == 0 ? "session ended" : $"claude exited ({exitCode}) {stderrTail}".TrimEnd(),
             exitCode == 0 ? NoteKind.Info : NoteKind.Error));
         StateChanged?.Invoke();
+    }
+
+    // The CLI's own turn state, the only signal for a turn a Remote Control client started or answered. It corrects
+    // what Perch inferred rather than replacing it: results and output still settle/reopen turns as before, which
+    // is all an older CLI (no state events) has.
+    private void ApplyCliState(string state)
+    {
+        CliState = state;
+        if (state != "idle")
+        {
+            TurnActive = true;
+            MayHaveQueuedTurn = false;
+            return;
+        }
+        // Idle: nothing runs or is queued, so no prompt can still be waiting on Perch — a card the CLI never
+        // withdrew is stale. (stdout is ordered, so a request it still held would have come before this.)
+        if (PendingPermission is { } stale)
+        {
+            stale.Resolution = PermissionResolution.Expired;
+            PendingPermission = null;
+            Changed?.Invoke(stale, ConversationChange.Updated);
+        }
+        TurnActive = false;
+        QueuedPrompts = 0;
+        MayHaveQueuedTurn = false;
     }
 
     // A turn starting (init) or main-thread output after a result settled the turn means the CLI started a queued

@@ -322,6 +322,99 @@ public class SessionConversationTests
         Assert.True(second.IsComplete);
     }
 
+    // Remote Control (docs/remote-control-sync-plan.md): a client on the bridge answered the prompt first, so the CLI
+    // withdraws it from Perch. The card settles and the session stops reading as "waiting".
+    [Fact]
+    public void CancelledPermission_SettlesAsAnsweredElsewhere()
+    {
+        var (conv, log) = Make();
+        conv.AddUserPrompt("commit");
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "git commit", "{}", null));
+        var perm = Assert.IsType<PermissionItem>(conv.Items[^1]);
+
+        conv.Apply(new ControlRequestCancelledEvent("req1"));
+
+        Assert.Equal(PermissionResolution.AnsweredElsewhere, perm.Resolution);
+        Assert.Null(conv.PendingPermission);
+        Assert.Contains((perm, ConversationChange.Updated), log);
+        Assert.True(conv.TurnActive);   // the turn carries on with the remote answer
+    }
+
+    [Fact]
+    public void CancelledPermission_UnknownOrAlreadyAnswered_ChangesNothing()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("go");
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "ls", "{}", null));
+        var perm = Assert.IsType<PermissionItem>(conv.Items[^1]);
+
+        conv.Apply(new ControlRequestCancelledEvent("someone-else"));
+        Assert.Same(perm, conv.PendingPermission);
+
+        conv.ResolvePermission(perm, allowed: false);
+        conv.Apply(new ControlRequestCancelledEvent("req1"));
+        Assert.Equal(PermissionResolution.Denied, perm.Resolution);
+    }
+
+    // A turn a Remote Control client starts sends Perch no prompt: only the CLI's own state says it's running.
+    [Fact]
+    public void CliState_RunningAndIdle_DriveTheTurn_EvenBeforeAnyResult()
+    {
+        var (conv, _) = Make();
+        Assert.Null(conv.CliState);
+
+        conv.Apply(new SessionStateEvent("running"));
+        Assert.True(conv.TurnActive);
+        Assert.False(conv.IsSettled);
+
+        conv.Apply(new SessionStateEvent("idle"));
+        Assert.False(conv.TurnActive);
+        Assert.Equal("idle", conv.CliState);
+    }
+
+    [Fact]
+    public void CliState_Idle_SettlesQueuedBookkeeping()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");   // queued behind the first
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 1, 1, 1));
+        Assert.True(conv.MayHaveQueuedTurn);
+
+        conv.Apply(new SessionStateEvent("idle"));
+        Assert.False(conv.MayHaveQueuedTurn);
+        Assert.Equal(0, conv.QueuedPrompts);
+        Assert.True(conv.IsSettled);
+    }
+
+    [Fact]
+    public void CliState_RequiresActionWithNoPerchPrompt_IsWaitingElsewhere()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionStateEvent("requires_action"));
+        Assert.True(conv.TurnActive);
+        Assert.True(conv.WaitingElsewhere);
+
+        // Once Perch holds the prompt itself it's an ordinary pending permission, not a remote wait.
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "ls", "{}", null));
+        Assert.False(conv.WaitingElsewhere);
+    }
+
+    [Fact]
+    public void CliState_Idle_ExpiresAPromptTheCliNeverWithdrew()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("go");
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "ls", "{}", null));
+        var perm = Assert.IsType<PermissionItem>(conv.Items[^1]);
+
+        conv.Apply(new SessionStateEvent("idle"));
+
+        Assert.Equal(PermissionResolution.Expired, perm.Resolution);
+        Assert.Null(conv.PendingPermission);
+        Assert.False(conv.TurnActive);
+    }
+
     // Claude Code absorbs a prompt sent mid-turn into the running turn (transcript: queue-operation "remove",
     // reason "absorbed_mid_turn") and emits a single result for both. Captured live from 2.1.282: prompt one
     // runs `sleep 20`, prompt two arrives during it, and one assistant message answers both.

@@ -81,6 +81,17 @@ internal sealed record TextDeltaEvent(string Text) : SessionEvent;
 internal sealed record PermissionRequestEvent(
     string RequestId, string ToolName, string Description, string InputJson, string? SuggestedMode) : SessionEvent;
 
+/// <summary>The CLI withdrew one of its own control requests (<c>control_cancel_request</c>). For a
+/// <see cref="PermissionRequestEvent"/> this means it no longer needs Perch's answer: another attached client
+/// (Remote Control's claude.ai / phone side) answered first, or the turn that asked was torn down.</summary>
+internal sealed record ControlRequestCancelledEvent(string RequestId) : SessionEvent;
+
+/// <summary>The CLI's own turn state (<c>system/session_state_changed</c>): <c>idle</c>, <c>running</c> or
+/// <c>requires_action</c>. Authoritative whoever started the turn (Perch or a Remote Control client), unlike
+/// the state Perch infers from its own sends. Only emitted when the child env has
+/// <c>CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1</c> (see <c>docs/remote-control-sync-plan.md</c>).</summary>
+internal sealed record SessionStateEvent(string State) : SessionEvent;
+
 /// <summary>Acknowledgement of a <c>set_permission_mode</c> control request.</summary>
 internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 

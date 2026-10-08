@@ -40,6 +40,9 @@ internal static class StreamJsonParser
             "stream_event"     => ParseStreamEvent(root),
             "control_request"  => ParseControlRequest(root),
             "control_response" => ParseControlResponse(root),
+            "control_cancel_request" => TranscriptJson.AsString(root["request_id"]) is { Length: > 0 } cancelled
+                ? [new ControlRequestCancelledEvent(cancelled)]
+                : [],
             "result"           => ParseResult(root),
             "attachment"       => ParseQueuedNotification(root),
             _                  => [],
@@ -62,6 +65,10 @@ internal static class StreamJsonParser
         var subtype = TranscriptJson.AsString(root["subtype"]);
         if (subtype == "status") return ParseStatus(root);
         if (subtype == "compact_boundary") return ParseCompactBoundary(root);
+        if (subtype == "session_state_changed")
+            return TranscriptJson.AsString(root["state"]) is ("idle" or "running" or "requires_action") and string state
+                ? [new SessionStateEvent(state)]
+                : [];
         if (ParseTaskRecord(subtype, root) is { } task) return [task];
         if (subtype != "init") return [];
         var commands = (root["slash_commands"] as JsonArray)?

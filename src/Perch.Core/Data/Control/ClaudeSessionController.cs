@@ -85,6 +85,9 @@ internal sealed class ClaudeSessionController : IDisposable
         // Lets perch-hook (a child of this claude) tell "Perch's own controlled session starting" from "a
         // normal claude opened a Perch-controlled id" — see SessionLock / collision defence (c).
         psi.Environment[SessionLock.OwnerEnvVar] = Environment.ProcessId.ToString();
+        // Have the CLI report its own turn state (system/session_state_changed), so a turn a Remote Control client
+        // started or answered still reads right here. Undocumented; an older CLI ignores it and Perch infers as before.
+        psi.Environment["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] = "1";
         // Account selection: pin the config dir (and with it, that account's credentials) for this session only.
         // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
         if (!string.IsNullOrWhiteSpace(configDir))
