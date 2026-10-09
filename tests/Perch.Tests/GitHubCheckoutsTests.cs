@@ -188,8 +188,10 @@ public class GitHubCheckoutsTests
 
             var found = GitCheckoutScanner.Scan([Path.Combine(main, "src", "app"), main, wt, loose, local, Path.Combine(tmp, "missing")]);
 
-            Assert.Equal([main, wt], found.Select(c => c.Root));
-            Assert.All(found, c => Assert.Equal("https://github.com/acme/web.git", Assert.Single(c.Remotes).Url));
+            // The linked worktree folds into the repo it belongs to: one candidate, not two.
+            Assert.Equal([main], found.Select(c => c.Root));
+            Assert.Equal("https://github.com/acme/web.git", Assert.Single(Assert.Single(found).Remotes).Url);
+            Assert.Equal("https://github.com/acme/web.git", Assert.Single(GitCheckoutScanner.ReadRemotes(wt)).Url);
 
             // HEAD is per-worktree: main's own, and the linked worktree's in its gitdir; detached reads as null.
             File.WriteAllText(Path.Combine(main, ".git", "HEAD"), "ref: refs/heads/main\n");

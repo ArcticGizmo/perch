@@ -10,16 +10,20 @@ namespace Perch.Data;
 /// </summary>
 public static class GitCheckoutScanner
 {
-    /// <summary>The distinct checkout roots under <paramref name="folders"/>, each with its remotes. Folders outside
-    /// any checkout, and checkouts with no remotes, are left out.</summary>
+    /// <summary>The distinct repositories under <paramref name="folders"/>, each as its main checkout root with its
+    /// remotes. A linked worktree folds into the repo it belongs to, so a repo with five worktrees is one candidate.
+    /// Folders outside any checkout, and repos with no remotes, are left out.</summary>
     public static IReadOnlyList<CheckoutCandidate> Scan(IEnumerable<string> folders)
     {
         var roots = new Dictionary<string, CheckoutCandidate>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);     // worktree roots already folded
         foreach (var folder in folders)
         {
             try
             {
-                if (FindRoot(folder) is not { } root || roots.ContainsKey(root)) continue;
+                if (FindRoot(folder) is not { } found || !seen.Add(found)) continue;
+                var root = GitWorktreeScanner.Read(found)?.Root is { } main && Directory.Exists(main) ? main : found;
+                if (roots.ContainsKey(root)) continue;
                 var remotes = ReadRemotes(root);
                 if (remotes.Count > 0) roots[root] = new CheckoutCandidate(root, remotes);
             }
@@ -121,6 +125,31 @@ public static class GitCheckoutScanner
             if (value.Length > 0) list.Add(new GitRemoteEntry(remote, value));
         }
         return list;
+    }
+
+    /// <summary>The value of <c>key</c> in a plain <c>[section]</c> (no subsection) of a git config file, last one
+    /// winning as git does; null when absent. Pure.</summary>
+    internal static string? ConfigValue(string config, string section, string key)
+    {
+        string? value = null;
+        bool inSection = false;
+        foreach (var raw in config.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] is '#' or ';') continue;
+            if (line[0] == '[')
+            {
+                var close = line.IndexOf(']');
+                inSection = close > 0 && line[1..close].Trim().Equals(section, StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+            if (!inSection) continue;
+            var eq = line.IndexOf('=');
+            if (eq < 0 || !line[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+            var v = StripComment(line[(eq + 1)..].Trim());
+            value = v.Length >= 2 && v[0] == '"' && v[^1] == '"' ? v[1..^1] : v;
+        }
+        return value;
     }
 
     // An unquoted value ends at an inline comment.
