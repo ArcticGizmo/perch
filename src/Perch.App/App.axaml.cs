@@ -2249,13 +2249,14 @@ public partial class App : Application
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
         // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
-        // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
-        w.UsageProvider = () => _usageHost?.LastPrimaryUsage ?? UsageInfo.Empty;
+        // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off) — for the
+        // account the window's session runs under.
+        w.UsageProvider = () => _usageHost?.UsageFor(w.AccountConfigDir) ?? UsageInfo.Empty;
         w.UsageRefresh = async () =>
         {
             if (_usageHost is null) return UsageInfo.Empty;
             await _usageHost.RefreshAsync();
-            return _usageHost.LastPrimaryUsage;
+            return _usageHost.UsageFor(w.AccountConfigDir);
         };
         // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
         w.SetComposerActions(BuildComposerActions(w));
