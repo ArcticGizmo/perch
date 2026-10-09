@@ -41,7 +41,8 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 | `/import <path>` | Imports context from a file | ⚠ (advertised) | **In catalogue (plain text)** — arg rides through in the sent text |
 | `/autocompact` | Perch-managed early auto-compaction | native modal | **Done (code)** — opens a modal (toggle + threshold slider); Perch fires `/compact` at the chosen fill % |
 | `/heapdump` | Writes a heap dump file | ⚠ | **Kept out of the palette** (still works if typed) |
-| `/reload-plugins`, `/reload-skills` | Reloads plugins/skills | ⚠ | **Kept out of the palette** (power-user; still send as text if typed) |
+| `/reload-plugins`, `/reload-skills` | Reloads plugins/skills | ✅ verified (2.1.295) — local command, no model turn, $0; a synthetic one-line reply ("Reloaded: 3 plugins · 9 skills · …") | **In catalogue (plain text)** — the reply renders; Perch also rescans the palette's skill list on send |
+| `/exit` (`/quit`) | Ends the session | — (never sent) | **Native** — Perch ends the session (no confirm; typing it is the confirm) and closes the window, as the End button does; a dormant session is ended without being woken |
 | `/goal` | Sets/updates the session goal | ⚠ (advertised) | **In catalogue (plain text)** — renders |
 | `/color`, `/fast` | Toggle display prefs | ❌ N/A | **Omitted** — Perch owns its own look |
 
@@ -111,7 +112,7 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 - **Pruned the dead commands.** `/export`, `/memory`, `/add-dir` returned "not available in this environment"
   over stream-json (dogfood) and were **removed from the catalogue** — they're the ones absent from the CLI's
   advertised list. `/goal`, `/import` (both advertised) stay. **Kept out of the palette** (still send as text
-  if typed): `/heapdump`, `/reload-plugins`, `/reload-skills`. **Omitted** (Perch owns its look): `/color`,
+  if typed): `/heapdump` (`/reload-plugins` + `/reload-skills` since added — see the table). **Omitted** (Perch owns its look): `/color`,
   `/fast`.
 
 ---

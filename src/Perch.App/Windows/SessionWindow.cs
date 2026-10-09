@@ -1683,6 +1683,13 @@ internal sealed partial class SessionWindow : Window
         live.SendPrompt(text, _pendingAttachments.Count > 0 ? _pendingAttachments.ToList() : null);
         _composer.Text = "";
         ClearAttachments();
+        // A reload may have added or removed skills on disk: rescan the palette's list (the advertised set from
+        // init doesn't change, so MaybeRebuildSkills' signature alone wouldn't notice).
+        if (SlashCommandCatalog.CommandName(text) is "reload-skills" or "reload-plugins")
+        {
+            _skillsBuiltFor = ("", -1);
+            MaybeRebuildSkills();
+        }
     }
 
     // ── Composer attachments (drag-drop + paste) ───────────────────────────────────
@@ -1955,8 +1962,19 @@ internal sealed partial class SessionWindow : Window
             case "usage":  ShowUsageOverlay(); return true;
             case "remote-control":
             case "rc":     ToggleRemoteControl(); return true;
+            case "exit":
+            case "quit":   EndFromCommand(); return true;
             default:       return false;
         }
+    }
+
+    // /exit (/quit) → end the session, as the End button does but without its confirm: typing the command is
+    // the confirmation, the same as in the terminal. It never goes to the CLI, so a dormant session isn't woken
+    // just to be stopped. The window closes too, so the ended session can't be resumed here by reflex.
+    private void EndFromCommand()
+    {
+        if (_session is { } s && (s.IsDormant || s.IsRunning)) s.EndByUser();
+        if (!_closed) Close();
     }
 
     // /config → the Claude Desktop app (its GUI settings live there). Best-effort; a note if it isn't installed.

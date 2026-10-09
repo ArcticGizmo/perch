@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.20] - 2026-10-09
+
+- `/reload-skills` and `/reload-plugins` in session windows
+- `/exit` ends the session (no "are you sure?" — you typed it)
+
+---
+
 ## [v0.5.19] - 2026-10-09
 
 - Resumed sessions reopen under the account they ran under
