@@ -21,6 +21,10 @@ Parts 1 and 2 are small and build on what already exists. Part 3 is larger and g
 
 ## Part 1: dismiss until the status changes
 
+**Naming (2026-10-09):** on screen this is **Hide** / **Hidden** / **Unhide** / "Include hidden", because on GitHub
+"dismiss" means removing a review. The code and the store keep the dismiss names (`Dismiss`, `GhView.Dismissed`,
+`github-alerts-dismissed.json`), so nothing on disk changes.
+
 ### Behaviour
 
 - Each row gets a **Dismiss** button. The PR leaves Needs you and All open, stops counting on the overlay strip,

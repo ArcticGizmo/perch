@@ -15,9 +15,10 @@ namespace Perch.Avalonia.Windows;
 /// The GitHub dashboard, opened by clicking the overlay's GitHub strip: a launch centre for your open pull requests.
 /// Each PR is a card on a sunken page: its repo, number, author and age, the title, the reasons it needs you
 /// ("Review requested", "Changes requested by alice", "Ready to merge" …) and its branches, with the actions bottom
-/// right: "Dismiss" (hides it until its state changes), "Open in GitHub" and "Start session" (opens
-/// <see cref="PrSessionWindow"/>). Tabs switch between the PRs needing you (the default), every open PR that involves
-/// you, and the ones you dismissed (each with "Restore"). A toolbar picks the grouping (repo / reason / role / none),
+/// right: "Hide" (out of view until its state changes; a dismissal in the code, but not called that on screen, where
+/// dismissing means removing a review), "Open in GitHub" and "Start session" (opens <see cref="PrSessionWindow"/>).
+/// Tabs switch between the PRs needing you (the default), every open PR that involves you, and the ones you hid (each
+/// with "Unhide"). A toolbar picks the grouping (repo / reason / role / none),
 /// the card order and an "Updated within" age window.
 ///
 /// <para>Reused via <c>WindowHost.ShowOrFocus</c> (<see cref="Retarget"/> re-renders). It owns no data: it renders
@@ -106,7 +107,7 @@ internal sealed class GitHubAlertsWindow : Window
         _needsYouTab.Click += (_, _) => { _view = GhView.NeedsYou; Refresh(); };
         _allTab.Click += (_, _) => { _view = GhView.All; Refresh(); };
         _dismissedTab.Click += (_, _) => { _view = GhView.Dismissed; Refresh(); };
-        ToolTip.SetTip(_dismissedTab, "PRs you dismissed. Each comes back on its own when its state changes.");
+        ToolTip.SetTip(_dismissedTab, "PRs you hid. Each comes back on its own when its state changes.");
         var tabs = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
@@ -126,7 +127,7 @@ internal sealed class GitHubAlertsWindow : Window
         _includeDismissedToggle.Margin = new Thickness(10, 0, 0, 0);
         _includeDismissedToggle.VerticalAlignment = VerticalAlignment.Center;
         _includeDismissedToggle.Click += (_, _) => SetIncludeDismissed(!_includeDismissed);
-        ToolTip.SetTip(_includeDismissedToggle, "Show dismissed PRs in Needs you and All open too, to find one you hid.");
+        ToolTip.SetTip(_includeDismissedToggle, "Show hidden PRs in Needs you and All open too, to find one you hid.");
         var view = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
@@ -248,8 +249,8 @@ internal sealed class GitHubAlertsWindow : Window
         int dismissed = snap?.Filter(GhView.Dismissed, query).Count() ?? 0;
         StyleTab(_needsYouTab, $"Needs you  {needs}", _view == GhView.NeedsYou);
         StyleTab(_allTab, $"All open  {all}", _view == GhView.All);
-        StyleTab(_dismissedTab, $"Dismissed  {dismissed}", _view == GhView.Dismissed);
-        StyleTab(_includeDismissedToggle, _includeDismissed ? "✓ Include dismissed" : "Include dismissed", _includeDismissed);
+        StyleTab(_dismissedTab, $"Hidden  {dismissed}", _view == GhView.Dismissed);
+        StyleTab(_includeDismissedToggle, _includeDismissed ? "✓ Include hidden" : "Include hidden", _includeDismissed);
         _includeDismissedToggle.IsEnabled = _view != GhView.Dismissed;   // that tab is nothing but dismissed PRs
 
         _list.Children.Clear();
@@ -280,7 +281,7 @@ internal sealed class GitHubAlertsWindow : Window
                 _list.Children.Add(EmptyText(_view switch
                 {
                     GhView.NeedsYou  => "Nothing needs you right now.",
-                    GhView.Dismissed => "Nothing dismissed. Dismiss a PR to hide it until something changes on it.",
+                    GhView.Dismissed => "Nothing hidden. Hide a PR to keep it out of view until something changes on it.",
                     _                => "No open pull requests involve you.",
                 }));
             if (hiddenDismissed > 0) _list.Children.Add(IncludeDismissedHint(hiddenDismissed));
@@ -312,12 +313,12 @@ internal sealed class GitHubAlertsWindow : Window
         Refresh();
     }
 
-    // "2 dismissed PRs also match · Include them": a link-style button that flips "Include dismissed" on.
+    // "2 hidden PRs also match · Include them": a link-style button that flips "Include hidden" on.
     private Control IncludeDismissedHint(int n)
     {
         var link = new Button
         {
-            Content = $"{(n == 1 ? "1 dismissed PR also matches" : $"{n} dismissed PRs also match")} · Include them",
+            Content = $"{(n == 1 ? "1 hidden PR also matches" : $"{n} hidden PRs also match")} · Include them",
             Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
             Margin = new Thickness(2, 12, 2, 4), HorizontalAlignment = HorizontalAlignment.Left,
@@ -361,7 +362,7 @@ internal sealed class GitHubAlertsWindow : Window
         if (!yours && pr.Author.Length > 0) meta.Add(pr.Author);
         meta.Add(Role(pr.Relation));
         if (pr.IsDraft) meta.Add("draft");
-        if (item.Dismissed && _view != GhView.Dismissed) meta.Add("dismissed");   // shown via "Include dismissed"
+        if (item.Dismissed && _view != GhView.Dismissed) meta.Add("hidden");   // shown via "Include hidden"
         var metaText = new TextBlock
         {
             Text = string.Join(" · ", meta.Where(m => m.Length > 0)), FontSize = 12, Foreground = Muted,
@@ -400,8 +401,9 @@ internal sealed class GitHubAlertsWindow : Window
             _host.MarkSeen(pr.Url);
         };
 
-        // Dismiss hides the PR until its state changes; in the Dismissed tab the same slot restores it.
-        var dismiss = GhostButton(item.Dismissed ? "Restore" : "Dismiss");
+        // Hide (a dismissal in the code) keeps the PR out of view until its state changes; in the Hidden tab the same
+        // slot unhides it. Labelled "Hide", not "Dismiss", because dismissing means removing a review on GitHub.
+        var dismiss = GhostButton(item.Dismissed ? "Unhide" : "Hide");
         ToolTip.SetTip(dismiss, item.Dismissed
             ? "Show this PR again now"
             : "Hide until something changes: new comments or reviews, a review decision, checks starting or stopping " +
