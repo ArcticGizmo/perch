@@ -118,6 +118,7 @@ internal sealed class ConfigDirDialog : Window
         };
         buttons.Children.Add(_ok);
         buttons.Children.Add(cancel);
+        DockPanel.SetDock(buttons, Dock.Bottom);
 
         var layout = new StackPanel { Margin = new Thickness(16, 16, 16, 12) };
         layout.Children.Add(help);
