@@ -36,6 +36,19 @@ public class SlashCommandCatalogTests
         Assert.False(SlashCommandCatalog.IsInternal("context"));
     }
 
+    // The reloads run headless as local commands (verified over stream-json, claude 2.1.295), so they ride as
+    // text; /exit never goes to the CLI — Perch ends the session itself.
+    [Theory]
+    [InlineData("reload-skills", nameof(SlashCommandTier.PlainText))]
+    [InlineData("reload-plugins", nameof(SlashCommandTier.PlainText))]
+    [InlineData("exit", nameof(SlashCommandTier.Native))]
+    public void SessionLifecycleCommands_AreCatalogued(string name, string tier)
+    {
+        var cmd = Assert.Single(SlashCommandCatalog.BuiltIns, c => c.Name == name);
+        Assert.Equal(tier, cmd.Tier.ToString());
+        Assert.False(cmd.TakesArgs);
+    }
+
     [Fact]
     public void Search_BlankQuery_ReturnsAllAlphabetically()
     {

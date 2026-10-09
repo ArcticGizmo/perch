@@ -59,6 +59,9 @@ internal static class SlashCommandCatalog
         new("release-notes", "",              "Show the release notes",                        SlashCommandTier.PlainText),
         new("goal",          "[text]",        "Set or show the session goal",                  SlashCommandTier.PlainText),
         new("import",        "<path>",        "Import a file's contents into the context",     SlashCommandTier.PlainText),
+        // Local commands (no model turn, no cost): the CLI answers with a one-line synthetic reply.
+        new("reload-skills", "",              "Reload skills from disk",                        SlashCommandTier.PlainText),
+        new("reload-plugins","",              "Reload plugins, skills, agents and hooks",       SlashCommandTier.PlainText),
 
         // Tier 2 — Perch already has a native surface; the palette routes there.
         new("model",         "[name]",        "Switch the model",                              SlashCommandTier.Native),
@@ -73,6 +76,7 @@ internal static class SlashCommandCatalog
         new("resume",        "",              "Resume another session",                        SlashCommandTier.Native),
         new("login",         "",              "Sign in (opens a terminal)",                    SlashCommandTier.Native),
         new("logout",        "",              "Sign out (opens a terminal)",                   SlashCommandTier.Native),
+        new("exit",          "",              "End this session",                               SlashCommandTier.Native),
 
         // Tier 3 — mutates the session; Perch must react.
         new("clear",         "",              "Start a fresh conversation",                    SlashCommandTier.SessionMutating),
