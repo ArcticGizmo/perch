@@ -798,7 +798,7 @@ internal sealed class PrSessionWindow : Window
             dock.Children.Add(valText);
             dock.Children.Add(new TextBlock
             {
-                Inlines =
+                Inlines = new InlineCollection
                 {
                     new Run($"{{{v.Name}}}") { FontFamily = Mono, Foreground = Accent },
                     new Run($"   {v.Description}") { Foreground = Muted, FontSize = 11.5 },
