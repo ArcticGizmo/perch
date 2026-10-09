@@ -124,6 +124,7 @@ Print, plainly:
 ## Notes
 
 - This skill does **not** commit, tag, or push — it only edits the two files and reports.
-  Tagging happens separately (see `publish.bat`, which reads the version from the csproj).
+  Tagging happens separately: commit the bump, then `/release-next-version` PRs, merges and tags it
+  (or see `publish.bat`, which reads the version from the csproj, for a local build).
 - Only the patch component is bumped. If the user wants a minor/major bump, they'll say so —
   follow their instruction instead of auto-incrementing patch.
