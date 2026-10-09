@@ -7,16 +7,21 @@ public sealed record PrWorktreePlan(string Path, string Branch);
 /// error line (in which case <see cref="Path"/> is null and nothing was left behind).</summary>
 public sealed record PrWorktreeResult(string? Path, bool Reused, string? Error);
 
+/// <summary>A checkout's worktree picture for the dialog: the repo's worktrees and the layout new ones follow.</summary>
+public sealed record PrWorktreeContext(GitWorktreeSet Set, WorktreeLayout Layout);
+
 /// <summary>
-/// A per-PR <c>git worktree</c> beside the user's checkout, so a background session works on the PR without touching
-/// the user's working copy (S2 in docs/github-dashboard-plan.md). Layout: <c>&lt;parent&gt;/.perch-worktrees/
-/// &lt;repo&gt;-pr-&lt;n&gt;</c> on a local branch <c>perch/pr-&lt;n&gt;</c>.
+/// A per-PR <c>git worktree</c>, so a session works on the PR without touching the user's working copy (S2/W4 in
+/// docs/github-dashboard-plan.md). It goes where the user's own worktrees go (<see cref="WorktreeLayoutInference"/>),
+/// named <c>pr-&lt;n&gt;</c>, on a local branch <c>perch/pr-&lt;n&gt;</c>. A layout nested inside the checkout gets a
+/// line in the repo's <c>.git/info/exclude</c> — local, never committed — so the worktree doesn't show as untracked.
 ///
 /// <para>Git only, through <see cref="GitRunner"/> as a <see cref="GitRunner.Trust.UserAction"/> (the user asked for
 /// it, so their hooks and LFS behave as in a terminal): <c>git fetch &lt;remote&gt; pull/&lt;n&gt;/head:perch/pr-&lt;n&gt;</c>
 /// from whichever remote names the PR's repo (works for PRs from forks too), then <c>git worktree add</c>. A plain
 /// (non-forced) fetch refuses to move a branch that has local commits, so a previous session's work is never
-/// discarded; that surfaces as an error instead. An existing worktree is reused as it is, local commits and all.</para>
+/// discarded; that surfaces as an error instead. A worktree already on <c>perch/pr-&lt;n&gt;</c> is reused as it is,
+/// wherever it is (including the old <c>.perch-worktrees</c> location).</para>
 ///
 /// <para>Blocking; call it off the UI thread. Never throws.</para>
 /// </summary>
@@ -25,16 +30,33 @@ public static class PrWorktree
     private const int FetchTimeoutMs = 120_000;
     private const int AddTimeoutMs = 120_000;
 
-    public static PrWorktreePlan? PlanFor(string checkoutRoot, GitRepoRef repo, int number)
+    public static string BranchFor(int number) => $"perch/pr-{number}";
+
+    /// <summary>The worktree set and inferred layout for the checkout at <paramref name="checkoutRoot"/>, or null when
+    /// it isn't a git checkout. Reads the repo's <c>.gitignore</c> and <c>info/exclude</c> as layout hints.</summary>
+    public static PrWorktreeContext? Inspect(string checkoutRoot)
     {
-        if (number <= 0 || !Path.IsPathFullyQualified(checkoutRoot)) return null;
-        // A checkout at a drive/file-system root has nowhere beside it.
-        var parent = Directory.GetParent(Path.TrimEndingDirectorySeparator(checkoutRoot))?.FullName;
-        if (parent is null) return null;
-        var safeRepo = new string(repo.Repo.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-').ToArray());
-        return new PrWorktreePlan(
-            Path.Combine(parent, RepoCheckoutResolver.WorktreeFolderName, $"{safeRepo}-pr-{number}"),
-            $"perch/pr-{number}");
+        try
+        {
+            if (GitWorktreeScanner.Read(checkoutRoot) is not { } set) return null;
+            var common = GitWorktreeScanner.CommonDir(set.Root);
+            string? Text(string? path) => path is not null && File.Exists(path) ? File.ReadAllText(path) : null;
+            var layout = WorktreeLayoutInference.Infer(set.Root, set.Bare, set.Linked,
+                Text(Path.Combine(set.Root, ".gitignore")),
+                Text(common is null ? null : Path.Combine(common, "info", "exclude")));
+            return new PrWorktreeContext(set, layout);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Where the worktree for PR <paramref name="number"/> goes: an existing worktree already on its branch,
+    /// else the layout's place for <c>pr-&lt;n&gt;</c>.</summary>
+    public static PrWorktreePlan? PlanFor(PrWorktreeContext ctx, int number)
+    {
+        if (number <= 0) return null;
+        var branch = BranchFor(number);
+        var path = ctx.Set.PathOfBranch(branch) ?? ctx.Layout.Render(ctx.Set.Root, $"pr-{number}");
+        return new PrWorktreePlan(path, branch);
     }
 
     /// <summary>The remote of <paramref name="remotes"/> that names <paramref name="repo"/>: origin when it does,
@@ -45,36 +67,58 @@ public static class PrWorktree
         return names.FirstOrDefault(n => n.Equals("origin", StringComparison.OrdinalIgnoreCase)) ?? names.FirstOrDefault();
     }
 
+    /// <summary><paramref name="exclude"/> (an <c>info/exclude</c> file's text, or null) with <paramref name="entry"/>
+    /// appended, or null when an equivalent line is already there. Pure.</summary>
+    public static string? WithExcludeEntry(string? exclude, string entry)
+    {
+        static string Key(string line) => line.Trim().Trim('/');
+        var text = exclude ?? "";
+        if (text.Split('\n').Any(l => Key(l).Equals(Key(entry), StringComparison.OrdinalIgnoreCase))) return null;
+        var sep = text.Length == 0 || text.EndsWith('\n') ? "" : "\n";
+        return text + sep + "# Perch: worktrees for pull request sessions\n" + entry + "\n";
+    }
+
     public static PrWorktreeResult Ensure(string checkoutRoot, GitRepoRef repo, int number)
     {
         try
         {
-            if (PlanFor(checkoutRoot, repo, number) is not { } plan)
-                return new(null, false, "No room for a worktree beside this checkout");
+            if (Inspect(checkoutRoot) is not { } ctx || PlanFor(ctx, number) is not { } plan)
+                return new(null, false, "That folder isn't a git checkout");
+            var root = ctx.Set.Root;
 
-            if (Directory.Exists(plan.Path))
-            {
-                // Ours from an earlier launch: a linked worktree has a ".git" file, not a directory.
-                return File.Exists(Path.Combine(plan.Path, ".git"))
-                    ? new(plan.Path, true, null)
-                    : new(null, false, $"{plan.Path} exists and isn't a Perch worktree");
-            }
+            // Already on perch/pr-<n> somewhere (an earlier launch, wherever the layout put it): reuse it as it is.
+            if (ctx.Set.PathOfBranch(plan.Branch) is { } existing)
+                return new(existing, true, null);
+            if (Directory.Exists(plan.Path) && Directory.EnumerateFileSystemEntries(plan.Path).Any())
+                return new(null, false, $"{plan.Path} already exists and isn't this PR's worktree");
 
-            if (RemoteFor(GitCheckoutScanner.ReadRemotes(checkoutRoot), repo) is not { } remote)
-                return new(null, false, $"No remote in {checkoutRoot} points at {repo.Slug}");
+            if (RemoteFor(GitCheckoutScanner.ReadRemotes(root), repo) is not { } remote)
+                return new(null, false, $"No remote in {root} points at {repo.Slug}");
 
-            var fetch = GitRunner.Run(checkoutRoot, FetchTimeoutMs, GitRunner.Trust.UserAction, null,
+            var fetch = GitRunner.Run(root, FetchTimeoutMs, GitRunner.Trust.UserAction, null,
                 "fetch", "--no-tags", remote, $"pull/{number}/head:{plan.Branch}");
             if (fetch.Exit != 0)
                 return new(null, false, Describe("Couldn't fetch the PR", fetch));
 
+            // A nested layout: keep the worktree out of `git status` locally, without touching the repo's .gitignore.
+            if (ctx.Layout.ExcludeEntry(ctx.Set.Bare) is { } entry && GitWorktreeScanner.CommonDir(root) is { } common)
+            {
+                var excludePath = Path.Combine(common, "info", "exclude");
+                var current = File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
+                if (WithExcludeEntry(current, entry) is { } updated)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+                    File.WriteAllText(excludePath, updated);
+                }
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(plan.Path)!);
-            var add = GitRunner.Run(checkoutRoot, AddTimeoutMs, GitRunner.Trust.UserAction, null,
+            var add = GitRunner.Run(root, AddTimeoutMs, GitRunner.Trust.UserAction, null,
                 "worktree", "add", plan.Path, plan.Branch);
             if (add.Exit != 0)
             {
                 // A half-made worktree would be mistaken for ours next time; take it back out.
-                GitRunner.Run(checkoutRoot, AddTimeoutMs, GitRunner.Trust.UserAction, null, "worktree", "remove", "--force", plan.Path);
+                GitRunner.Run(root, AddTimeoutMs, GitRunner.Trust.UserAction, null, "worktree", "remove", "--force", plan.Path);
                 return new(null, false, Describe("Couldn't create the worktree", add));
             }
             return new(plan.Path, false, null);

@@ -2770,17 +2770,30 @@ internal static class HeadlessRenderer
         GhPrItem Item(int n) => items.First(i => i.Pr.Number == n);
         string src = OperatingSystem.IsWindows() ? @"C:\Users\me\Documents\git\work\clients" : "/Users/me/Documents/git/work/clients";
 
-        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(Path.Combine(src, "acme-api"), [Path.Combine(src, "acme-api")]));
+        // Worktree pictures: a repo whose worktrees sit beside it ("acme-api-<branch>"), and one where the PR's own
+        // branch is already checked out in a worktree (your own PR), which becomes the default.
+        var api = Path.Combine(src, "acme-api");
+        var siblings = new PrWorktreeContext(
+            new GitWorktreeSet(api, false, "main", [new GitWorktree(Path.Combine(src, "acme-api-spike"), "spike")]),
+            new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected, 1));
+        var web = Path.Combine(src, "web");
+        var ownBranch = new PrWorktreeContext(
+            new GitWorktreeSet(web, false, "main", [new GitWorktree(Path.Combine(web, ".claude", "worktrees", "checkout"), "feature/checkout-form")]),
+            new WorktreeLayout(WorktreeLayout.DefaultTemplate, WorktreeLayoutSource.Detected, 1));
+        var mine = Item(412) with { Pr = Item(412).Pr with { HeadBranch = "feature/checkout-form" } };
+
+        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings);
         Capture("pr_session_choice_1x.png", Item(418),
-            new CheckoutMatch(null, [Path.Combine(src, "web"), Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"],
+            new CheckoutMatch(null, [web, Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"],
             showPreview: true);
+        Capture("pr_session_existing_worktree_1x.png", mine, new CheckoutMatch(web, [web]), context: ownBranch);
         Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None, template: "free");
 
         void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
-            bool showPreview = false, string? template = null)
+            bool showPreview = false, string? template = null, PrWorktreeContext? context = null)
         {
             var w = new PrSessionWindow(item, () => [], null, (_, _) => { }, () => null, _ => null);
-            w.SeedForRender(match, accounts, showPreview, template);
+            w.SeedForRender(match, accounts, showPreview, template, context);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

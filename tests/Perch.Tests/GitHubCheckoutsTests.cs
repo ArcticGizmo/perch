@@ -193,14 +193,12 @@ public class GitHubCheckoutsTests
             Assert.Equal("https://github.com/acme/web.git", Assert.Single(Assert.Single(found).Remotes).Url);
             Assert.Equal("https://github.com/acme/web.git", Assert.Single(GitCheckoutScanner.ReadRemotes(wt)).Url);
 
-            // HEAD is per-worktree: main's own, and the linked worktree's in its gitdir; detached reads as null.
+            // Branches come from the worktree scanner: the main checkout's HEAD; detached reads as null.
             File.WriteAllText(Path.Combine(main, ".git", "HEAD"), "ref: refs/heads/main\n");
-            File.WriteAllText(Path.Combine(main, ".git", "worktrees", "pr-1", "HEAD"), "ref: refs/heads/perch/pr-1\n");
             File.WriteAllText(Path.Combine(local, ".git", "HEAD"), "3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a\n");
-            Assert.Equal("main", GitCheckoutScanner.ReadBranch(main));
-            Assert.Equal("perch/pr-1", GitCheckoutScanner.ReadBranch(wt));
-            Assert.Null(GitCheckoutScanner.ReadBranch(local));
-            Assert.Null(GitCheckoutScanner.ReadBranch(loose));
+            Assert.Equal("main", GitWorktreeScanner.Read(wt)!.MainBranch);
+            Assert.Null(GitWorktreeScanner.Read(local)!.MainBranch);
+            Assert.Null(GitWorktreeScanner.Read(loose));
         }
         finally
         {
@@ -213,15 +211,42 @@ public class GitHubCheckoutsTests
     [Fact]
     public void TheWorktreeGoesBesideTheCheckoutOnAPerchBranch()
     {
-        var root = Path.GetPathRoot(Path.GetTempPath())!;                  // C:\ or /
-        var src = Path.Combine(root, "src");
-        var plan = PrWorktree.PlanFor(Path.Combine(src, "web") + Path.DirectorySeparatorChar, Web, 412)!;
-        Assert.Equal(Path.Combine(src, ".perch-worktrees", "web-pr-412"), plan.Path);
+        var src = Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "src");     // C:\src or /src
+        var web = Path.Combine(src, "web");
+        var set = new GitWorktreeSet(web, false, "main", []);
+        var claude = new PrWorktreeContext(set, new WorktreeLayout(WorktreeLayout.DefaultTemplate, WorktreeLayoutSource.Default));
+        var sibling = new PrWorktreeContext(set, new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected));
+
+        var plan = PrWorktree.PlanFor(claude, 412)!;
+        Assert.Equal(Path.Combine(web, ".claude", "worktrees", "pr-412"), plan.Path);
         Assert.Equal("perch/pr-412", plan.Branch);
-        Assert.True(RepoCheckoutResolver.IsPerchWorktree(plan.Path));      // so it never resolves as the checkout
-        Assert.Null(PrWorktree.PlanFor(root, Web, 412));
-        Assert.Null(PrWorktree.PlanFor(Path.Combine(src, "web"), Web, 0));
-        Assert.Null(PrWorktree.PlanFor("relative/web", Web, 412));
+        Assert.Equal(Path.Combine(src, "web-pr-412"), PrWorktree.PlanFor(sibling, 412)!.Path);
+        Assert.Null(PrWorktree.PlanFor(claude, 0));
+
+        // A worktree already on perch/pr-412 (an earlier launch, e.g. the old .perch-worktrees place) is reused.
+        var old = Path.Combine(src, ".perch-worktrees", "web-pr-412");
+        var withOld = claude with { Set = set with { Linked = [new GitWorktree(old, "perch/pr-412")] } };
+        Assert.Equal(old, PrWorktree.PlanFor(withOld, 412)!.Path);
+    }
+
+    [Theory]
+    [InlineData(null, "# Perch: worktrees for pull request sessions\n/.claude/worktrees/\n")]
+    [InlineData("", "# Perch: worktrees for pull request sessions\n/.claude/worktrees/\n")]
+    [InlineData("# git ls-files --others --exclude-from=.git/info/exclude\n*.log",
+        "# git ls-files --others --exclude-from=.git/info/exclude\n*.log\n# Perch: worktrees for pull request sessions\n/.claude/worktrees/\n")]
+    [InlineData("*.log\n.claude/worktrees\n", null)]                     // already there in another spelling
+    [InlineData("/.claude/worktrees/\n", null)]
+    public void TheExcludeEntryIsAddedOnce(string? exclude, string? expected) =>
+        Assert.Equal(expected, PrWorktree.WithExcludeEntry(exclude, "/.claude/worktrees/"));
+
+    [Fact]
+    public void ThePlanUsesTheBranchNotTheFolderToSpotAnEarlierWorktree()
+    {
+        var src = Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "src");
+        var set = new GitWorktreeSet(Path.Combine(src, "web"), false, "main",
+            [new GitWorktree(Path.Combine(src, "web-feature"), "feature/x")]);
+        var ctx = new PrWorktreeContext(set, new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected));
+        Assert.Equal(Path.Combine(src, "web-pr-7"), PrWorktree.PlanFor(ctx, 7)!.Path);
     }
 
     [Fact]

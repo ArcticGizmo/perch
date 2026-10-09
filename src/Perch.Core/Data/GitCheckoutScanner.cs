@@ -48,31 +48,6 @@ public static class GitCheckoutScanner
     public static IReadOnlyList<GitRemoteEntry> ReadRemotes(string root) =>
         ConfigPath(root) is { } path && File.Exists(path) ? ParseRemotes(File.ReadAllText(path)) : [];
 
-    /// <summary>The branch checked out at <paramref name="root"/> (from its <c>HEAD</c>), or null when detached or
-    /// unreadable — so the dialog can say "works on main as it is".</summary>
-    public static string? ReadBranch(string root)
-    {
-        try
-        {
-            // HEAD is per-worktree: in the gitdir the ".git" file names (not commondir), else in .git itself.
-            var git = Path.Combine(root, ".git");
-            string head = Directory.Exists(git) ? Path.Combine(git, "HEAD")
-                : File.Exists(git) ? HeadOfGitFile(root, git) ?? ""
-                : "";
-            if (!File.Exists(head)) return null;
-            var line = File.ReadLines(head).FirstOrDefault()?.Trim() ?? "";
-            const string prefix = "ref: refs/heads/";
-            return line.StartsWith(prefix, StringComparison.Ordinal) ? line[prefix.Length..] : null;
-        }
-        catch { return null; }
-    }
-
-    private static string? HeadOfGitFile(string root, string gitFile)
-    {
-        var line = File.ReadLines(gitFile).FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase));
-        return line is null ? null : Path.Combine(Path.GetFullPath(Path.Combine(root, line["gitdir:".Length..].Trim())), "HEAD");
-    }
-
     // .git/config for an ordinary checkout. For a ".git" file ("gitdir: <path>", a linked worktree or submodule),
     // the config lives in that gitdir — or, for a linked worktree, in the shared dir its "commondir" file names.
     internal static string? ConfigPath(string root)

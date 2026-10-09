@@ -62,8 +62,10 @@ internal sealed class PrSessionWindow : Window
     private readonly DockPanel _folderPath;
     private readonly ComboBox _folderChoices;
     private readonly Button _changeFolder;
-    private readonly RadioButton _inWorktree, _inCheckout;
-    private readonly TextBlock _worktreeDesc, _checkoutDesc;
+    private readonly RadioButton _inExisting, _inWorktree, _inCheckout;
+    private readonly TextBlock _existingTitle, _existingDesc, _worktreeDesc, _checkoutDesc;
+    private PrWorktreeContext? _context;          // the chosen checkout's worktrees + layout, read off the UI thread
+    private string? _existingPath;                // a worktree already on the PR's head branch, when there is one
     private readonly Grid _accountRow;
     private readonly ComboBox _accountBox;
 
@@ -191,11 +193,18 @@ internal sealed class PrSessionWindow : Window
         _changeFolder.Click += async (_, _) => await ChooseFolderAsync();
         var checkoutRow = LabeledRow("Checkout", new Panel { Children = { _folderPath, _folderChoices } }, _changeFolder);
 
+        _inExisting = OptionRow("where", "", "", "Already set up", out _existingDesc);
+        _existingTitle = (TextBlock)((StackPanel)((Grid)_inExisting.Content!).Children[0]).Children[0];
+        _inExisting.IsVisible = false;
         _inWorktree = OptionRow("where", "New worktree for this PR", "", "Recommended", out _worktreeDesc);
         _inCheckout = OptionRow("where", "Your checkout as it is", "", null, out _checkoutDesc);
         _inWorktree.IsChecked = true;
         _inWorktree.IsCheckedChanged += (_, _) => UpdatePreview();
-        var whereOptions = new StackPanel { Spacing = 2, Margin = new Thickness(0, 8, 0, 0), Children = { _inWorktree, _inCheckout } };
+        _inExisting.IsCheckedChanged += (_, _) => UpdatePreview();
+        var whereOptions = new StackPanel
+        {
+            Spacing = 2, Margin = new Thickness(0, 8, 0, 0), Children = { _inExisting, _inWorktree, _inCheckout },
+        };
 
         _accountBox = new ComboBox { FontSize = 12, MinWidth = 260 };
         _accountRow = LabeledRow("Account", _accountBox, null);
@@ -270,12 +279,12 @@ internal sealed class PrSessionWindow : Window
     /// touching no files (no folder scan, no sign-in reads — so a render never shows the machine's real accounts).
     /// Call right after construction.</summary>
     internal void SeedForRender(CheckoutMatch match, IReadOnlyList<string>? accounts = null, bool showPreview = false,
-        string? template = null, string? branch = "main")
+        string? template = null, PrWorktreeContext? context = null)
     {
         _renderOnly = true;
         if (template is not null && _templates.FirstOrDefault(t => t.Id == template) is { } t) PickTemplate(t);
         ApplyMatch(match);
-        UpdateWhereText(match.Path is null ? null : branch);
+        UpdateWhereText(context);
         if (accounts is { Count: > 1 })
         {
             _accountBox.ItemsSource = accounts;
@@ -315,15 +324,71 @@ internal sealed class PrSessionWindow : Window
     private void UpdateStartEnabled() =>
         _start.IsEnabled = !_busy && _folder is not null && !string.IsNullOrWhiteSpace(_task.Text);
 
-    // The two "where" choices, spelled out for this PR and checkout.
-    private void UpdateWhereText(string? branch)
+    // The "where" choices, spelled out for this PR and checkout: the PR's own branch already checked out somewhere
+    // (same-repo PRs only — a fork's branch name means nothing locally), a new worktree where the user's worktrees
+    // go, or the checkout as it is (not offered for a bare repo, whose root isn't a working tree).
+    private void UpdateWhereText(PrWorktreeContext? ctx)
     {
-        _worktreeDesc.Text = $"Checks out the PR on branch perch/pr-{_item.Pr.Number} in .perch-worktrees beside your checkout. "
-            + "Your own working copy isn't touched.";
+        _context = ctx;
+        int n = _item.Pr.Number;
+        var pr = _item.Pr;
+
+        _existingPath = ctx is not null && !pr.IsCrossRepository && pr.HeadBranch.Length > 0
+            ? ctx.Set.PathOfBranch(pr.HeadBranch) : null;
+        bool hadExisting = _inExisting.IsVisible;
+        _inExisting.IsVisible = _existingPath is not null;
+        if (_existingPath is { } existing && ctx is not null)
+        {
+            var head = PrSessionPrompts.OneLine(pr.HeadBranch, 60);
+            bool isRoot = PathEquals(existing, ctx.Set.Root);
+            _existingTitle.Text = isRoot ? $"Your checkout, already on {head}" : $"Your worktree on {head}";
+            _existingDesc.Text = isRoot
+                ? "The PR's own branch is checked out there. Changes land in your working copy, ready to push."
+                : $"{Near(existing, ctx.Set.Root)}. The PR's own branch, so changes are ready to push.";
+            if (!hadExisting) _inExisting.IsChecked = true;      // the natural place for your own PR
+        }
+        else if (_inExisting.IsChecked == true) _inWorktree.IsChecked = true;
+        // "Recommended" belongs to whichever option is the default: the PR's own worktree beats a new one.
+        if (((Grid)_inWorktree.Content!).Children.OfType<Border>().FirstOrDefault() is { } badge)
+            badge.IsVisible = _existingPath is null;
+
+        var plan = ctx is null ? null : PrWorktree.PlanFor(ctx, n);
+        string where = ctx is null || plan is null ? $"pr-{n}"
+            : ctx.Set.PathOfBranch(PrWorktree.BranchFor(n)) is not null ? $"your earlier one, {Near(plan.Path, ctx.Set.Root)}"
+            : ctx.Layout.Source switch
+            {
+                WorktreeLayoutSource.Detected => $"{Near(plan.Path, ctx.Set.Root)}, alongside your other worktrees",
+                WorktreeLayoutSource.IgnoreHint => $"{Near(plan.Path, ctx.Set.Root)}, which your ignore file sets aside",
+                _ when ctx.Set.Bare => $"{Near(plan.Path, ctx.Set.Root)}, beside your other branches",
+                _ => $"{Near(plan.Path, ctx.Set.Root)}, Claude Code's usual place (kept out of git status locally)",
+            };
+        _worktreeDesc.Text = $"Checks out the PR on branch {PrWorktree.BranchFor(n)} in {where}. Your own working copy isn't touched.";
+
+        _inCheckout.IsVisible = ctx is not { Set.Bare: true };
+        if (!_inCheckout.IsVisible && _inCheckout.IsChecked == true) _inWorktree.IsChecked = true;
+        var branch = ctx?.Set.MainBranch;
         _checkoutDesc.Text = branch is { Length: > 0 }
             ? $"Works in the folder on {branch}, its current branch, not the PR's. Changes land in your working copy."
             : "Works in the folder on whatever is checked out there, not the PR's branch. Changes land in your working copy.";
+        UpdatePreview();
     }
+
+    // A worktree path said relative to the checkout, so it fits a line: ".claude\worktrees\pr-12 inside your checkout",
+    // "acme-api-pr-12 beside your checkout", else the full path.
+    private static string Near(string path, string root)
+    {
+        var r = Path.TrimEndingDirectorySeparator(root);
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (path.StartsWith(r + Path.DirectorySeparatorChar, cmp))
+            return $"{path[(r.Length + 1)..]} inside your checkout";
+        if (Path.GetDirectoryName(r) is { } parent && path.StartsWith(parent + Path.DirectorySeparatorChar, cmp))
+            return $"{path[(parent.Length + 1)..]} beside your checkout";
+        return path;
+    }
+
+    private static bool PathEquals(string a, string b) => string.Equals(
+        Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b),
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     // Finds the checkout off the UI thread: the remembered folder, else a scan of the folders sessions ran in.
     private void ResolveFolderAsync()
@@ -388,8 +453,9 @@ internal sealed class PrSessionWindow : Window
         SetStatus(status ?? "", error: status is not null);
         UpdateStartEnabled();
         if (_renderOnly) return;
+        UpdateWhereText(null);
         ResolveAccountsAsync(folder);
-        Task.Run(() => GitCheckoutScanner.ReadBranch(folder)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        Task.Run(() => PrWorktree.Inspect(folder)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (IsVisible && _folder == folder) UpdateWhereText(t.IsCompletedSuccessfully ? t.Result : null);
         }));
@@ -403,10 +469,15 @@ internal sealed class PrSessionWindow : Window
         });
         if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } picked) return;
 
-        // Check it's really that repo before taking it (a wrong folder would only fail later, at the fetch).
-        var found = await Task.Run(() => GitCheckoutScanner.FindRoot(picked) is { } root
-            ? (Root: root, Remote: PrWorktree.RemoteFor(GitCheckoutScanner.ReadRemotes(root), _repo))
-            : (Root: (string?)null, Remote: (string?)null));
+        // Check it's really that repo before taking it (a wrong folder would only fail later, at the fetch). A
+        // linked worktree picked by mistake stands for its repo, like in the automatic scan.
+        var repo = _repo;
+        var found = await Task.Run(() =>
+        {
+            if (GitCheckoutScanner.FindRoot(picked) is not { } at) return (Root: (string?)null, Remote: (string?)null);
+            var root = GitWorktreeScanner.Read(at)?.Root ?? at;
+            return (Root: root, Remote: PrWorktree.RemoteFor(GitCheckoutScanner.ReadRemotes(root), repo));
+        });
         if (!IsVisible) return;
         if (found.Root is null)
         {
@@ -440,13 +511,14 @@ internal sealed class PrSessionWindow : Window
     {
         if (_busy || _folder is not { } root || string.IsNullOrWhiteSpace(_task.Text)) return;
         bool useWorktree = _inWorktree.IsChecked == true;
+        var existing = _inExisting.IsChecked == true ? _existingPath : null;
         var prompt = PrSessionPrompts.Compose(_task.Text, _template.Mode, _item.Pr, WorktreeBranch);
         SetBusy(true, useWorktree ? "Preparing the worktree…" : "Starting…");
 
         var repo = _repo;
         int number = _item.Pr.Number;
-        var wt = useWorktree
-            ? await Task.Run(() => PrWorktree.Ensure(root, repo, number))
+        var wt = existing is not null ? new PrWorktreeResult(existing, true, null)
+            : useWorktree ? await Task.Run(() => PrWorktree.Ensure(root, repo, number))
             : new PrWorktreeResult(root, true, null);
         if (!IsVisible) return;
         if (wt.Path is not { } cwd)
