@@ -1983,7 +1983,15 @@ public partial class App : Application
                 s.Save();
             },
             rules: () => _appSettings?.AccountRules,
-            launch: LaunchPrSession);
+            launch: LaunchPrSession,
+            customTemplates: _appSettings?.PrSessionCustomTemplates,
+            // The "⋯" menu's Save as / Rename / Save / Delete: the whole list, written back at once.
+            saveCustomTemplates: list =>
+            {
+                if (_appSettings is not { } s) return;
+                s.PrSessionCustomTemplates = list.Count > 0 ? list : null;
+                s.Save();
+            });
         if (_gitHubWindow is { IsVisible: true } owner) w.Show(owner);
         else w.Show();
     }

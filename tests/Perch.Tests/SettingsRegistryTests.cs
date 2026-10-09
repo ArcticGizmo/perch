@@ -41,6 +41,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.GitHubRepoCheckouts),
         // The worktree layout picked per repo in that dialog.
         nameof(AppSettings.GitHubRepoWorktreeLayouts),
+        // Prompt templates saved from that dialog's "⋯" menu.
+        nameof(AppSettings.PrSessionCustomTemplates),
         // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.
         nameof(AppSettings.SessionZoom),
         nameof(AppSettings.RoostZoom),

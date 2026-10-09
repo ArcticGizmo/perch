@@ -2799,13 +2799,27 @@ internal static class HeadlessRenderer
         // The editors opened in place: the worktree's New | Existing | None with its Location, and the clone search.
         Capture("pr_session_worktree_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editWorktree: true);
         Capture("pr_session_clone_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editClone: true);
+        // The prompt's {variables}: highlighted (an unknown one in the warning colour) with the suggestions open on "{b".
+        Capture("pr_session_variables_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings,
+            type: "Rebase {head} onto {base} and rerun the checks for {pr}. Ask {reviewer} first. Then {b");
+        // A template of the user's own selected, and Save as… naming another.
+        var customs = new List<PrCustomTemplate>
+        {
+            new() { Id = "custom-1", Name = "Security review", Task = "Review {pr} for secrets and injection.", Mode = PrSessionMode.Plan },
+        };
+        Capture("pr_session_custom_template_1x.png", Item(418), new CheckoutMatch(web, [web]), context: ownBranch,
+            template: "custom-1", customs: customs);
+        Capture("pr_session_save_as_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, saveAs: true);
 
         void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
             bool showPreview = false, string? template = null, PrWorktreeContext? context = null, bool noCheckout = false,
-            string? worktree = null, bool editWorktree = false, bool editClone = false)
+            string? worktree = null, bool editWorktree = false, bool editClone = false, string? type = null,
+            List<PrCustomTemplate>? customs = null, bool saveAs = false)
         {
-            var w = new PrSessionWindow(item, () => [], null, null, (_, _) => { }, (_, _) => { }, () => null, _ => null);
+            var w = new PrSessionWindow(item, () => [], null, null, (_, _) => { }, (_, _) => { }, () => null, _ => null, customs);
             w.SeedForRender(match, accounts, showPreview, template, context, noCheckout, worktree, editWorktree, editClone);
+            if (type is not null) w.TypeForRender(type);
+            if (saveAs) w.SaveAsForRender();
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

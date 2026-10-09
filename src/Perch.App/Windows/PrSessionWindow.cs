@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -10,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Data;
@@ -101,16 +103,31 @@ internal sealed class PrSessionWindow : Window
     private bool _syncing;                        // setting controls from code; ignore their change events
     private bool _resolved;                       // the clone search has finished (so "no clone found" is final)
 
-    // What
-    private readonly IReadOnlyList<PrPromptTemplate> _templates;
+    // What: the quick prompts (built-ins + the user's own) and the editable task, its {variables} highlighted
+    private IReadOnlyList<PrPromptTemplate> _templates;
+    private List<PrCustomTemplate> _customs;
+    private readonly Action<List<PrCustomTemplate>> _saveCustoms;
     private readonly Dictionary<string, string> _taskEdits = new();     // per template, so switching keeps edits
     private readonly ComboBox _templateBox;
+    private readonly Button _templateMenu;
     private readonly Border _readOnlyBadge;
+    private readonly StackPanel _templatePicker;
+    private readonly Grid _nameEditor;
+    private readonly TextBox _nameBox;
+    private NameEdit _nameEdit;
     private PrPromptTemplate _template;
-    private readonly TextBox _task;
+    private readonly HighlightTextBox _task;
+    private readonly TextBlock _taskPlaceholder;
+    private readonly Border _varHost;
+    private readonly StackPanel _varPanel;
+    private List<PrSessionPrompts.Variable> _varMatches = new();
+    private int _varIndex, _varStart, _varLen;
     private readonly Button _previewToggle;
     private readonly Border _previewBox;
     private readonly SelectableTextBlock _preview;
+
+    /// <summary>What the inline name field under PROMPT is collecting, if anything.</summary>
+    private enum NameEdit { None, SaveAs, Rename }
 
     private readonly ComboBox _accountBox;
 
@@ -127,7 +144,8 @@ internal sealed class PrSessionWindow : Window
 
     public PrSessionWindow(GhPrItem item, Func<IReadOnlyList<string>> knownFolders, string? remembered,
         string? rememberedLayout, Action<string, string> remember, Action<string, string?> rememberLayout,
-        Func<IReadOnlyList<AccountRule>?> rules, Func<PrSessionLaunch, string?> launch)
+        Func<IReadOnlyList<AccountRule>?> rules, Func<PrSessionLaunch, string?> launch,
+        IReadOnlyList<PrCustomTemplate>? customTemplates = null, Action<List<PrCustomTemplate>>? saveCustomTemplates = null)
     {
         _item = item;
         _repo = RepoOf(item.Pr);
@@ -138,7 +156,9 @@ internal sealed class PrSessionWindow : Window
         _rememberLayout = rememberLayout;
         _rules = rules;
         _launch = launch;
-        _templates = PrSessionPrompts.ForReasons(item.Reasons.Select(r => r.Kind));
+        _customs = customTemplates?.ToList() ?? [];
+        _saveCustoms = saveCustomTemplates ?? (_ => { });
+        _templates = OrderedTemplates();
         _template = _templates[0];
 
         Title = $"Start a session on PR #{item.Pr.Number}";
@@ -309,11 +329,18 @@ internal sealed class PrSessionWindow : Window
 
         // ── Prompt: the picker beside its heading, the editable task, the full prompt behind a disclosure ──
         _templateBox = new ComboBox { FontSize = 12, MinWidth = 240, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var t in _templates) _templateBox.Items.Add(t.Label);
         _templateBox.SelectionChanged += (_, _) =>
         {
             if (!_syncing && _templateBox.SelectedIndex >= 0) PickTemplate(_templates[_templateBox.SelectedIndex]);
         };
+        // The quiet way to keep a prompt: Rename / Save / Save as… / Delete (only Save as… on a built-in).
+        _templateMenu = new Button
+        {
+            Content = "⋯", Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(6, 0), FontSize = 16, Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(_templateMenu, "Save this prompt as a template of your own");
+        _templateMenu.Click += (_, _) => ShowTemplateMenu();
         _readOnlyBadge = new Border
         {
             CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 1), BorderBrush = Stroke, BorderThickness = new Thickness(1),
@@ -321,25 +348,77 @@ internal sealed class PrSessionWindow : Window
             Child = new TextBlock { Text = "Read-only", Foreground = Muted, FontSize = 11 },
         };
         ToolTip.SetTip(_readOnlyBadge, "Runs in plan mode: Claude reads and reports, and changes no files.");
+        _templatePicker = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, Children = { _templateBox, _templateMenu, _readOnlyBadge },
+        };
+
+        // Save as… / Rename: the template's name typed in place of the picker, Enter to keep, Esc to drop.
+        _nameBox = new TextBox { FontSize = 12, Width = 280, VerticalContentAlignment = VerticalAlignment.Center, MaxLength = PrPromptLibrary.MaxNameLength };
+        _nameBox.AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.Enter) { CommitName(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { EndNameEdit(); e.Handled = true; }
+        }, RoutingStrategies.Tunnel);
+        var nameOk = LinkButton("Save");
+        nameOk.Margin = new Thickness(10, 0, 0, 0);
+        nameOk.Click += (_, _) => CommitName();
+        var nameCancel = LinkButton("Cancel");
+        nameCancel.Foreground = Muted;
+        nameCancel.Margin = new Thickness(10, 0, 0, 0);
+        nameCancel.Click += (_, _) => EndNameEdit();
+        _nameEditor = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto"), IsVisible = false };
+        Grid.SetColumn(nameOk, 1);
+        Grid.SetColumn(nameCancel, 2);
+        _nameEditor.Children.Add(_nameBox);
+        _nameEditor.Children.Add(nameOk);
+        _nameEditor.Children.Add(nameCancel);
+
         var promptLabel = Eyebrow("PROMPT");
         promptLabel.VerticalAlignment = VerticalAlignment.Center;
         var promptHead = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 22, 0, 10),
-            Children = { promptLabel, _templateBox, _readOnlyBadge },
+            Children = { promptLabel, _templatePicker, _nameEditor },
         };
 
-        _task = new TextBox
+        // The task, its {variables} washed in the accent the way the statusline editor marks {{fields}}.
+        _task = new HighlightTextBox
         {
             AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, MinHeight = 110, MaxHeight = 200,
-            PlaceholderText = "Describe what Claude should do on this PR…",
+            Foreground = Fg, CaretBrush = Fg, Background = Palette.SurfaceSunkenBrush, BorderBrush = Stroke,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8),
+            SelectionBrush = new SolidColorBrush(Palette.Accent, 0.35),
         };
         ScrollViewer.SetVerticalScrollBarVisibility(_task, ScrollBarVisibility.Auto);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_task, ScrollBarVisibility.Disabled);
+        var taskFace = new Typeface(FontFamily.Default);
+        _task.SetHighlighter(t => PromptVariableHighlighter.Highlight(t, taskFace, 12.5));
+        _task.GotFocus += (_, _) => _task.BorderBrush = Accent;
+        _task.LostFocus += (_, _) => _task.BorderBrush = Stroke;
+        _task.AddHandler(KeyDownEvent, OnTaskKeyDown, RoutingStrategies.Tunnel);
+        _taskPlaceholder = new TextBlock
+        {
+            Text = "Describe what Claude should do on this PR. Type { to add a PR detail.", Foreground = Muted, FontSize = 12.5,
+            Margin = new Thickness(11, 9, 11, 0), IsHitTestVisible = false,
+        };
         _task.TextChanged += (_, _) =>
         {
             _taskEdits[_template.Id] = _task.Text ?? "";
+            _taskPlaceholder.IsVisible = string.IsNullOrEmpty(_task.Text);
+            UpdateVarCompletion();
             UpdatePreview();
             UpdateEnabled();
+        };
+        _task.PropertyChanged += (_, e) => { if (e.Property == TextBox.CaretIndexProperty) UpdateVarCompletion(); };
+
+        // Variable suggestions: an inline list under the box (no focus stealing), opened by typing "{" — ↑/↓ move,
+        // Tab/Enter insert, Esc closes. Each row shows the variable and what it is for this PR.
+        _varPanel = new StackPanel();
+        _varHost = new Border
+        {
+            Background = Palette.FormBgBrush, BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+            Margin = new Thickness(0, 4, 0, 0), Child = _varPanel, IsVisible = false,
         };
         _preview = new SelectableTextBlock { FontFamily = Mono, FontSize = 11, Foreground = Muted, TextWrapping = TextWrapping.Wrap };
         _previewBox = new Border
@@ -396,7 +475,7 @@ internal sealed class PrSessionWindow : Window
         var body = new StackPanel
         {
             Margin = new Thickness(24, 0, 24, 18),
-            Children = { workspaceHead, card, promptHead, _task, _previewToggle, _previewBox },
+            Children = { workspaceHead, card, promptHead, new Panel { Children = { _task, _taskPlaceholder } }, _varHost, _previewToggle, _previewBox },
         };
 
         var root = new StackPanel
@@ -424,9 +503,7 @@ internal sealed class PrSessionWindow : Window
         };
         Content = frame;
 
-        _syncing = true;
-        _templateBox.SelectedIndex = 0;
-        _syncing = false;
+        FillTemplateBox();
         PickTemplate(_template);
         UpdateCloneSummary();
         UpdateWorktreeOptions(null);
@@ -534,14 +611,261 @@ internal sealed class PrSessionWindow : Window
         UpdateEnabled();
     }
 
+    // The task keeps its {variables} as written (highlighted); Compose fills them when the session starts.
     private void PickTemplate(PrPromptTemplate t)
     {
         _template = t;
-        _task.Text = _taskEdits.TryGetValue(t.Id, out var edited) ? edited : PrSessionPrompts.Fill(t.Task, _item.Pr);
+        _task.Text = _taskEdits.TryGetValue(t.Id, out var edited) ? edited : t.Task;
         _readOnlyBadge.IsVisible = t.Mode == PrSessionMode.Plan;
+        CloseVarCompletion();
         UpdatePreview();
         UpdateEnabled();
     }
+
+    // ── Templates: the picker and its "⋯" menu ──
+
+    // Built-ins and the user's own, the ones fitting this PR's reasons first.
+    private IReadOnlyList<PrPromptTemplate> OrderedTemplates() =>
+        PrSessionPrompts.ForReasons(_item.Reasons.Select(r => r.Kind), PrPromptLibrary.All(_customs));
+
+    // The picker's rows, with the current template selected (without re-picking it).
+    private void FillTemplateBox()
+    {
+        _syncing = true;
+        try
+        {
+            _templateBox.ItemsSource = _templates.Select(t => t.Label).ToList();
+            _templateBox.SelectedIndex = Math.Max(0, _templates.ToList().FindIndex(t => t.Id == _template.Id));
+        }
+        finally { _syncing = false; }
+    }
+
+    // After the user's templates change: rebuild the list and show the one with this id (else the first).
+    private void ReloadTemplates(string? selectId)
+    {
+        _templates = OrderedTemplates();
+        _template = _templates.FirstOrDefault(t => t.Id == selectId) ?? _templates[0];
+        FillTemplateBox();
+        PickTemplate(_template);
+    }
+
+    private bool TaskChanged => (_task.Text ?? "") != _template.Task;
+
+    private void ShowTemplateMenu()
+    {
+        var items = new List<Control>();
+        MenuItem Item(string header, Action act, bool enabled = true)
+        {
+            var mi = new MenuItem { Header = header, IsEnabled = enabled };
+            mi.Click += (_, _) => act();
+            return mi;
+        }
+        bool custom = PrPromptLibrary.IsCustom(_template);
+        // A built-in can only be copied; the user's own can also be renamed, overwritten and deleted.
+        if (custom) items.Add(Item("Rename…", () => BeginNameEdit(NameEdit.Rename)));
+        if (custom) items.Add(Item("Save", SaveTemplate, enabled: TaskChanged));
+        items.Add(Item("Save as…", () => BeginNameEdit(NameEdit.SaveAs)));
+        if (custom)
+        {
+            items.Add(new Separator());
+            items.Add(Item("Delete", DeleteTemplate));
+        }
+        new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedLeft }.ShowAt(_templateMenu);
+    }
+
+    private void BeginNameEdit(NameEdit kind)
+    {
+        _nameEdit = kind;
+        _nameBox.Text = kind == NameEdit.Rename ? _template.Label : "";
+        _nameBox.PlaceholderText = kind == NameEdit.Rename ? "Template name" : "Name your template…";
+        _templatePicker.IsVisible = false;
+        _nameEditor.IsVisible = true;
+        if (_renderOnly) return;
+        Dispatcher.UIThread.Post(() => { _nameBox.Focus(); _nameBox.SelectAll(); }, DispatcherPriority.Input);
+    }
+
+    private void EndNameEdit()
+    {
+        _nameEdit = NameEdit.None;
+        _nameEditor.IsVisible = false;
+        _templatePicker.IsVisible = true;
+    }
+
+    private void CommitName()
+    {
+        var name = _nameBox.Text ?? "";
+        switch (_nameEdit)
+        {
+            case NameEdit.SaveAs:
+            {
+                var from = _template;
+                var (customs, id) = PrPromptLibrary.SaveAs(_customs, from, name, _task.Text ?? "");
+                _taskEdits.Remove(from.Id);   // the source goes back to its own text; the edit lives on in the copy
+                Persist(customs);
+                EndNameEdit();
+                ReloadTemplates(id);
+                SetNote($"Saved as “{_template.Label}”.");
+                break;
+            }
+            case NameEdit.Rename:
+                Persist(PrPromptLibrary.Rename(_customs, _template.Id, name));
+                EndNameEdit();
+                ReloadTemplates(_template.Id);
+                break;
+            default:
+                EndNameEdit();
+                break;
+        }
+    }
+
+    private void SaveTemplate()
+    {
+        var id = _template.Id;
+        Persist(PrPromptLibrary.Save(_customs, id, _task.Text ?? ""));
+        _taskEdits.Remove(id);
+        ReloadTemplates(id);
+        SetNote($"Saved “{_template.Label}”.");
+    }
+
+    private void DeleteTemplate()
+    {
+        var label = _template.Label;
+        _taskEdits.Remove(_template.Id);
+        Persist(PrPromptLibrary.Delete(_customs, _template.Id));
+        ReloadTemplates(null);
+        SetNote($"Deleted “{label}”.");
+    }
+
+    private void Persist(List<PrCustomTemplate> customs)
+    {
+        _customs = customs;
+        try { _saveCustoms(customs); } catch { /* best-effort, like the other remembered choices */ }
+    }
+
+    // A passing note in the footer's status line (not an error).
+    private void SetNote(string text)
+    {
+        _status.Text = text;
+        _status.Foreground = Muted;
+    }
+
+    // ── {variable} suggestions in the task ──
+
+    // The partial variable the caret is in, "{rev" → (start of "rev", "rev"), or null when it isn't right after a "{".
+    private (int Start, string Word)? CurrentVariable()
+    {
+        var text = _task.Text ?? "";
+        int caret = Math.Clamp(_task.CaretIndex, 0, text.Length);
+        int s = caret;
+        while (s > 0 && text[s - 1] is >= 'a' and <= 'z') s--;
+        return s > 0 && text[s - 1] == '{' ? (s, text[s..caret]) : null;
+    }
+
+    private void UpdateVarCompletion()
+    {
+        if (_suppressVar || !_task.IsFocused && !_renderOnly || CurrentVariable() is not { } v) { CloseVarCompletion(); return; }
+        var matches = PrSessionPrompts.Variables
+            .Where(x => v.Word.Length == 0 || x.Name.Contains(v.Word, StringComparison.Ordinal))
+            .OrderByDescending(x => x.Name.StartsWith(v.Word, StringComparison.Ordinal))
+            .ToList();
+        // Nothing to offer, or the word is already a whole variable that's closed — don't nag.
+        var text = _task.Text ?? "";
+        int end = v.Start + v.Word.Length;
+        bool closed = end < text.Length && text[end] == '}';
+        if (matches.Count == 0 || closed && matches.Count == 1 && matches[0].Name == v.Word) { CloseVarCompletion(); return; }
+        _varMatches = matches;
+        _varStart = v.Start;
+        _varLen = v.Word.Length;
+        _varIndex = 0;
+        RebuildVarRows();
+        _varHost.IsVisible = true;
+    }
+
+    private void RebuildVarRows()
+    {
+        _varPanel.Children.Clear();
+        for (int i = 0; i < _varMatches.Count; i++)
+        {
+            var v = _varMatches[i];
+            var value = PrSessionPrompts.Fill($"{{{v.Name}}}", _item.Pr);
+            var dock = new DockPanel { LastChildFill = true };
+            var valText = new TextBlock
+            {
+                Text = value.Length > 48 ? value[..47] + "…" : value, FontFamily = Mono, FontSize = 11, Foreground = Muted,
+                Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            };
+            DockPanel.SetDock(valText, Dock.Right);
+            dock.Children.Add(valText);
+            dock.Children.Add(new TextBlock
+            {
+                Inlines =
+                {
+                    new Run($"{{{v.Name}}}") { FontFamily = Mono, Foreground = Accent },
+                    new Run($"   {v.Description}") { Foreground = Muted, FontSize = 11.5 },
+                },
+                FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+            });
+            int idx = i;
+            var row = new Border
+            {
+                Padding = new Thickness(10, 5), Child = dock, Cursor = new Cursor(StandardCursorType.Hand),
+                Background = i == _varIndex ? new SolidColorBrush(Palette.Accent, 0.15) : Brushes.Transparent,
+            };
+            row.PointerPressed += (_, e) => { _varIndex = idx; AcceptVar(); e.Handled = true; };
+            _varPanel.Children.Add(row);
+        }
+    }
+
+    private bool _suppressVar;
+
+    // Inserts the picked variable over the partial word and closes it with "}" (or steps over one already there).
+    private void AcceptVar()
+    {
+        if (_varMatches.Count == 0) { CloseVarCompletion(); return; }
+        var name = _varMatches[Math.Clamp(_varIndex, 0, _varMatches.Count - 1)].Name;
+        var text = _task.Text ?? "";
+        int end = Math.Min(_varStart + _varLen, text.Length);
+        bool closed = end < text.Length && text[end] == '}';
+        _suppressVar = true;
+        try
+        {
+            _task.Text = text[.._varStart] + name + (closed ? "" : "}") + text[end..];
+            _task.CaretIndex = _varStart + name.Length + 1;
+        }
+        finally { _suppressVar = false; }
+        CloseVarCompletion();
+        _task.Focus();
+    }
+
+    private void CloseVarCompletion()
+    {
+        if (_varHost is not null) _varHost.IsVisible = false;
+        _varMatches = new();
+    }
+
+    private void OnTaskKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_varHost.IsVisible) return;
+        switch (e.Key)
+        {
+            case Key.Down: _varIndex = Math.Min(_varIndex + 1, _varMatches.Count - 1); RebuildVarRows(); e.Handled = true; break;
+            case Key.Up: _varIndex = Math.Max(_varIndex - 1, 0); RebuildVarRows(); e.Handled = true; break;
+            case Key.Enter when !e.KeyModifiers.HasFlag(KeyModifiers.Control):
+            case Key.Tab: AcceptVar(); e.Handled = true; break;
+            case Key.Escape: CloseVarCompletion(); e.Handled = true; break;
+        }
+    }
+
+    /// <summary>Render seam: the task text and caret, with the variable suggestions as typing would open them.</summary>
+    internal void TypeForRender(string text, int? caret = null)
+    {
+        _task.Text = text;
+        _task.CaretIndex = caret ?? text.Length;
+        UpdateVarCompletion();
+    }
+
+    /// <summary>Render seam: open the template name field as Save as… would.</summary>
+    internal void SaveAsForRender() => BeginNameEdit(NameEdit.SaveAs);
 
     private void UpdatePreview()
     {

@@ -310,6 +310,23 @@ launch, so the workspace is a short summary card and each detail opens in place 
   the editable task, and a muted "▸ Full prompt" disclosure whose preview is capped at 220 high.
 - Esc closes an open editor first, then the dialog.
 
+**Prompt variables and templates (2026-10-09, user asked).**
+
+- The task keeps its placeholders as written (`{repo}`, `{number}` …) instead of showing them pre-filled. A
+  `HighlightTextBox` with `PromptVariableHighlighter` washes each `{variable}` in the accent with muted braces, the
+  way the statusline editor marks `{{fields}}`. An unknown `{word}` (a typo, which would reach Claude as written) is
+  in the warning colour. Typing `{` opens an inline list under the box, as the statusline editor's does: ↑/↓, Tab or
+  Enter to insert, Esc to close. Each row shows the variable, what it is, and its value for this PR. `Compose` fills
+  them when the session starts, as before.
+- Variables: `PrSessionPrompts.Variables`. `{owner}` `{name}` `{base}` `{head}` `{author}` join `{pr}` `{repo}`
+  `{number}` `{url}` `{title}` (part of W6). The PR author's own text (`{title}` `{head}` `{author}`) is flattened to
+  one short line.
+- A quiet **"⋯"** beside the quick-prompt picker: **Save as…** on any template; **Rename…**, **Save** (only when the
+  text changed) and **Delete** only on the user's own. Names are typed in place of the picker (Enter keeps, Esc
+  drops). A copy keeps the mode and reasons of the template it came from. `PrPromptLibrary` (Core, pure,
+  `PrPromptLibraryTests`) keeps names unique and one line. The templates persist in
+  `AppSettings.PrSessionCustomTemplates` (in `NotSettings`). This covers the core of W7, without a Settings page.
+
 Bottom right: **Set up & copy** (quiet, only when there's setup to do), **Copy command** and **Launch in Perch**.
 
 - **Copy command changes nothing** (user feedback: making the worktree was a surprise from that name). Perch

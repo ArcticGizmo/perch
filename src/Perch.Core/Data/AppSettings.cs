@@ -625,6 +625,11 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? GitHubRepoWorktreeLayouts { get; set; }
 
+    // Prompt templates the user saved from the start-a-session dialog's "⋯" menu (Save as / Rename / Save / Delete),
+    // offered after the built-ins. Null = none. See PrPromptLibrary. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PrCustomTemplate>? PrSessionCustomTemplates { get; set; }
+
     // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
     // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
     // docs/feeds-plan.md.

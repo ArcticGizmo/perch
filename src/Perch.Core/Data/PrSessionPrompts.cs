@@ -98,10 +98,33 @@ public static class PrSessionPrompts
         return title.Length > 0 ? $"PR #{pr.Number} · {title}" : $"PR #{pr.Number}";
     }
 
+    /// <summary>A placeholder a prompt can use, and what it stands for. <see cref="FromPrText"/> marks the ones whose
+    /// value is written by the PR's author (flattened to one short line when filled).</summary>
+    public sealed record Variable(string Name, string Description, bool FromPrText = false);
+
+    /// <summary>The placeholders <see cref="Fill"/> knows, in the order the prompt editor suggests them.</summary>
+    public static readonly IReadOnlyList<Variable> Variables =
+    [
+        new("pr", "owner/repo#number"),
+        new("repo", "owner/repo"),
+        new("owner", "the repo's owner"),
+        new("name", "the repo's name"),
+        new("number", "the PR number"),
+        new("url", "the PR's GitHub address"),
+        new("base", "the branch it merges into"),
+        new("head", "the PR's branch", FromPrText: true),
+        new("author", "who opened it", FromPrText: true),
+        new("title", "the PR title", FromPrText: true),
+    ];
+
+    /// <summary>Whether <paramref name="name"/> is one of <see cref="Variables"/>.</summary>
+    public static bool IsVariable(string name) => Variables.Any(v => v.Name == name);
+
     /// <summary>
-    /// Fills <c>{pr}</c> (<c>owner/repo#12</c>), <c>{repo}</c>, <c>{number}</c>, <c>{url}</c> and <c>{title}</c>.
-    /// Unknown placeholders are left as written. The URL is used only when it is the PR's own https URL on its repo
-    /// (it comes from GitHub, but Perch doesn't let a malformed one carry text into the prompt).
+    /// Fills each of <see cref="Variables"/> in <c>{braces}</c>. Unknown placeholders are left as written. The URL is
+    /// used only when it is the PR's own https URL on its repo (it comes from GitHub, but Perch doesn't let a malformed
+    /// one carry text into the prompt). Text the PR's author chose (title, branch, login) is flattened to one short
+    /// printable line.
     /// </summary>
     public static string Fill(string template, GhPullRequest pr)
     {
@@ -110,11 +133,17 @@ public static class PrSessionPrompts
             ? pr.Url
             : $"https://github.com/{pr.Repo}/pull/{pr.Number}";
         var number = pr.Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var slash = pr.Repo.IndexOf('/');
         return template
             .Replace("{pr}", $"{pr.Repo}#{number}")
             .Replace("{repo}", pr.Repo)
+            .Replace("{owner}", slash > 0 ? pr.Repo[..slash] : pr.Repo)
+            .Replace("{name}", slash > 0 ? pr.Repo[(slash + 1)..] : pr.Repo)
             .Replace("{number}", number)
             .Replace("{url}", url)
+            .Replace("{base}", OneLine(pr.BaseBranch, 100))
+            .Replace("{head}", OneLine(pr.HeadBranch, 100))
+            .Replace("{author}", OneLine(pr.Author, 60))
             .Replace("{title}", OneLine(pr.Title, 120));
     }
 
