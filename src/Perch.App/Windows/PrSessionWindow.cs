@@ -124,7 +124,7 @@ internal sealed class PrSessionWindow : Window
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 640;
+        Width = 820;   // room for a real clone path and a worktree strategy on one line
         SizeToContent = SizeToContent.Height;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -159,16 +159,16 @@ internal sealed class PrSessionWindow : Window
         pills.IsVisible = item.Reasons.Count > 0;
         var header = new StackPanel { Margin = new Thickness(22, 18, 18, 16), Children = { headRow, prTitle, prMeta, pills } };
 
-        // ── How should it be checked out? Two tiles side by side ──
-        (_noCheckout, _noCheckoutTile) = ChoiceTile("No checkout", "Just prompting. Claude reads the PR through gh, with no code on disk.");
+        // ── How should it be checked out? Two tiles side by side, the usual one (Checkout) first ──
         (_checkout, _checkoutTile) = ChoiceTile("Checkout", "Work on the PR's code in your clone of the repo.");
+        (_noCheckout, _noCheckoutTile) = ChoiceTile("No checkout", "Just prompting. Claude reads the PR through gh, with no code on disk.");
         _checkout.IsChecked = true;
         _noCheckout.IsCheckedChanged += (_, _) => HowChanged();
         _checkout.IsCheckedChanged += (_, _) => HowChanged();
         var tiles = new Grid { ColumnDefinitions = new ColumnDefinitions("*,10,*") };
-        Grid.SetColumn(_checkoutTile, 2);
-        tiles.Children.Add(_noCheckoutTile);
+        Grid.SetColumn(_noCheckoutTile, 2);
         tiles.Children.Add(_checkoutTile);
+        tiles.Children.Add(_noCheckoutTile);
 
         // Clone: the session launcher's folder search, over the folders Claude sessions have run in.
         _cloneBox = new AutoCompleteBox { FontSize = 12.5, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center };
