@@ -325,6 +325,7 @@ internal static class HeadlessRenderer
         GitHubProbe("overlay_github_error_1x.png",
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
+        RenderPrSessionWindow(outDir);
         RenderFeedDialog(outDir);
         RenderFeedStory(outDir);
         RenderLinkPopup(outDir);
@@ -2711,22 +2712,114 @@ internal static class HeadlessRenderer
         }
     }
 
-    // The GitHub alerts window seeded with the sample poll, in its "Needs you" (default) and "All open" views. The
-    // host is seeded directly (no gh, no timer) over an in-memory seen store, so the render touches no files.
+    // The GitHub dashboard seeded with the sample poll, in its "Needs you" (default), "All open" and "Dismissed"
+    // views, plus each grouping and an age window. The host is seeded directly (no gh, no timer) over in-memory seen
+    // and dismiss stores, so the render touches no files.
     private static void RenderGitHubAlertsWindow(string outDir)
     {
-        Capture("github_alerts_1x.png", needsYouOnly: true);
-        Capture("github_alerts_all_1x.png", needsYouOnly: false);
+        Capture("github_alerts_1x.png", GhView.NeedsYou);
+        Capture("github_alerts_all_1x.png", GhView.All);
         // A search narrowing the list (tab counts follow it), and one that matches nothing needing you.
-        Capture("github_alerts_search_1x.png", needsYouOnly: false, search: "api");
-        Capture("github_alerts_search_empty_1x.png", needsYouOnly: true, search: "json");
+        Capture("github_alerts_search_1x.png", GhView.All, search: "api");
+        Capture("github_alerts_search_empty_1x.png", GhView.NeedsYou, search: "json");
+        // The other groupings, and a row order by time.
+        Capture("github_alerts_by_reason_1x.png", GhView.All, options: new(GhGroupBy.Reason));
+        Capture("github_alerts_by_role_1x.png", GhView.All, options: new(GhGroupBy.Role));
+        Capture("github_alerts_flat_oldest_1x.png", GhView.All, options: new(GhGroupBy.None, GhSortBy.Oldest));
+        // A "last day" age window: the two older PRs drop out and the foot says so.
+        Capture("github_alerts_last_day_1x.png", GhView.All, options: new(MaxAgeDays: 1));
+        // Two PRs dismissed: gone from Needs you, listed under Dismissed with Restore.
+        string[] dismiss = ["https://github.com/acme/web/pull/418", "https://github.com/acme/api/pull/69"];
+        Capture("github_alerts_after_dismiss_1x.png", GhView.NeedsYou, dismiss: dismiss);
+        Capture("github_alerts_dismissed_1x.png", GhView.Dismissed, dismiss: dismiss);
+        // Hunting a dismissed PR: a search that only a dismissed PR matches offers "Include them"; with the toggle on,
+        // dismissed rows rejoin All open, marked "dismissed" with Restore.
+        Capture("github_alerts_search_dismissed_hint_1x.png", GhView.All, search: "dashboard", dismiss: dismiss);
+        Capture("github_alerts_include_dismissed_1x.png", GhView.All, dismiss: dismiss, includeDismissed: true);
 
-        void Capture(string file, bool needsYouOnly, string? search = null)
+        void Capture(string file, GhView view, string? search = null, GhListOptions? options = null, string[]? dismiss = null,
+            bool includeDismissed = false)
         {
-            using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), _ => { }, null);
+            using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), GitHubAlertsDismissStore.InMemory(), _ => { }, null);
             host.SeedForRender(SampleData.GitHubAlerts());
-            var w = new GitHubAlertsWindow(host);
-            w.SetNeedsYouOnlyForRender(needsYouOnly, search);
+            if (options is not null) host.SeedOptions(options);
+            foreach (var url in dismiss ?? []) host.Dismiss(url);
+            var w = new GitHubAlertsWindow(host) { StartSessionRequested = _ => { } };
+            w.SetViewForRender(view, search, includeDismissed);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // "Start a session" on a dashboard card: new comments + failing checks with the clone found and a new worktree
+    // placed beside it (the strategy picker showing); a review request with two clones found, two accounts and the
+    // full-prompt preview open; your own PR whose branch is already in a worktree (Existing is the default); no clone
+    // found (a fresh clone, empty task so Launch is off); No checkout; and No worktree. Seeded, so it reads no files
+    // and shows no real accounts.
+    private static void RenderPrSessionWindow(string outDir)
+    {
+        var sample = SampleData.GitHubAlerts();
+        var items = GitHubAlertsClassifier.Build(sample, new Dictionary<string, DateTime>()).Items;
+        GhPrItem Item(int n) => items.First(i => i.Pr.Number == n);
+        string src = OperatingSystem.IsWindows() ? @"C:\Users\me\Documents\git\work\clients" : "/Users/me/Documents/git/work/clients";
+
+        // Worktree pictures: a repo whose worktrees sit beside it ("acme-api-<branch>"), and one where the PR's own
+        // branch is already checked out in a worktree (your own PR), which becomes the default.
+        var api = Path.Combine(src, "acme-api");
+        var siblings = new PrWorktreeContext(
+            new GitWorktreeSet(api, false, "main", [new GitWorktree(Path.Combine(src, "acme-api-spike"), "spike")]),
+            new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected, 1));
+        var web = Path.Combine(src, "web");
+        var ownBranch = new PrWorktreeContext(
+            new GitWorktreeSet(web, false, "main", [new GitWorktree(Path.Combine(web, ".claude", "worktrees", "checkout"), "feature/checkout-form")]),
+            new WorktreeLayout(WorktreeLayout.DefaultTemplate, WorktreeLayoutSource.Detected, 1));
+        var mine = Item(412) with { Pr = Item(412).Pr with { HeadBranch = "feature/checkout-form" } };
+
+        Capture("pr_session_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings);
+        Capture("pr_session_choice_1x.png", Item(418),
+            new CheckoutMatch(null, [web, Path.Combine(src, "forks", "web")]), ["Acme Corp (default)", "me@example.com"],
+            showPreview: true);
+        Capture("pr_session_existing_worktree_1x.png", mine, new CheckoutMatch(web, [web]), context: ownBranch);
+        Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None, template: "free");
+        // A review of a fork's PR: its branch name means nothing locally, so the worktree on that name isn't offered
+        // as the PR's own.
+        var fork = Item(418) with { Pr = Item(418).Pr with { IsCrossRepository = true, HeadBranch = "patch-1" } };
+        Capture("pr_session_fork_review_1x.png", fork, new CheckoutMatch(web, [web]), context: ownBranch);
+        Capture("pr_session_no_checkout_1x.png", Item(418), new CheckoutMatch(web, [web]), context: ownBranch, noCheckout: true);
+        // No worktree on a checkout that's on main: the warning shows with the row collapsed.
+        Capture("pr_session_no_worktree_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, worktree: "none");
+        // The editors opened in place: the worktree's New | Existing | None with its Location, and the clone search.
+        Capture("pr_session_worktree_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editWorktree: true);
+        Capture("pr_session_clone_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editClone: true);
+        // The prompt's {variables}: highlighted (an unknown one in the warning colour) with the suggestions open on "{b".
+        Capture("pr_session_variables_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings,
+            type: "Rebase {head} onto {base} and rerun the checks for {pr}. Ask {reviewer} first. Then {b");
+        // A template of the user's own selected, and Save as… naming another.
+        var customs = new List<PrCustomTemplate>
+        {
+            new() { Id = "custom-1", Name = "Security review", Task = "Review {pr} for secrets and injection.", Mode = PrSessionMode.Plan },
+        };
+        Capture("pr_session_custom_template_1x.png", Item(418), new CheckoutMatch(web, [web]), context: ownBranch,
+            template: "custom-1", customs: customs);
+        Capture("pr_session_save_as_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, saveAs: true);
+
+        void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
+            bool showPreview = false, string? template = null, PrWorktreeContext? context = null, bool noCheckout = false,
+            string? worktree = null, bool editWorktree = false, bool editClone = false, string? type = null,
+            List<PrCustomTemplate>? customs = null, bool saveAs = false)
+        {
+            var w = new PrSessionWindow(item, () => [], null, null, (_, _) => { }, (_, _) => { }, () => null, _ => null, customs);
+            w.SeedForRender(match, accounts, showPreview, template, context, noCheckout, worktree, editWorktree, editClone);
+            if (type is not null) w.TypeForRender(type);
+            if (saveAs) w.SaveAsForRender();
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

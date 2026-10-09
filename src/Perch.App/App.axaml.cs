@@ -504,8 +504,18 @@ public partial class App : Application
             _overlay.Canvas.TodosRequested += OpenTodos;
             // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
             // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
-            _gitHubHost = new Services.GitHubAlertsMonitorHost(
-                GitHubAlertsSeenStore.Load(), strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
+            _gitHubHost = new Services.GitHubAlertsMonitorHost(GitHubAlertsSeenStore.Load(), GitHubAlertsDismissStore.Load(),
+                strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
+            _gitHubHost.SeedOptions(new GhListOptions(
+                settings.GitHubDashboardGroupBy, settings.GitHubDashboardSortBy, settings.GitHubDashboardMaxAgeDays));
+            _gitHubHost.OptionsChanged += o =>
+            {
+                if (_appSettings is not { } s) return;
+                s.GitHubDashboardGroupBy = o.GroupBy;
+                s.GitHubDashboardSortBy = o.SortBy;
+                s.GitHubDashboardMaxAgeDays = o.MaxAgeDays;
+                s.Save();
+            };
             _overlay.Canvas.GitHubAlertsRequested += OpenGitHubAlerts;
             // Feeds: the engine behind the overlay's story-heads row (started/stopped from ApplyDisplaySettings per
             // ShowFeeds). Nothing is fetched while it's off. See docs/feeds-plan.md.
@@ -1933,9 +1943,80 @@ public partial class App : Application
     {
         if (_gitHubHost is not { } host) return;
         _gitHubWindow = WindowHost.ShowOrFocus(_gitHubWindow,
-            () => new GitHubAlertsWindow(host),
+            () => new GitHubAlertsWindow(host) { StartSessionRequested = OpenPrSession },
             () => _gitHubWindow = null,
             w => w.Retarget());
+    }
+
+    // "Start session" on a dashboard card: the dialog asks how the PR is checked out (none, or the user's clone with a
+    // new / existing / no worktree) and the prompt, prepares the folder, then starts an ordinary Perch-controlled
+    // session named after the PR, sends the prompt and opens its window — or copies the terminal command instead. See
+    // docs/github-dashboard-plan.md (parts 3 and 5).
+    private void OpenPrSession(GhPrItem item)
+    {
+        var active = ActiveSessionIds();
+        var slug = GitRemote.FromPullRequestUrl(item.Pr.Url)?.Slug ?? item.Pr.Repo;
+        string? remembered = null, rememberedLayout = null;
+        _appSettings?.GitHubRepoCheckouts?.TryGetValue(slug, out remembered);
+        _appSettings?.GitHubRepoWorktreeLayouts?.TryGetValue(slug, out rememberedLayout);
+        var w = new PrSessionWindow(item,
+            knownFolders: () => SessionHistory.DistinctFolders(SessionHistory.ListAll(active)),
+            remembered: remembered,
+            rememberedLayout: rememberedLayout,
+            remember: (repo, folder) =>
+            {
+                if (_appSettings is not { } s) return;
+                var map = s.GitHubRepoCheckouts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (map.TryGetValue(repo, out var had) && had == folder) return;
+                map[repo] = folder;
+                s.GitHubRepoCheckouts = map;
+                s.Save();
+            },
+            // A worktree strategy picked for the repo; null = back to the inferred one, so forget it.
+            rememberLayout: (repo, template) =>
+            {
+                if (_appSettings is not { } s) return;
+                var map = s.GitHubRepoWorktreeLayouts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (template is null ? !map.Remove(repo) : map.TryGetValue(repo, out var had) && had == template) return;
+                if (template is not null) map[repo] = template;
+                s.GitHubRepoWorktreeLayouts = map.Count > 0 ? map : null;
+                s.Save();
+            },
+            rules: () => _appSettings?.AccountRules,
+            launch: LaunchPrSession,
+            customTemplates: _appSettings?.PrSessionCustomTemplates,
+            // The "⋯" menu's Save as / Rename / Save / Delete: the whole list, written back at once.
+            saveCustomTemplates: list =>
+            {
+                if (_appSettings is not { } s) return;
+                s.PrSessionCustomTemplates = list.Count > 0 ? list : null;
+                s.Save();
+            });
+        if (_gitHubWindow is { IsVisible: true } owner) w.Show(owner);
+        else w.Show();
+    }
+
+    // Starts the PR session, names it (/rename, which the CLI records in the transcript so the name survives a resume),
+    // hands it the prompt — the CLI queues the two in order — and opens its window. Null on success, else the error
+    // line to show in the dialog.
+    private string? LaunchPrSession(PrSessionLaunch launch)
+    {
+        try
+        {
+            var session = StartPerchSession(new Services.SessionLaunchOptions(
+                launch.Cwd, PermissionMode: launch.PermissionMode, ConfigDir: launch.ConfigDir));
+            session.SendPrompt($"/rename {launch.Title}");
+            session.SendPrompt(launch.Prompt);
+            var w = NewSessionWindow();
+            w.Show();
+            w.Attach(session);
+            ForceFront(w);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"Couldn't start the session: {ex.Message}";
+        }
     }
 
     // Pushes the feeds engine's heads onto the overlay row, with icons from the off-thread decode cache.

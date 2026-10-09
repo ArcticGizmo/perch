@@ -449,26 +449,26 @@ internal static class SampleData
     {
         var now = DateTime.UtcNow;
         GhEvent Ev(string who, GhEventKind k, int minutesAgo, bool bot = false) => new(who, bot, k, now.AddMinutes(-minutesAgo));
-        GhPullRequest Pr(string repo, int n, string title, string author, GhPrRelation rel, int updatedMins) => new()
+        GhPullRequest Pr(string repo, int n, string title, string author, GhPrRelation rel, int updatedMins, string head) => new()
         {
             Repo = repo, Number = n, Title = title, Url = $"https://github.com/{repo}/pull/{n}", Author = author,
             Relation = rel, UpdatedUtc = now.AddMinutes(-updatedMins), LastCommitUtc = now.AddHours(-6),
             Mergeable = GhMergeable.Mergeable, MergeState = "CLEAN", Checks = GhChecks.Passing,
-            ReviewDecision = "REVIEW_REQUIRED",
+            ReviewDecision = "REVIEW_REQUIRED", HeadBranch = head, BaseBranch = "main", HeadRepo = repo,
         };
         return new GitHubFetchResult("me",
         [
-            Pr("acme/web", 412, "Move the checkout form to the new design system", "me", GhPrRelation.Author, 25) with
+            Pr("acme/web", 412, "Move the checkout form to the new design system", "me", GhPrRelation.Author, 25, "feature/checkout-form") with
                 { Events = [Ev("alice", GhEventKind.ChangesRequested, 25)], ReviewDecision = "CHANGES_REQUESTED" },
-            Pr("acme/web", 418, "Lazy-load the dashboard charts", "bob", GhPrRelation.ReviewRequested, 90),
-            Pr("acme/web", 401, "Bump the build toolchain", "me", GhPrRelation.Author, 60 * 26) with
+            Pr("acme/web", 418, "Lazy-load the dashboard charts", "bob", GhPrRelation.ReviewRequested, 90, "perf/lazy-charts"),
+            Pr("acme/web", 401, "Bump the build toolchain", "me", GhPrRelation.Author, 60 * 26, "chore/toolchain") with
                 { ReviewDecision = "APPROVED", HasApproval = true, Events = [Ev("carol", GhEventKind.Approved, 60 * 26)] },
-            Pr("acme/api", 77, "Rate-limit the export endpoint", "me", GhPrRelation.Author, 12) with
+            Pr("acme/api", 77, "Rate-limit the export endpoint", "me", GhPrRelation.Author, 12, "feat/export-rate-limit") with
                 { Checks = GhChecks.Failing, Events = [Ev("dave", GhEventKind.Comment, 12), Ev("erin", GhEventKind.Commented, 8)] },
-            Pr("acme/api", 80, "Fix the pagination off-by-one", "frank", GhPrRelation.Assignee, 240),
-            Pr("acme/api", 69, "Drop the legacy auth shim", "me", GhPrRelation.Author, 60 * 50) with
+            Pr("acme/api", 80, "Fix the pagination off-by-one", "frank", GhPrRelation.Assignee, 240, "fix/pagination"),
+            Pr("acme/api", 69, "Drop the legacy auth shim", "me", GhPrRelation.Author, 60 * 50, "chore/drop-auth-shim") with
                 { Mergeable = GhMergeable.Conflicting, MergeState = "DIRTY" },
-            Pr("tools/cli", 5, "Add a --json flag to status", "me", GhPrRelation.Author, 60 * 3) with
+            Pr("tools/cli", 5, "Add a --json flag to status", "me", GhPrRelation.Author, 60 * 3, "feat/status-json") with
                 { IsDraft = true, Checks = GhChecks.Pending, Events = [Ev("ci-bot", GhEventKind.Comment, 30, bot: true)] },
         ], null, now.AddMinutes(-2));
     }

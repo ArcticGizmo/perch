@@ -61,7 +61,7 @@ internal static class FolderSearchBox
             var dir = new TextBlock
             {
                 Text = parent, FontFamily = mono, FontSize = 11.5, Foreground = muted,
-                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.PrefixCharacterEllipsis,   // keeps the tail
             };
             return new DockPanel { LastChildFill = true, Children = { name, dir } };
         }, supportsRecycling: true);

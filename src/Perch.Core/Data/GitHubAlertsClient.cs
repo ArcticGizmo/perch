@@ -41,6 +41,7 @@ internal static class GitHubAlertsClient
         fragment pr on PullRequest {
           number title url isDraft updatedAt
           repository { nameWithOwner }
+          headRefName baseRefName isCrossRepository headRepository { nameWithOwner }
           author { login }
           reviewDecision mergeable mergeStateStatus
           commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }
@@ -195,6 +196,9 @@ internal static class GitHubAlertsClient
 
         string repo = n.TryGetProperty("repository", out var repoEl) && repoEl.ValueKind == JsonValueKind.Object
             ? Str(repoEl, "nameWithOwner") : "";
+        // Null when the fork it came from has been deleted.
+        string headRepo = n.TryGetProperty("headRepository", out var headEl) && headEl.ValueKind == JsonValueKind.Object
+            ? Str(headEl, "nameWithOwner") : "";
 
         return new GhPullRequest
         {
@@ -202,6 +206,10 @@ internal static class GitHubAlertsClient
             Number = number,
             Title = Str(n, "title"),
             Url = url,
+            HeadBranch = Str(n, "headRefName"),
+            BaseBranch = Str(n, "baseRefName"),
+            HeadRepo = headRepo,
+            IsCrossRepository = n.TryGetProperty("isCrossRepository", out var cross) && cross.ValueKind == JsonValueKind.True,
             Author = Login(n),
             IsDraft = n.TryGetProperty("isDraft", out var d) && d.ValueKind == JsonValueKind.True,
             UpdatedUtc = Date(n, "updatedAt") ?? DateTime.MinValue,

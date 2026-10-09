@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.17] - 2026-10-09
+
+- GitHub dashboard redesigned as cards, with more room to breathe
+- Hide a PR until it changes (not "Dismiss"; GitHub had dibs)
+- Group PRs by repo, reason or role; sort them; hide stale ones
+- Start a Claude session straight from a PR, named after it
+- Pick how it's checked out: a new or existing worktree, your checkout, or nothing at all
+- New worktrees go where your other worktrees live
+- No clone of the repo? Perch makes a fresh one
+- Copy command: a terminal one-liner that sets everything up itself (Perch touches nothing)
+- Quick prompts per PR, plus your own saved templates
+- `{variables}` in prompts are highlighted, with suggestions as you type
+- Long folder paths keep the folder name when trimmed
+
+---
+
 ## [v0.5.16] - 2026-10-08
 
 - Prompts answered from your phone show as "Answered remotely" instead of waiting forever

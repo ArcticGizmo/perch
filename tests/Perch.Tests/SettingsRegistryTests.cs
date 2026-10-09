@@ -33,6 +33,16 @@ public class SettingsRegistryTests
         nameof(AppSettings.FeedStoryHeightDip),
         // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),
+        // The GitHub dashboard's grouping, order and age window, picked in the dashboard window's toolbar.
+        nameof(AppSettings.GitHubDashboardGroupBy),
+        nameof(AppSettings.GitHubDashboardSortBy),
+        nameof(AppSettings.GitHubDashboardMaxAgeDays),
+        // Where each repo is checked out, remembered from the start-a-session-from-a-PR dialog.
+        nameof(AppSettings.GitHubRepoCheckouts),
+        // The worktree layout picked per repo in that dialog.
+        nameof(AppSettings.GitHubRepoWorktreeLayouts),
+        // Prompt templates saved from that dialog's "⋯" menu.
+        nameof(AppSettings.PrSessionCustomTemplates),
         // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.
         nameof(AppSettings.SessionZoom),
         nameof(AppSettings.RoostZoom),

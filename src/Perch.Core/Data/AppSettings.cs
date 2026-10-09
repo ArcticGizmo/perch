@@ -606,6 +606,30 @@ internal sealed class AppSettings
     // How often (minutes) the GitHub alerts poll runs. Clamped to 2–60 when applied. Defaults to 5.
     public int GitHubAlertsIntervalMinutes { get; set; } = 5;
 
+    // The GitHub dashboard window's view: grouping, row order, and "Updated within" days (0 = any; otherwise older
+    // PRs are hidden from the window and the overlay strip alike). Set from the window's own toolbar — UI state, not
+    // Settings-window controls. Read through GhListOptions.Normalize. See docs/github-dashboard-plan.md.
+    public GhGroupBy GitHubDashboardGroupBy { get; set; } = GhGroupBy.Repo;
+    public GhSortBy GitHubDashboardSortBy { get; set; } = GhSortBy.Urgency;
+    public int GitHubDashboardMaxAgeDays { get; set; }
+
+    // Where each repository is checked out (owner/repo → folder), remembered when the user starts a session from a
+    // dashboard PR, so the next one in that repo doesn't ask. Read by RepoCheckoutResolver; a folder that no longer
+    // exists is ignored. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? GitHubRepoCheckouts { get; set; }
+
+    // The worktree layout (a WorktreeLayout template) the user picked for a repository (owner/repo → template) in the
+    // start-a-session dialog, preselected next time over the inferred one. Only written when the pick differs from
+    // what Perch inferred. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? GitHubRepoWorktreeLayouts { get; set; }
+
+    // Prompt templates the user saved from the start-a-session dialog's "⋯" menu (Save as / Rename / Save / Delete),
+    // offered after the built-ins. Null = none. See PrPromptLibrary. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PrCustomTemplate>? PrSessionCustomTemplates { get; set; }
+
     // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
     // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
     // docs/feeds-plan.md.
