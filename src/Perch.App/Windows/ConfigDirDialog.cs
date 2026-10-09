@@ -114,12 +114,13 @@ internal sealed class ConfigDirDialog : Window
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(16, 12, 16, 16),
         };
         buttons.Children.Add(_ok);
         buttons.Children.Add(cancel);
+        DockPanel.SetDock(buttons, Dock.Bottom);
 
-        var layout = new StackPanel { Margin = new Thickness(16) };
+        var layout = new StackPanel { Margin = new Thickness(16, 16, 16, 0) };
         layout.Children.Add(help);
         layout.Children.Add(SettingsUi.FieldCaption("Directory"));
         layout.Children.Add(pathControl);
@@ -129,7 +130,8 @@ internal sealed class ConfigDirDialog : Window
         layout.Children.Add(new Border { Height = 10 });
         layout.Children.Add(hooksRow);
         layout.Children.Add(SettingsUi.BodyText(hooksNote));
-        Content = new ScrollViewer { Content = layout };
+        // Save/Cancel pinned below the scrolling fields, so they stay on screen however tall the fields get.
+        Content = new DockPanel { Children = { buttons, new ScrollViewer { Content = layout } } };
 
         _pathBox.TextChanged += (_, _) => RefreshStatus();
         RefreshStatus();
