@@ -38,6 +38,15 @@ public sealed record GhPullRequest
     public required string Title { get; init; }
     public required string Url { get; init; }
     public string Author { get; init; } = "";
+    /// <summary>The PR's head branch name (<c>headRefName</c>). Chosen by the PR's author, so untrusted text.</summary>
+    public string HeadBranch { get; init; } = "";
+    /// <summary>The branch it merges into (<c>baseRefName</c>).</summary>
+    public string BaseBranch { get; init; } = "";
+    /// <summary>owner/name of the repo the head branch lives in; empty when that fork has been deleted.</summary>
+    public string HeadRepo { get; init; } = "";
+    /// <summary>The head comes from another repository (a fork), so its branch name means nothing in a local
+    /// checkout of <see cref="Repo"/>.</summary>
+    public bool IsCrossRepository { get; init; }
     public bool IsDraft { get; init; }
     public DateTime UpdatedUtc { get; init; }
     /// <summary>The head commit's committed date — the best GraphQL offers for "when the author last

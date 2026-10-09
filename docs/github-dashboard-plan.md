@@ -87,7 +87,7 @@ counts. `GhView` = NeedsYou / All / Dismissed replaces the `needsYouOnly` bool. 
   option changes, so it waits until someone hits the 50 cap.
 - Desktop notifications.
 
-## Part 3: start a session from a PR (later)
+## Part 3: start a session from a PR
 
 ### Which Claude product
 
@@ -170,6 +170,74 @@ phases below, settled while building:
 - **Unattended edits** happen in a worktree, so the worst case is a branch the user can inspect or delete, never
   a modified main checkout.
 - **No auto-push.** Templates say "commit locally, don't push" unless the user edits that out.
+
+## Part 4: session modes, worktree detection, templates
+
+Agreed 2026-10-09. A PR session has two independent choices, **where** the code lives and **what** Claude does:
+
+| Where (`PrWorkspace`) | What it is | Default when |
+|---|---|---|
+| `ExistingWorktree` | A worktree the user already has with the PR's head branch checked out | The PR is yours (not from a fork) and such a worktree exists |
+| `Worktree` | A new worktree, laid out the way the user's existing ones are | A checkout is found, same-repo PR |
+| `Clone` | A separate clone (`--filter=blob:none`) in Perch's data folder. Nothing shared with the user's repo | PR from a fork, or no checkout found |
+| `DiffOnly` | An empty Perch scratch folder; Claude reads the PR via `gh` | Never the default; picked for quick reviews |
+| `Checkout` | The user's checkout as it is (today's second option) | Never the default |
+
+**What** (`PrIntent`): `Review` (plan mode, read-only) · `Fix` (accept edits) · `ReviewThenFix` (plan mode; the review
+ends with a proposed fix plan, and approving it on Perch's existing plan-approval card switches the same session to
+editing) · `Custom`. `DiffOnly` + any editing intent offers to upgrade to a worktree.
+
+The per-PR worktree moves out of `.perch-worktrees`. Its location follows what the user already does, and falls back
+to Claude Code's own `.claude/worktrees/pr-{number}`.
+
+### Checkpoints
+
+Each is a commit, with tests passing and render probes updated where there's UI.
+
+- **W1, PR head info.** Add `headRefName`, `baseRefName`, `headRepository { nameWithOwner }`, `isCrossRepository`
+  to the GraphQL fragment. `GhPullRequest` gets `HeadBranch`, `BaseBranch`, `HeadRepo`, `IsCrossRepository`.
+  Parser tests. (The query still hasn't been run against live GitHub; these are standard fields.)
+- **W2, list a repo's worktrees.** `GitWorktreeScanner` (Core, no git process): from a checkout, find the shared
+  git dir, read `worktrees/*/gitdir` (each names a worktree's `.git` file) and each worktree's `HEAD`, and return
+  the main root plus `(path, branch)` for every worktree. `RepoCheckoutResolver` folds linked worktrees into their
+  main checkout, so a repo with five worktrees is one candidate, not a five-way choice. Temp-dir tests with plain
+  files.
+- **W3, infer the layout.** `WorktreeLayout` (pure): from the existing worktrees' paths and branches, infer a path
+  template: `{parent}/{repo}-{branch}`, `{parent}/{repo}.{branch}`, `{root}/.worktrees/{branch}`,
+  `{root}/.claude/worktrees/{branch}`, bare-repo `{root}/{branch}`, or anything else expressible relative to the
+  root or its parent. Also infer how a `/` in a branch name maps to a folder (`-`, or nested). The most common
+  pattern wins. With no worktrees, `.gitignore` entries (`.worktrees/`, `.claude/worktrees`) are hints, and the
+  final fallback is `{root}/.claude/worktrees/{name}`. A PR's worktree name is `pr-{number}`.
+- **W4, use it.** `PrWorktree` places new worktrees by the inferred layout. A layout nested inside the checkout gets
+  an entry in the repo's **`.git/info/exclude`**, not `.gitignore`. It's local and never committed, so the worktree
+  doesn't show as untracked and nothing in the repo changes. The dialog offers `ExistingWorktree` when W2 finds the
+  PR's head branch checked out somewhere (same-repo PRs only; a fork's branch name means nothing locally).
+- **W5, Clone and DiffOnly.** `PrClone` (Core): `git clone --filter=blob:none <repo url>` into
+  `%LocalAppData%/<profile>/pr-clones/<owner>-<repo>-pr-<n>`, then fetch `pull/<n>/head` onto `perch/pr-<n>`. The
+  URL is built from `owner/repo` on github.com, never taken from PR text. Reused if present. `DiffOnly`: an empty
+  `pr-scratch/<owner>-<repo>-pr-<n>` folder. Perch made it and it's empty, so it's granted folder trust directly
+  (clones and worktrees still ask). The dialog's *Where* becomes these five options, only showing the ones that
+  apply, with the default from the table above.
+- **W6, intents and variables.** `PrPromptTemplate` gains `Intent`, a default `Where`, and an optional `Model`.
+  `ReviewThenFix` is a built-in. New variables are split by trust:
+  - Trusted: `{owner}` `{name}` `{base}` `{reasons}` (the PR's reason texts), `{branch}` (Perch's local branch),
+    `{worktree}`.
+  - Untrusted: `{author}` and `{head}` join `{title}`, flattened to one line and length-capped. A branch name is
+    chosen by the PR author.
+  - A task that starts with `/` (a slash command or skill) is sent as written, with no wrapper, because anything
+    before it would stop it running as a command. The editor says so.
+- **W7, saved templates and editor.** `AppSettings.PrSessionTemplates` (null = the built-ins), listed in
+  `SettingsRegistryTests.NotSettings` like `CustomThemes`. A Settings page, "PR session templates": list, add,
+  duplicate, delete, reorder; fields for name, intent, default Where, model, reasons it fits, and task; a live
+  preview of the composed prompt against a sample PR. The dialog's list comes from here.
+- **W8, slash commands and skills in templates.** The editor's task box offers `/` completion from Perch's
+  `SlashCommandCatalog` (built-ins, user and plugin commands, skills), so a template can be `/code-review {url}`.
+  Repo-level shared templates (read from the main checkout's default branch, never the PR's code) stay out until
+  asked for.
+- **W9, per-repo memory.** Remember the last template and *Where* per repo, next to the remembered checkout, and
+  preselect them.
+- **W10, link back (was S5).** A dashboard row shows when a Perch session is running for that PR (matched by its
+  folder: worktree, clone, scratch or checkout) and opens it, instead of offering a second launch.
 
 ## Testing
 

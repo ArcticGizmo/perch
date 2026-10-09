@@ -483,6 +483,8 @@ public class GitHubAlertsTests
                 "number": 7, "title": "Mine", "url": "https://github.com/acme/web/pull/7", "isDraft": false,
                 "updatedAt": "2026-10-01T12:00:00Z",
                 "repository": { "nameWithOwner": "acme/web" },
+                "headRefName": "feature/checkout", "baseRefName": "main", "isCrossRepository": false,
+                "headRepository": { "nameWithOwner": "acme/web" },
                 "author": { "login": "me" },
                 "reviewDecision": "APPROVED", "mergeable": "CONFLICTING", "mergeStateStatus": "dirty",
                 "commits": { "nodes": [ { "commit": { "committedDate": "2026-10-01T10:00:00Z",
@@ -501,6 +503,7 @@ public class GitHubAlertsTests
             "review": { "nodes": [
               { "number": 9, "title": "Theirs", "url": "https://github.com/acme/api/pull/9",
                 "repository": { "nameWithOwner": "acme/api" }, "author": { "login": "bob" },
+                "headRefName": "patch-1", "isCrossRepository": true, "headRepository": null,
                 "commits": { "nodes": [ { "commit": { "committedDate": "2026-10-01T09:00:00Z", "statusCheckRollup": null } } ] } }
             ] },
             "assigned": { "nodes": [
@@ -528,6 +531,10 @@ public class GitHubAlertsTests
         Assert.Equal("APPROVED", mine.ReviewDecision);
         Assert.True(mine.HasApproval);
         Assert.Equal(new DateTime(2026, 10, 1, 10, 0, 0, DateTimeKind.Utc), mine.LastCommitUtc);
+        Assert.Equal("feature/checkout", mine.HeadBranch);
+        Assert.Equal("main", mine.BaseBranch);
+        Assert.Equal("acme/web", mine.HeadRepo);
+        Assert.False(mine.IsCrossRepository);
 
         // The pending draft review is dropped; events come oldest first; the bot and the ghost author are kept
         // (the classifier ignores bots; a ghost has no login).
@@ -540,6 +547,11 @@ public class GitHubAlertsTests
         Assert.Equal(GhPrRelation.ReviewRequested, theirs.Relation);
         Assert.Equal(GhChecks.None, theirs.Checks);
         Assert.Equal(GhMergeable.Unknown, theirs.Mergeable);
+        // A fork PR whose fork was deleted: the branch name survives, the head repo doesn't.
+        Assert.Equal("patch-1", theirs.HeadBranch);
+        Assert.True(theirs.IsCrossRepository);
+        Assert.Equal("", theirs.HeadRepo);
+        Assert.Equal("", theirs.BaseBranch);
     }
 
     [Theory]
