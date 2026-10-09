@@ -19,4 +19,17 @@ internal static class ComposerKeys
         box.SelectionEnd = caret;
         return true;
     }
+
+    /// <summary>Backspace/Delete against an <c>[Image #N]</c> marker: select the whole marker and report true. As
+    /// with <see cref="TryContinueLine"/>, the caller leaves the key unhandled so the TextBox's own Backspace/Delete
+    /// removes the selection (keeping undo and the caret in step) — the marker goes as one unit, and with it the
+    /// image. Does nothing while text is selected (the user's own selection wins).</summary>
+    public static bool TrySelectImageMarker(this TextBox box, bool backward)
+    {
+        if (box.IsReadOnly || box.SelectionStart != box.SelectionEnd) return false;
+        if (ImageMarker.SpanToDelete(box.Text, box.CaretIndex, backward) is not { } span) return false;
+        box.SelectionStart = span.Start;
+        box.SelectionEnd = span.Start + span.Length;
+        return true;
+    }
 }

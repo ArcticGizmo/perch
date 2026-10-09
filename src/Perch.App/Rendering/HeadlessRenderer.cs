@@ -2282,6 +2282,48 @@ internal static class HeadlessRenderer
         var longDraft = string.Concat(System.Linq.Enumerable.Repeat(
             "asdf aj3eha3klh ak3jhakjfh 3kahe3kljhaf 3ejhalefh al3wjfhawl j3fhalwjhf h asdflhjsa dflhasdlf asdfha sdhfl this is a log. ", 12));
         CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_long_1x.png", longDraft);
+        // Slash-command drafts: a bare "/", a partial name, a known command (highlighted) and one with arguments.
+        CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_slash_bare_1x.png", "/");
+        CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_slash_partial_1x.png", "/con");
+        CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_slash_known_1x.png", "/context");
+        CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_slash_args_1x.png", "/compact keep the tests");
+        // The same, typed keystroke by keystroke into the focused box so its caret shows: the caret must sit right
+        // after the last glyph — a highlight run laid out wider than the box's own text (it once drew commands
+        // semi-bold) pulls the caret back into the word. "image_backspace" then presses Backspace once: the whole
+        // "[Image #1]" marker must go, leaving "see ".
+        foreach (var (name, typed, backspaces) in new[]
+                 {
+                     ("bare", "/", 0), ("bare2", "/c", 0), ("command", "/release-notes", 0),
+                     ("image", "see [Image #1] and /context", 0), ("image_backspace", "see [Image #1]", 1),
+                 })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            w.FocusComposerForRender();
+            Dispatcher.UIThread.RunJobs();
+            foreach (var ch in typed)
+            {
+                global::Avalonia.Headless.HeadlessWindowExtensions.KeyTextInput(w, ch.ToString());
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            for (int i = 0; i < backspaces; i++)
+            {
+                global::Avalonia.Headless.HeadlessWindowExtensions.KeyPress(w, global::Avalonia.Input.Key.Back,
+                    global::Avalonia.Input.RawInputModifiers.None, global::Avalonia.Input.PhysicalKey.Backspace, null);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, $"session_composer_typed_{name}_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
 
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;

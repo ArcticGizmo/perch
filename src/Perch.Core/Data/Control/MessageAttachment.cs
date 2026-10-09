@@ -18,5 +18,16 @@ internal sealed class MessageAttachment
     public required string Path { get; init; }
     public string? MediaType { get; init; }
 
+    /// <summary>The <c>[Image #N]</c> placeholder this image left in the composer text (see <see
+    /// cref="ImageMarker"/>), or null for a plain file / an attachment from before markers existed.</summary>
+    public string? Marker { get; init; }
+
+    /// <summary>True for an image pasted from the clipboard, whose temp file name says nothing to the user.</summary>
+    public bool Pasted { get; init; }
+
     public string DisplayName => System.IO.Path.GetFileName(Path);
+
+    /// <summary>What the chip shows: the marker for a pasted image, the marker and file name for a dropped or picked
+    /// one (so it can be matched to its place in the text), else just the file name.</summary>
+    public string ChipLabel => Marker is null ? DisplayName : Pasted ? Marker : $"{Marker} {DisplayName}";
 }

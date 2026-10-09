@@ -6,10 +6,12 @@ internal enum InputTokenKind
 {
     /// <summary>Plain, unhighlighted text.</summary>
     Text,
-    /// <summary>A leading slash command (<c>/context</c>), the first token only.</summary>
+    /// <summary>A slash command: a leading one (<c>/context</c>), or a mid-text one that can run inline (a skill).</summary>
     Command,
     /// <summary>An http(s) URL anywhere in the text.</summary>
     Link,
+    /// <summary>An <c>[Image #N]</c> marker standing in for an attached image (see <see cref="ImageMarker"/>).</summary>
+    Image,
 }
 
 /// <summary>A contiguous run of composer text of one <see cref="InputTokenKind"/>. Half-open
@@ -27,29 +29,44 @@ internal static class ComposerHighlighter
     /// string (plain stretches come back as <see cref="InputTokenKind.Text"/>). A leading slash token is only
     /// marked a <see cref="InputTokenKind.Command"/> when <paramref name="isKnownCommand"/> recognises its
     /// name — so an unknown <c>/foo</c> stays plain text; the default recogniser is the built-in catalogue.
-    /// Never throws; returns empty for empty input.</summary>
-    public static IReadOnlyList<InputToken> Tokenize(string? text, Func<string, bool>? isKnownCommand = null)
+    /// A <c>/word</c> later in the text (after whitespace) is a command only when <paramref name="isInlineCommand"/>
+    /// recognises it — built-ins only run as the whole message, but a skill can be invoked mid-prompt; the default
+    /// recognises none. Never throws; returns empty for empty input.</summary>
+    public static IReadOnlyList<InputToken> Tokenize(string? text, Func<string, bool>? isKnownCommand = null,
+        Func<string, bool>? isInlineCommand = null)
     {
         if (string.IsNullOrEmpty(text)) return [];
         isKnownCommand ??= SlashCommandCatalog.IsBuiltIn;
 
         var specials = new List<InputToken>();
 
-        // A leading slash command — the first token only (a "/word" mid-message isn't a command), and only when
-        // it names a real command. Leading whitespace is allowed before it, matching the palette's detection.
-        int ws = 0;
-        while (ws < text.Length && char.IsWhiteSpace(text[ws])) ws++;
-        if (ws + 1 < text.Length && text[ws] == '/' && char.IsLetter(text[ws + 1]))
+        // Slash tokens: a "/" that opens the text (after any leading whitespace) or follows whitespace, then a
+        // letter. The leading one is checked against every known command, later ones only against inline-capable
+        // ones, so a "/word" mid-sentence stays plain unless it really names a skill.
+        bool leading = true;
+        for (int i = 0; i + 1 < text.Length; i++)
         {
-            int end = ws + 1;
+            if (char.IsWhiteSpace(text[i])) continue;
+            if (i > 0 && !char.IsWhiteSpace(text[i - 1])) continue;   // not at a word start
+            int end = i;
             while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
-            if (isKnownCommand(text[(ws + 1)..end]))
-                specials.Add(new InputToken(ws, end - ws, InputTokenKind.Command));
+            if (text[i] == '/' && char.IsLetter(text[i + 1]))
+            {
+                var name = text[(i + 1)..end];
+                if (leading ? isKnownCommand(name) : isInlineCommand?.Invoke(name) == true)
+                    specials.Add(new InputToken(i, end - i, InputTokenKind.Command));
+            }
+            leading = false;
+            i = end - 1;
         }
 
         // Links anywhere in the text (shared detector, so composer highlighting and clickable links agree).
         foreach (var u in UrlDetect.Find(text))
             specials.Add(new InputToken(u.Start, u.Length, InputTokenKind.Link));
+
+        // Attached-image markers.
+        foreach (var (start, length) in ImageMarker.Find(text))
+            specials.Add(new InputToken(start, length, InputTokenKind.Image));
 
         specials.Sort((a, b) => a.Start.CompareTo(b.Start));
 

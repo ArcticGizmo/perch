@@ -85,4 +85,46 @@ public class SlashCommandCatalogTests
     {
         Assert.Equal(expected, SlashCommandCatalog.CommandName(text));
     }
+
+    // ActiveToken: the slash token the caret is in (caret = '|' in the input, removed before the call).
+    [Theory]
+    [InlineData("/|", 0, 1, "", true)]
+    [InlineData("/con|", 0, 4, "con", true)]
+    [InlineData("  /mo|", 2, 5, "mo", true)]
+    [InlineData("/co|ntext", 0, 8, "co", true)]          // token runs past the caret
+    [InlineData("please run /gri|", 11, 15, "gri", false)]
+    [InlineData("line one\n/gr|", 9, 12, "gr", false)]  // after a newline is still mid-prompt
+    [InlineData("hi /| there", 3, 4, "", false)]
+    public void ActiveToken_Found(string marked, int start, int end, string query, bool leading)
+    {
+        int caret = marked.IndexOf('|');
+        var tok = SlashCommandCatalog.ActiveToken(marked.Remove(caret, 1), caret);
+        Assert.Equal((start, end, query, leading), tok);
+    }
+
+    [Theory]
+    [InlineData("|")]
+    [InlineData("hello|")]
+    [InlineData("/compact keep|")]       // onto the arguments
+    [InlineData("src/foo|")]             // slash not at a word start
+    [InlineData("/usr/bin|")]            // a path
+    [InlineData("|/context")]            // caret before the slash
+    public void ActiveToken_None(string marked)
+    {
+        int caret = marked.IndexOf('|');
+        Assert.Null(SlashCommandCatalog.ActiveToken(marked.Remove(caret, 1), caret));
+    }
+
+    [Fact]
+    public void SearchSkills_OnlySkills()
+    {
+        var skills = new[]
+        {
+            new SlashCommandInfo("grill-me", "", "Interview", SlashCommandTier.Skill),
+            new SlashCommandInfo("bump-version", "", "Bump", SlashCommandTier.Skill),
+        };
+        Assert.Equal(["bump-version", "grill-me"], SlashCommandCatalog.SearchSkills("", skills).Select(s => s.Name));
+        Assert.Equal("grill-me", SlashCommandCatalog.SearchSkills("gri", skills)[0].Name);
+        Assert.Empty(SlashCommandCatalog.SearchSkills("context", skills));   // built-ins never appear
+    }
 }
