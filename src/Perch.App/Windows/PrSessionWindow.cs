@@ -37,8 +37,11 @@ internal sealed record PrSessionLaunch(string Cwd, string Prompt, string Permiss
 /// <item><b>Account</b>, when there's a choice, beside the folder that decides it.</item>
 /// </list>
 /// Then the prompt (a quick-prompt picker over an editable task, with the full composed prompt behind a disclosure),
-/// and bottom right <b>Copy command</b> (prepare the folder, copy a one-line terminal command,
-/// <see cref="PrSessionCommand"/>) or <b>Launch in Perch</b> (open a session window named after the PR).
+/// and bottom right <b>Copy command</b> (copy a terminal command that does the setup itself, a worktree fetch and add,
+/// a clone or a scratch folder, then starts Claude: Perch changes nothing, <see cref="PrSetup"/> +
+/// <see cref="PrSessionCommand"/>), a quieter <b>Set up &amp; copy</b> when there's setup to do (Perch makes the
+/// folder now; the command just starts Claude there) or <b>Launch in Perch</b> (open a session window named after
+/// the PR).
 ///
 /// <para>Folder trust is asked the way a new session asks it, for the final folder: a worktree's code is the PR's,
 /// which may come from someone else. The account follows the same rules and guardrails as the session launcher,
@@ -112,7 +115,11 @@ internal sealed class PrSessionWindow : Window
     private readonly ComboBox _accountBox;
 
     private readonly TextBlock _status;
-    private readonly Button _launchButton, _copyButton;
+    private readonly Button _launchButton, _copyButton, _setupCopyButton;
+
+    /// <summary>What the footer's buttons do: start the session in Perch; prepare the folder here, then copy the
+    /// command that starts Claude in it; or copy everything, setup included, and change nothing.</summary>
+    private enum RunKind { Launch, SetUpAndCopy, CopyAll }
 
     private string? _folder;
     private IReadOnlyList<AccountChoice> _accountOptions = [];
@@ -361,9 +368,16 @@ internal sealed class PrSessionWindow : Window
 
         // ── Footer: status on the left; Copy command and Launch in Perch bottom right ──
         _status = new TextBlock { Foreground = Muted, FontSize = 12, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        // Copy command changes nothing: the copied text does any setup (fetch + worktree, clone, folder) itself.
         _copyButton = OutlineButton("Copy command");
-        ToolTip.SetTip(_copyButton, "Prepare the folder, then copy a command that starts this session in a terminal");
-        _copyButton.Click += async (_, _) => await RunAsync(copy: true);
+        ToolTip.SetTip(_copyButton, "Copy a terminal command that sets up the folder and starts this session. Perch changes nothing.");
+        _copyButton.Click += async (_, _) => await RunAsync(RunKind.CopyAll);
+        // The quieter alternative: Perch does the setup now, and the copied command just starts Claude there.
+        _setupCopyButton = LinkButton("Set up & copy");
+        _setupCopyButton.Foreground = Muted;
+        _setupCopyButton.VerticalAlignment = VerticalAlignment.Center;
+        _setupCopyButton.Margin = new Thickness(0, 0, 8, 0);
+        _setupCopyButton.Click += async (_, _) => await RunAsync(RunKind.SetUpAndCopy);
         _launchButton = new Button
         {
             Content = "Launch in Perch", Foreground = Palette.OnAccentBrush, Background = Accent, BorderThickness = new Thickness(0),
@@ -371,8 +385,8 @@ internal sealed class PrSessionWindow : Window
             Cursor = new Cursor(StandardCursorType.Hand), IsEnabled = false,
         };
         ToolTip.SetTip(_launchButton, "Open a Perch session window on this PR (Ctrl+Enter)");
-        _launchButton.Click += async (_, _) => await RunAsync(copy: false);
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _copyButton, _launchButton } };
+        _launchButton.Click += async (_, _) => await RunAsync(RunKind.Launch);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _setupCopyButton, _copyButton, _launchButton } };
         var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(24, 14, 18, 16) };
         Grid.SetColumn(buttons, 1);
         _status.Margin = new Thickness(0, 0, 12, 0);
@@ -542,7 +556,19 @@ internal sealed class PrSessionWindow : Window
         bool ready = !_busy && !string.IsNullOrWhiteSpace(_task.Text) && (NoCheckout || CheckoutReady);
         _launchButton.IsEnabled = ready;
         _copyButton.IsEnabled = ready;
+        _setupCopyButton.IsEnabled = ready;
+        // Only worth offering when there's a folder to make; otherwise it's the same as Copy command.
+        _setupCopyButton.IsVisible = NeedsSetup;
+        ToolTip.SetTip(_setupCopyButton, NoCheckout ? "Make the scratch folder now, then copy just the command that starts Claude in it"
+            : _folder is null ? "Clone the repo now, then copy just the command that starts Claude in the clone"
+            : "Create the worktree now, then copy just the command that starts Claude in it");
     }
+
+    // Whether the chosen folder has to be made first: a scratch folder, a clone, or a new worktree (unless Perch's
+    // earlier one for this PR is there to reuse).
+    private bool NeedsSetup =>
+        NoCheckout || _folder is null
+        || _worktree.Selected == WtNew && _context?.Set.PathOfBranch(PrBranch) is null;
 
     // A checkout is ready once the clone search is done (no clone → a fresh one), no folder edit is half-typed, and an
     // existing worktree, if that's the choice, is picked.
@@ -864,37 +890,56 @@ internal sealed class PrSessionWindow : Window
 
     // ── Launch / copy ──
 
-    // Prepares the folder (a worktree fetch or a clone can take a while), resolves the account and, for a launch,
-    // folder trust; then either starts the session in Perch or copies the terminal command.
-    private async Task RunAsync(bool copy)
+    // Launch and "Set up & copy" prepare the folder here (a worktree fetch or a clone can take a while); "Copy command"
+    // only works out the setup steps, reading the repo but changing nothing, and copies them ahead of the command.
+    // Then the account and, for a launch, folder trust; then the session starts in Perch or the command is copied.
+    private async Task RunAsync(RunKind run)
     {
         if (_busy || !_launchButton.IsEnabled) return;
         var (where, local, existing) = Workspace();
         var root = _folder;
-        bool newWorktree = !NoCheckout && root is not null && _worktree.Selected == WtNew;
+        bool noCheckout = NoCheckout;
+        bool newWorktree = !noCheckout && root is not null && _worktree.Selected == WtNew;
         var layout = SelectedLayout;
         var prompt = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, where, local);
-        SetBusy(true, where switch
+        SetBusy(true, run == RunKind.CopyAll ? "Working out the setup…" : where switch
         {
             PrWorkspace.Worktree when newWorktree => "Preparing the worktree…",
             PrWorkspace.Clone => "Cloning… (a big repo can take a few minutes)",
-            _ => copy ? "Preparing…" : "Starting…",
+            _ => run == RunKind.Launch ? "Starting…" : "Preparing…",
         });
 
         var repo = _repo;
         int number = _item.Pr.Number;
-        var wt = NoCheckout ? await Task.Run(() => PrScratch.Ensure(repo, number))
-            : root is null ? await Task.Run(() => PrClone.Ensure(repo, number))
-            : newWorktree ? await Task.Run(() => PrWorktree.Ensure(root, repo, number, layout))
-            : existing is not null ? new PrWorktreeResult(existing, true, null)
-            : new PrWorktreeResult(null, false, "Pick the worktree to use.");
-        if (!IsVisible) return;
-        if (wt.Path is not { } cwd)
+        string cwd;
+        IReadOnlyList<PrSetupStep> steps = [];
+        if (run == RunKind.CopyAll)
         {
-            SetBusy(false, wt.Error ?? "Couldn't prepare the folder.");
-            return;
+            var (plan, planError) = await Task.Run(() => PlanSetup(noCheckout, root, newWorktree, existing, layout, repo, number));
+            if (!IsVisible) return;
+            if (plan is null)
+            {
+                SetBusy(false, planError ?? "Couldn't work out the setup.");
+                return;
+            }
+            (cwd, steps) = (plan.Path, plan.Steps);
         }
-        if (root is not null && !NoCheckout)
+        else
+        {
+            var wt = noCheckout ? await Task.Run(() => PrScratch.Ensure(repo, number))
+                : root is null ? await Task.Run(() => PrClone.Ensure(repo, number))
+                : newWorktree ? await Task.Run(() => PrWorktree.Ensure(root, repo, number, layout))
+                : existing is not null ? new PrWorktreeResult(existing, true, null)
+                : new PrWorktreeResult(null, false, "Pick the worktree to use.");
+            if (!IsVisible) return;
+            if (wt.Path is null)
+            {
+                SetBusy(false, wt.Error ?? "Couldn't prepare the folder.");
+                return;
+            }
+            cwd = wt.Path;
+        }
+        if (root is not null && !noCheckout)
         {
             _remember(repo.Slug, root);
             // A Location the user changed sticks for the repo; going back to the inferred one forgets it.
@@ -907,7 +952,8 @@ internal sealed class PrSessionWindow : Window
         string? pickKey = _accountBox.SelectedIndex >= 0 && _accountBox.SelectedIndex < _accountOptions.Count
             ? _accountOptions[_accountBox.SelectedIndex].Key : null;
         var guardFolder = where is PrWorkspace.Clone or PrWorkspace.DiffOnly ? root : cwd;
-        bool grantScratch = where == PrWorkspace.DiffOnly;
+        // Granting trust writes Claude's settings, so "Copy command" (change nothing) leaves it to the terminal's claude.
+        bool grantScratch = where == PrWorkspace.DiffOnly && run != RunKind.CopyAll;
         var rules = _rules();
         var (configDir, trusted, error) = await Task.Run(() =>
         {
@@ -929,14 +975,18 @@ internal sealed class PrSessionWindow : Window
 
         var mode = _template.Mode == PrSessionMode.Plan ? "plan" : "acceptEdits";
         var title = PrSessionPrompts.SessionTitle(_item.Pr);
-        if (copy)
+        if (run != RunKind.Launch)
         {
             // The terminal's claude asks for folder trust itself, so there's no gate here.
-            var command = PrSessionCommand.Build(cwd, prompt, mode, configDir, title, PrSessionCommand.DefaultShell);
+            var command = PrSessionCommand.Build(cwd, prompt, mode, configDir, title, PrSessionCommand.DefaultShell, steps);
             try
             {
                 if (Clipboard is { } clip) await clip.SetTextAsync(command);
-                SetBusy(false, $"Copied. The folder is ready at {cwd}; paste the command into a terminal.");
+                SetBusy(false, run == RunKind.SetUpAndCopy
+                    ? $"Copied. The folder is ready at {cwd}; paste the command into a terminal."
+                    : steps.Count > 0
+                        ? $"Copied. Nothing was changed: the command sets up {Leaf(cwd)} first, then starts Claude there."
+                        : "Copied. Paste it into a terminal.");
                 _status.Foreground = Muted;
             }
             catch (Exception ex)
@@ -959,6 +1009,46 @@ internal sealed class PrSessionWindow : Window
         Close();
     }
 
+    // "Copy command"'s setup, worked out off the UI thread from what's on disk, reading only: the scratch folder or
+    // clone (and whether it's there yet), or the new worktree (the repo's worktrees and layout, the remote naming the
+    // PR's repo, the exclude file). An existing worktree or the checkout as it is needs no setup.
+    private static (PrSetupPlan? Plan, string? Error) PlanSetup(bool noCheckout, string? root, bool newWorktree,
+        string? existing, WorktreeLayout? layout, GitRepoRef repo, int number)
+    {
+        try
+        {
+            var baseDir = PrWorkspaceFolders.Base;
+            if (noCheckout)
+                return (PrSetup.Scratch(repo, number, baseDir,
+                    Directory.Exists(PrWorkspaceFolders.For(baseDir, "pr-scratch", repo, number))), null);
+            if (root is null)
+            {
+                var dir = PrWorkspaceFolders.For(baseDir, "pr-clones", repo, number);
+                bool cloned = Directory.Exists(Path.Combine(dir, ".git"));
+                if (!cloned && Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any())
+                    return (null, $"{dir} already exists and isn't a clone");
+                return PrSetup.Clone(repo, number, baseDir, cloned) is { } c ? (c, null) : (null, $"Can't clone {repo.Slug}");
+            }
+            if (!newWorktree)
+                return existing is not null ? (new PrSetupPlan(existing, []), null) : (null, "Pick the worktree to use.");
+
+            if (PrWorktree.Inspect(root) is not { } inspected) return (null, "That folder isn't a git checkout");
+            var ctx = layout is null ? inspected : inspected with { Layout = layout };
+            if (PrWorktree.RemoteFor(GitCheckoutScanner.ReadRemotes(ctx.Set.Root), repo) is not { } remote)
+                return (null, $"No remote in {ctx.Set.Root} points at {repo.Slug}");
+            var common = GitWorktreeScanner.CommonDir(ctx.Set.Root);
+            var excludePath = common is null ? null : Path.Combine(common, "info", "exclude");
+            var exclude = excludePath is not null && File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
+            // The exclude step only when git's info folder is there to append to (it is in any normal repo).
+            if (common is not null && !Directory.Exists(Path.Combine(common, "info"))) common = null;
+            return PrSetup.Worktree(ctx, remote, number, common, exclude) is { } w ? (w, null) : (null, "Couldn't plan the worktree.");
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
     private void SetBusy(bool busy, string status)
     {
         _busy = busy;
@@ -979,7 +1069,7 @@ internal sealed class PrSessionWindow : Window
         }
         else if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _launchButton.IsEnabled)
         {
-            _ = RunAsync(copy: false);
+            _ = RunAsync(RunKind.Launch);
             e.Handled = true;
         }
         base.OnKeyDown(e);

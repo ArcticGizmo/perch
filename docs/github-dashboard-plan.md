@@ -310,9 +310,20 @@ launch, so the workspace is a short summary card and each detail opens in place 
   the editable task, and a muted "▸ Full prompt" disclosure whose preview is capped at 220 high.
 - Esc closes an open editor first, then the dialog.
 
-Bottom right: **Copy command** and **Launch in Perch**. Both prepare the folder and resolve the account. Launch then
-asks for folder trust and opens the session window, as before. Copy writes `PrSessionCommand.Build` to the clipboard
-and leaves the dialog open with "Copied. The folder is ready at …". The terminal's `claude` asks for trust itself.
+Bottom right: **Set up & copy** (quiet, only when there's setup to do), **Copy command** and **Launch in Perch**.
+
+- **Copy command changes nothing** (user feedback: making the worktree was a surprise from that name). Perch
+  reads the repo (worktrees, layout, remote, exclude file) and copies a command that does the setup itself, then
+  starts Claude. `PrSetup` (Core, pure, `PrSetupTests`) turns a new worktree, a clone or a scratch folder into
+  steps that match what `PrWorktree`/`PrClone`/`PrScratch.Ensure` run. An existing worktree or the checkout as it
+  is needs none. No folder-trust grant either: the terminal's `claude` asks.
+- **Set up & copy** is the old behaviour: Perch makes the folder now, and the command just starts Claude there.
+- **Launch in Perch** prepares the folder, asks for folder trust, and opens the session window.
+
+With setup steps, the PowerShell form is a `& { … }` block, one step per line, each followed by
+`if (-not $?) { return }`. The POSIX form chains the lines with `&&`. Either way the first failure stops the rest.
+Checked by hand in Windows PowerShell 5.1 against a throwaway repo: worktree made, `git status` clean, folder change
+kept, a failed fetch stops before `claude`. PowerShell 7 and POSIX shells are still unchecked.
 
 - `PrSessionCommand` (Core, pure, `PrSessionCommandTests`) builds the command. On Windows it's PowerShell:
   `Set-Location -LiteralPath '…'; [$env:CLAUDE_CONFIG_DIR = '…';] claude -n '<PR title>' --permission-mode <mode> '<prompt>'`.

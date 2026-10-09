@@ -59,6 +59,54 @@ public class PrSessionCommandTests
         Assert.EndsWith("'" + prompt.Replace("'", "'\\''") + "'", cmd);
     }
 
+    private static readonly PrSetupStep[] Setup =
+    [
+        new PrGitStep(@"C:\src\api", ["fetch", "--no-tags", "origin", "pull/77/head:perch/pr-77"]),
+        new PrAppendLineStep(@"C:\src\api\.git\info\exclude", "/.claude/worktrees/", NewlineFirst: true),
+        new PrMakeDirStep(@"C:\data\x"),
+        new PrGitStep(@"C:\src\api", ["worktree", "add", @"C:\src\api\.claude\worktrees\pr-77", "perch/pr-77"]),
+    ];
+
+    [Fact]
+    public void PowerShellRunsTheSetupInABlockThatStopsAtTheFirstFailure()
+    {
+        var cmd = PrSessionCommand.Build(@"C:\src\api\.claude\worktrees\pr-77", "Fix it.", "acceptEdits", null, "PR #77", CommandShell.PowerShell, Setup);
+        Assert.Equal(
+            "& {\n" +
+            "  git -C 'C:\\src\\api' fetch '--no-tags' origin pull/77/head:perch/pr-77; if (-not $?) { return }\n" +
+            "  Add-Content -LiteralPath 'C:\\src\\api\\.git\\info\\exclude' -Value '','/.claude/worktrees/'; if (-not $?) { return }\n" +
+            "  New-Item -ItemType Directory -Force -Path 'C:\\data\\x' | Out-Null; if (-not $?) { return }\n" +
+            "  git -C 'C:\\src\\api' worktree add 'C:\\src\\api\\.claude\\worktrees\\pr-77' perch/pr-77; if (-not $?) { return }\n" +
+            "  Set-Location -LiteralPath 'C:\\src\\api\\.claude\\worktrees\\pr-77'; claude -n 'PR #77' --permission-mode acceptEdits 'Fix it.'\n" +
+            "}", cmd);
+    }
+
+    [Fact]
+    public void PosixChainsTheSetupWithAnd()
+    {
+        PrSetupStep[] setup =
+        [
+            new PrGitStep("/src/api", ["fetch", "--no-tags", "origin", "pull/77/head:perch/pr-77"]),
+            new PrAppendLineStep("/src/api/.git/info/exclude", "/.worktrees/", NewlineFirst: false),
+            new PrMakeDirStep("/data/x"),
+        ];
+        var cmd = PrSessionCommand.Build("/src/api-pr-77", "Fix it.", "plan", null, "PR #77", CommandShell.Posix, setup);
+        Assert.Equal(
+            "git -C '/src/api' fetch '--no-tags' origin pull/77/head:perch/pr-77 &&\n" +
+            "printf '%s\\n' '/.worktrees/' >> '/src/api/.git/info/exclude' &&\n" +
+            "mkdir -p '/data/x' &&\n" +
+            "cd '/src/api-pr-77' && claude -n 'PR #77' --permission-mode plan 'Fix it.'", cmd);
+    }
+
+    [Fact]
+    public void ACloneKeepsItsDoubleDashForGit()
+    {
+        var clone = new PrGitStep(@"C:\data", ["clone", "--filter=blob:none", "--no-checkout", "--", "https://github.com/acme/api.git", @"C:\data\acme-api-pr-1"]);
+        var cmd = PrSessionCommand.Build(@"C:\data\acme-api-pr-1", "x", "plan", null, "t", CommandShell.PowerShell, [clone]);
+        // A bare -- would be swallowed by PowerShell before git saw it.
+        Assert.Contains("clone '--filter=blob:none' '--no-checkout' '--' https://github.com/acme/api.git 'C:\\data\\acme-api-pr-1'", cmd);
+    }
+
     // Reads back the last single-quoted PowerShell argument: a quote char followed by the same char is a literal one;
     // a lone quote char (straight or curly) ends the string.
     private static string PsUnquoteLast(string cmd)
