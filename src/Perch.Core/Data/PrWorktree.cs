@@ -78,11 +78,15 @@ public static class PrWorktree
         return text + sep + "# Perch: worktrees for pull request sessions\n" + entry + "\n";
     }
 
-    public static PrWorktreeResult Ensure(string checkoutRoot, GitRepoRef repo, int number)
+    /// <summary>Makes (or finds) the PR's worktree. <paramref name="layout"/> overrides the inferred layout, when the
+    /// user picked another in the dialog.</summary>
+    public static PrWorktreeResult Ensure(string checkoutRoot, GitRepoRef repo, int number, WorktreeLayout? layout = null)
     {
         try
         {
-            if (Inspect(checkoutRoot) is not { } ctx || PlanFor(ctx, number) is not { } plan)
+            if (Inspect(checkoutRoot) is not { } inspected) return new(null, false, "That folder isn't a git checkout");
+            var ctx = layout is null ? inspected : inspected with { Layout = layout };
+            if (PlanFor(ctx, number) is not { } plan)
                 return new(null, false, "That folder isn't a git checkout");
             var root = ctx.Set.Root;
 

@@ -1948,18 +1948,21 @@ public partial class App : Application
             w => w.Retarget());
     }
 
-    // "Start session…" on a dashboard PR: the quick-prompt dialog, which prepares the folder (a per-PR worktree by
-    // default), then starts an ordinary Perch-controlled session named after the PR, sends the prompt and opens its
-    // window. See docs/github-dashboard-plan.md (part 3).
+    // "Start session" on a dashboard card: the dialog asks how the PR is checked out (none, or the user's clone with a
+    // new / existing / no worktree) and the prompt, prepares the folder, then starts an ordinary Perch-controlled
+    // session named after the PR, sends the prompt and opens its window — or copies the terminal command instead. See
+    // docs/github-dashboard-plan.md (parts 3 and 5).
     private void OpenPrSession(GhPrItem item)
     {
         var active = ActiveSessionIds();
         var slug = GitRemote.FromPullRequestUrl(item.Pr.Url)?.Slug ?? item.Pr.Repo;
-        string? remembered = null;
+        string? remembered = null, rememberedLayout = null;
         _appSettings?.GitHubRepoCheckouts?.TryGetValue(slug, out remembered);
+        _appSettings?.GitHubRepoWorktreeLayouts?.TryGetValue(slug, out rememberedLayout);
         var w = new PrSessionWindow(item,
             knownFolders: () => SessionHistory.DistinctFolders(SessionHistory.ListAll(active)),
             remembered: remembered,
+            rememberedLayout: rememberedLayout,
             remember: (repo, folder) =>
             {
                 if (_appSettings is not { } s) return;
@@ -1967,6 +1970,16 @@ public partial class App : Application
                 if (map.TryGetValue(repo, out var had) && had == folder) return;
                 map[repo] = folder;
                 s.GitHubRepoCheckouts = map;
+                s.Save();
+            },
+            // A worktree strategy picked for the repo; null = back to the inferred one, so forget it.
+            rememberLayout: (repo, template) =>
+            {
+                if (_appSettings is not { } s) return;
+                var map = s.GitHubRepoWorktreeLayouts ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (template is null ? !map.Remove(repo) : map.TryGetValue(repo, out var had) && had == template) return;
+                if (template is not null) map[repo] = template;
+                s.GitHubRepoWorktreeLayouts = map.Count > 0 ? map : null;
                 s.Save();
             },
             rules: () => _appSettings?.AccountRules,

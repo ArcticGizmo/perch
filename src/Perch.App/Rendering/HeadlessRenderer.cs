@@ -2759,10 +2759,11 @@ internal static class HeadlessRenderer
         }
     }
 
-    // "Start a session" on a dashboard PR: new comments + failing checks with the checkout found (a long path, to
-    // show the name staying while the directory trims); a review request with two checkouts to choose between, two
-    // accounts and the full-prompt preview open; "Something else" (empty task, Start disabled) with no checkout found.
-    // Seeded, so it reads no files and shows no real accounts.
+    // "Start a session" on a dashboard card: new comments + failing checks with the clone found and a new worktree
+    // placed beside it (the strategy picker showing); a review request with two clones found, two accounts and the
+    // full-prompt preview open; your own PR whose branch is already in a worktree (Existing is the default); no clone
+    // found (a fresh clone, empty task so Launch is off); No checkout; and No worktree. Seeded, so it reads no files
+    // and shows no real accounts.
     private static void RenderPrSessionWindow(string outDir)
     {
         var sample = SampleData.GitHubAlerts();
@@ -2788,15 +2789,19 @@ internal static class HeadlessRenderer
             showPreview: true);
         Capture("pr_session_existing_worktree_1x.png", mine, new CheckoutMatch(web, [web]), context: ownBranch);
         Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None, template: "free");
-        // A review of a fork's PR: a separate clone is the default, and Diff only is offered (it's a review).
+        // A review of a fork's PR: its branch name means nothing locally, so the worktree on that name isn't offered
+        // as the PR's own.
         var fork = Item(418) with { Pr = Item(418).Pr with { IsCrossRepository = true, HeadBranch = "patch-1" } };
         Capture("pr_session_fork_review_1x.png", fork, new CheckoutMatch(web, [web]), context: ownBranch);
+        Capture("pr_session_no_checkout_1x.png", Item(418), new CheckoutMatch(web, [web]), context: ownBranch, noCheckout: true);
+        Capture("pr_session_no_worktree_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, worktree: "none");
 
         void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
-            bool showPreview = false, string? template = null, PrWorktreeContext? context = null)
+            bool showPreview = false, string? template = null, PrWorktreeContext? context = null, bool noCheckout = false,
+            string? worktree = null)
         {
-            var w = new PrSessionWindow(item, () => [], null, (_, _) => { }, () => null, _ => null);
-            w.SeedForRender(match, accounts, showPreview, template, context);
+            var w = new PrSessionWindow(item, () => [], null, null, (_, _) => { }, (_, _) => { }, () => null, _ => null);
+            w.SeedForRender(match, accounts, showPreview, template, context, noCheckout, worktree);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

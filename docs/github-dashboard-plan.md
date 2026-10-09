@@ -257,6 +257,74 @@ Decisions made while building W2–W5:
 - **W10, link back (was S5).** A dashboard row shows when a Perch session is running for that PR (matched by its
   folder: worktree, clone, scratch or checkout) and opens it, instead of offering a second launch.
 
+## Part 5: card layout and a simpler start dialog
+
+Asked for 2026-10-09: the dashboard is now a launch centre for GitHub work rather than an alert list, so it gets a
+card layout (after PATHology's panels) and the start dialog gets simpler. Built on `github-dashboard`. Seen in the
+render only; the real app hasn't run it.
+
+### Dashboard (`GitHubAlertsWindow`)
+
+- Wider: 980 × 760 (was 680 × 660). The header has two rows. The first holds the title and status line, with search,
+  Refresh and close on the right. The second holds the tabs on the left and Group by / Sort / Updated / Include
+  dismissed on the right.
+- Each PR is a **card** (theme `Surface`, 1px border, radius 10) on a sunken page (`SurfaceSunken`), with group
+  headers in small caps above each group. On a card:
+  - The meta line ("#77 · frank · assigned") with the age on the right.
+  - The title, up to two lines.
+  - The reason pills.
+  - A footer with the branches on the left (`feature/x → main`, monospace) and the actions **bottom right**: Dismiss
+    (ghost), Open in GitHub (outline) and **Start session** (filled accent).
+  - A 4px strip down the left edge in the headline reason's colour, as the old row rule had.
+
+### Start dialog (`PrSessionWindow`)
+
+First question: **how should it be checked out?** Two tiles:
+
+- **No checkout**: just prompting. Runs in the empty `PrScratch` folder (`PrWorkspace.DiffOnly`). Now offered for
+  every task, not only read-only ones: the scratch folder has nothing to break.
+- **Checkout** (default): a panel with:
+  - **Clone**: the session launcher's folder search (`FolderSearchBox` over the folders sessions ran in, matches
+    first), plus Browse…. A searched or browsed folder is checked to be a checkout of the repo before it's used. When
+    several clones are found, the first is used and the note says so. When none is found, the note says Perch will
+    make a fresh clone (`PrClone`), so Clone stops being a separate choice.
+  - **Worktree**:
+    - **New worktree** (placed by the **strategy** picker: the inferred layout first, labelled with where it came
+      from, then `WorktreeLayout.Presets`; each choice is described by where *this* PR's worktree would land).
+    - **Existing worktree** (a picker over the repo's linked worktrees, preselecting the one on the PR's head branch
+      or `perch/pr-<n>`).
+    - **No worktree** (the checkout as it is; hidden for a bare repo).
+
+    The default is an existing worktree on the PR's branch, else the checkout itself if it's on that branch, else a
+    new worktree.
+
+Then **Prompt**: a quick-prompt dropdown (fitting ones first, with a "Read-only" badge for plan-mode ones) over the
+editable task, with the full-prompt preview as before. Then the account when there's a choice.
+
+Bottom right: **Copy command** and **Launch in Perch**. Both prepare the folder and resolve the account. Launch then
+asks for folder trust and opens the session window, as before. Copy writes `PrSessionCommand.Build` to the clipboard
+and leaves the dialog open with "Copied. The folder is ready at …". The terminal's `claude` asks for trust itself.
+
+- `PrSessionCommand` (Core, pure, `PrSessionCommandTests`) builds the command. On Windows it's PowerShell:
+  `Set-Location -LiteralPath '…'; [$env:CLAUDE_CONFIG_DIR = '…';] claude -n '<PR title>' --permission-mode <mode> '<prompt>'`.
+  Elsewhere it's POSIX `cd '…' && [CLAUDE_CONFIG_DIR='…'] claude …`. Everything is single-quoted, curly quotes are
+  doubled for PowerShell, and the prompt is flattened to one line. Known gap: Windows PowerShell 5.1 strips a `"`
+  that the user typed into the task.
+- A changed strategy is remembered per repo in `AppSettings.GitHubRepoWorktreeLayouts` (owner/repo → template, in
+  `SettingsRegistryTests.NotSettings`). Picking the inferred one again forgets it. `WorktreeLayout.ChoicesFor` puts a
+  saved layout second, after the inferred one. `PrWorktree.Ensure` takes the layout as an optional override
+  (`WorktreeLayoutSource.Chosen`).
+- This replaces Part 4's five-way *Where* list. `PrWorkspace` stays as the prompt's description of the folder: an
+  existing worktree on `perch/pr-<n>` reads as `Worktree`, one on the PR's head as `ExistingWorktree`, anything else
+  as `Checkout`.
+
+### Still owed
+
+- A live run: search/browse commit behaviour, a real worktree fetch with a non-default strategy, Copy command pasted
+  into PowerShell 7 and 5.1, and the dashboard against real GitHub.
+- W6–W10 from Part 4 still apply. W9 (per-repo memory) is partly done: the clone and the strategy are remembered,
+  the template isn't.
+
 ## Testing
 
 - Core (xUnit, `GitHubAlertsTests`): fingerprint stability (each excluded field changing leaves it unchanged,

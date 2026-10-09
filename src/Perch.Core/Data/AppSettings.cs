@@ -619,6 +619,12 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? GitHubRepoCheckouts { get; set; }
 
+    // The worktree layout (a WorktreeLayout template) the user picked for a repository (owner/repo → template) in the
+    // start-a-session dialog, preselected next time over the inferred one. Only written when the pick differs from
+    // what Perch inferred. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? GitHubRepoWorktreeLayouts { get; set; }
+
     // Feeds (Atom; RSS later). The subscriptions, edited on the Feeds settings page; null = none yet. Each
     // carries a stable id that names its cache/read-state files (Perch.Feeds.FeedStore validates it). See
     // docs/feeds-plan.md.

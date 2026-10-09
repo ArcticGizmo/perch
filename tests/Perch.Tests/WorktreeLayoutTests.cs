@@ -107,6 +107,37 @@ public class WorktreeLayoutTests
     }
 
     [Fact]
+    public void ChoicesPutTheInferredLayoutFirstThenTheSavedOneThenThePresets()
+    {
+        var inferred = new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected, 3);
+        var choices = WorktreeLayout.ChoicesFor(inferred, bare: false, saved: "{parent}/wt/{name}");
+        Assert.Same(inferred, choices[0]);
+        Assert.Equal("{parent}/wt/{name}", choices[1].Template);
+        Assert.Equal(WorktreeLayoutSource.Chosen, choices[1].Source);
+        // No duplicates: the inferred template is also a preset.
+        Assert.Equal(choices.Count, choices.Select(c => c.Template).Distinct().Count());
+        Assert.All(WorktreeLayout.Presets, p => Assert.Contains(choices, c => c.Template == p));
+        Assert.DoesNotContain(choices, c => c.Template == "{root}/{name}");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("{parent}/no-name-placeholder")]
+    public void ASavedLayoutWithoutANameIsIgnored(string? saved)
+    {
+        var inferred = new WorktreeLayout(WorktreeLayout.DefaultTemplate, WorktreeLayoutSource.Default);
+        Assert.Equal(WorktreeLayout.Presets.Count, WorktreeLayout.ChoicesFor(inferred, false, saved).Count);
+    }
+
+    [Fact]
+    public void ABareRepoIsOfferedItsOwnLayout()
+    {
+        var inferred = new WorktreeLayout(WorktreeLayout.DefaultTemplate, WorktreeLayoutSource.Default);
+        Assert.Contains(WorktreeLayout.ChoicesFor(inferred, bare: true), c => c.Template == "{root}/{name}");
+    }
+
+    [Fact]
     public void RenderCarriesALayoutToAnotherRepo()
     {
         var l = new WorktreeLayout("{parent}/{repo}-{name}", WorktreeLayoutSource.Detected);

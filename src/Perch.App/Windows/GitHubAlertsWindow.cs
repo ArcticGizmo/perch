@@ -12,26 +12,29 @@ using Perch.Data;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The GitHub dashboard, opened by clicking the overlay's GitHub strip. Your open pull requests, each with the
-/// reasons it needs you ("Review requested", "Changes requested by alice", "Ready to merge" …), an "Open in GitHub"
-/// button and a "Dismiss" that hides it until its state changes. Tabs switch between the PRs needing you (the
-/// default), every open PR that involves you, and the ones you dismissed (each with "Restore"). A toolbar picks the
-/// grouping (repo / reason / role / none), the row order and an "Updated within" age window.
+/// The GitHub dashboard, opened by clicking the overlay's GitHub strip: a launch centre for your open pull requests.
+/// Each PR is a card on a sunken page: its repo, number, author and age, the title, the reasons it needs you
+/// ("Review requested", "Changes requested by alice", "Ready to merge" …) and its branches, with the actions bottom
+/// right: "Dismiss" (hides it until its state changes), "Open in GitHub" and "Start session" (opens
+/// <see cref="PrSessionWindow"/>). Tabs switch between the PRs needing you (the default), every open PR that involves
+/// you, and the ones you dismissed (each with "Restore"). A toolbar picks the grouping (repo / reason / role / none),
+/// the card order and an "Updated within" age window.
 ///
 /// <para>Reused via <c>WindowHost.ShowOrFocus</c> (<see cref="Retarget"/> re-renders). It owns no data: it renders
 /// <see cref="GitHubAlertsMonitorHost.Current"/> and re-renders on the host's <c>Changed</c>. The view options live
 /// on the host (the age window trims the strip too), which persists them through the App. Opening a PR marks it
 /// seen through the host, which reclassifies at once — so a PR that only had new comments drops out of "Needs
-/// you" as you go to read them. Styled off <see cref="TodoWindow"/> so the popups read as one app.</para>
+/// you" as you go to read them.</para>
 /// </summary>
 internal sealed class GitHubAlertsWindow : Window
 {
-    private static readonly IBrush Bg       = Palette.OverlaySurfaceBrush;
-    private static readonly IBrush Stroke   = Palette.BorderBrush;
-    private static readonly IBrush Fg       = Palette.FgBrush;
-    private static readonly IBrush Muted    = Palette.MutedBrush;
-    private static readonly IBrush Accent   = Palette.AccentBrush;
-    private static readonly IBrush RowHover = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
+    private static readonly IBrush Page   = Palette.SurfaceSunkenBrush;   // the window behind the cards
+    private static readonly IBrush CardBg = Palette.FormBgBrush;
+    private static readonly IBrush Stroke = Palette.BorderBrush;
+    private static readonly IBrush Fg     = Palette.FgBrush;
+    private static readonly IBrush Muted  = Palette.MutedBrush;
+    private static readonly IBrush Accent = Palette.AccentBrush;
+    private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, Menlo, monospace");
 
     // The toolbar pickers' choices, index-aligned with their ComboBox items.
     private static readonly (GhGroupBy Value, string Label)[] GroupChoices =
@@ -60,35 +63,43 @@ internal sealed class GitHubAlertsWindow : Window
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 680;
-        Height = 660;
+        Width = 980;
+        Height = 760;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Header (draggable): title + status line, Refresh and close on the right ──
-        var heading = new TextBlock { Text = "GitHub dashboard", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
+        // ── Header (draggable): title + status line on the left; search, Refresh and close on the right ──
+        var heading = new TextBlock { Text = "GitHub dashboard", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 18 };
         _subhead = new TextBlock { Foreground = Muted, FontSize = 12, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
-        _refresh = OutlineButton("Refresh", Fg);
+        _search = new TextBox
+        {
+            PlaceholderText = "Search title, repo, author, #number…", FontSize = 12.5, Width = 300,
+            VerticalContentAlignment = VerticalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        };
+        _search.TextChanged += (_, _) => Refresh();
+        ToolTip.SetTip(_search, "Ctrl+F. Every word must match; Esc clears.");
+        _refresh = OutlineButton("Refresh");
+        _refresh.VerticalAlignment = VerticalAlignment.Center;
         _refresh.Click += (_, _) => _host.RefreshNow();
         var closeGlyph = new Button
         {
             Content = "✕", Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(4, 0), FontSize = 14, Cursor = new Cursor(StandardCursorType.Hand),
-            VerticalAlignment = VerticalAlignment.Top,
+            VerticalAlignment = VerticalAlignment.Center,
         };
         closeGlyph.Click += (_, _) => Close();
         var actions = new StackPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Top,
-            Children = { _refresh, closeGlyph },
+            Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center,
+            Children = { _search, _refresh, closeGlyph },
         };
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(20, 16, 18, 12) };
-        var titles = new StackPanel { Children = { heading, _subhead } };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(24, 18, 18, 14) };
+        var titles = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { heading, _subhead } };
         Grid.SetColumn(actions, 1);
         header.Children.Add(titles);
         header.Children.Add(actions);
 
-        // ── Filter: Needs you | All open | Dismissed, and a search box filling the rest of the row ──
+        // ── Tabs on the left: Needs you | All open | Dismissed ──
         _needsYouTab = TabButton();
         _allTab = TabButton();
         _dismissedTab = TabButton();
@@ -101,19 +112,8 @@ internal sealed class GitHubAlertsWindow : Window
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
             Children = { _needsYouTab, _allTab, _dismissedTab },
         };
-        _search = new TextBox
-        {
-            PlaceholderText = "Search title, repo, author, #number…", FontSize = 12.5,
-            Margin = new Thickness(12, 0, 0, 0), VerticalContentAlignment = VerticalAlignment.Center,
-        };
-        _search.TextChanged += (_, _) => Refresh();
-        ToolTip.SetTip(_search, "Ctrl+F. Every word must match; Esc clears.");
-        var filterRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(18, 0, 18, 12) };
-        Grid.SetColumn(_search, 1);
-        filterRow.Children.Add(tabs);
-        filterRow.Children.Add(_search);
 
-        // ── View: Group by · Sort · Updated within (persisted through the host) ──
+        // ── View on the right: Group by · Sort · Updated within (persisted through the host) ──
         _groupBox = Picker(GroupChoices.Select(c => c.Label));
         _sortBox = Picker(SortChoices.Select(c => c.Label));
         _ageBox = Picker(GhListOptions.AgeChoices.Select(AgeLabel));
@@ -127,9 +127,9 @@ internal sealed class GitHubAlertsWindow : Window
         _includeDismissedToggle.VerticalAlignment = VerticalAlignment.Center;
         _includeDismissedToggle.Click += (_, _) => SetIncludeDismissed(!_includeDismissed);
         ToolTip.SetTip(_includeDismissedToggle, "Show dismissed PRs in Needs you and All open too, to find one you hid.");
-        var viewRow = new StackPanel
+        var view = new StackPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(18, 0, 18, 12),
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
                 PickerLabel("Group by"), _groupBox,
@@ -138,11 +138,16 @@ internal sealed class GitHubAlertsWindow : Window
                 _includeDismissedToggle,
             },
         };
+        var toolbar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(22, 0, 22, 14) };
+        Grid.SetColumn(view, 1);
+        view.HorizontalAlignment = HorizontalAlignment.Right;
+        toolbar.Children.Add(tabs);
+        toolbar.Children.Add(view);
 
         var headerBorder = new Border
         {
-            Background = Bg, BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = new StackPanel { Children = { header, filterRow, viewRow } },
+            Background = Page, BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = new StackPanel { Children = { header, toolbar } },
         };
         // The Border has a Background, so its empty space is hit-testable and the whole band drags the window.
         headerBorder.PointerPressed += (_, e) =>
@@ -153,10 +158,11 @@ internal sealed class GitHubAlertsWindow : Window
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
         };
 
+        _list.Margin = new Thickness(22, 4, 22, 18);
         var scroller = new ScrollViewer
         {
             Content = _list, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0, 0, 0, 10),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
         var root = new DockPanel();
@@ -166,7 +172,7 @@ internal sealed class GitHubAlertsWindow : Window
 
         Content = new Border
         {
-            Background = Bg, CornerRadius = new CornerRadius(12), BorderBrush = Stroke, BorderThickness = new Thickness(1.5),
+            Background = Page, CornerRadius = new CornerRadius(12), BorderBrush = Stroke, BorderThickness = new Thickness(1.5),
             Child = root, ClipToBounds = true,
         };
 
@@ -284,17 +290,17 @@ internal sealed class GitHubAlertsWindow : Window
 
         foreach (var (title, items) in groups)
         {
-            // GroupBy.None is one untitled group: no header, the rows start at the top.
+            // GroupBy.None is one untitled group: no header, the cards start at the top.
             if (title.Length > 0)
                 _list.Children.Add(new TextBlock
                 {
-                    FontSize = 10.5, FontWeight = FontWeight.SemiBold, Foreground = Muted, LetterSpacing = 0.6,
-                    Margin = new Thickness(20, 14, 20, 6), TextTrimming = TextTrimming.CharacterEllipsis,
+                    FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Muted, LetterSpacing = 1.2,
+                    Margin = new Thickness(2, 16, 2, 8), TextTrimming = TextTrimming.CharacterEllipsis,
                     Text = $"{title.ToUpperInvariant()}   {items.Count}",
                 });
             else
-                _list.Children.Add(new Border { Height = 8 });
-            foreach (var item in items) _list.Children.Add(BuildRow(item, now, options.GroupBy));
+                _list.Children.Add(new Border { Height = 14 });
+            foreach (var item in items) _list.Children.Add(BuildCard(item, now, options.GroupBy));
         }
         if (hiddenDismissed > 0) _list.Children.Add(IncludeDismissedHint(hiddenDismissed));
         if (ageNote is not null) _list.Children.Add(FootText(ageNote));
@@ -314,7 +320,7 @@ internal sealed class GitHubAlertsWindow : Window
             Content = $"{(n == 1 ? "1 dismissed PR also matches" : $"{n} dismissed PRs also match")} · Include them",
             Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
-            Margin = new Thickness(20, 12, 20, 4), HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(2, 12, 2, 4), HorizontalAlignment = HorizontalAlignment.Left,
         };
         link.Click += (_, _) => SetIncludeDismissed(true);
         return link;
@@ -340,40 +346,53 @@ internal sealed class GitHubAlertsWindow : Window
         return string.Join(" · ", parts);
     }
 
-    private Control BuildRow(GhPrItem item, DateTime now, GhGroupBy groupBy)
+    // One PR as a card: "#77 · frank · review" over the title (age on the right), the reason pills, then the branches
+    // on the left of the footer and the actions on its right. A strip down the left edge carries the headline reason's
+    // colour, so the page scans by urgency.
+    private Control BuildCard(GhPrItem item, DateTime now, GhGroupBy groupBy)
     {
         var pr = item.Pr;
-
-        var title = new TextBlock
-        {
-            Text = pr.Title.Length > 0 ? pr.Title : "(untitled)", FontSize = 13, FontWeight = FontWeight.SemiBold,
-            Foreground = item.NeedsYou && !item.Dismissed ? Fg : Muted, TextTrimming = TextTrimming.CharacterEllipsis,
-        };
+        bool live = item.NeedsYou && !item.Dismissed;
 
         // "#77 · yours" for your own PR; "#80 · frank · assigned" for someone else's. When the groups aren't repos,
-        // the repo leads the line instead ("acme/api#77 · yours").
-        var meta = new List<string> { groupBy == GhGroupBy.Repo ? $"#{pr.Number}" : $"{pr.Repo}#{pr.Number}" };
+        // the repo leads the line instead ("acme/api #77 · yours").
+        var meta = new List<string> { groupBy == GhGroupBy.Repo ? $"#{pr.Number}" : $"{pr.Repo} #{pr.Number}" };
         bool yours = pr.Relation.HasFlag(GhPrRelation.Author);
         if (!yours && pr.Author.Length > 0) meta.Add(pr.Author);
         meta.Add(Role(pr.Relation));
         if (pr.IsDraft) meta.Add("draft");
         if (item.Dismissed && _view != GhView.Dismissed) meta.Add("dismissed");   // shown via "Include dismissed"
-        if (pr.UpdatedUtc > DateTime.MinValue) meta.Add($"updated {RelativeTime.Ago(now, pr.UpdatedUtc)}");
         var metaText = new TextBlock
         {
-            Text = string.Join(" · ", meta.Where(m => m.Length > 0)), FontSize = 11.5, Foreground = Muted,
-            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+            Text = string.Join(" · ", meta.Where(m => m.Length > 0)), FontSize = 12, Foreground = Muted,
+            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var age = new TextBlock
+        {
+            Text = pr.UpdatedUtc > DateTime.MinValue ? $"updated {RelativeTime.Ago(now, pr.UpdatedUtc)}" : "",
+            FontSize = 12, Foreground = Muted, Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+        };
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(age, 1);
+        top.Children.Add(metaText);
+        top.Children.Add(age);
+
+        var title = new TextBlock
+        {
+            Text = pr.Title.Length > 0 ? pr.Title : "(untitled)", FontSize = 14.5, FontWeight = FontWeight.SemiBold,
+            Foreground = live ? Fg : Muted, TextWrapping = TextWrapping.Wrap, MaxLines = 2,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 4, 0, 0),
         };
 
-        var body = new StackPanel { Children = { title, metaText } };
+        var body = new StackPanel { Children = { top, title } };
         if (item.Reasons.Count > 0)
         {
-            var pills = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+            var pills = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
             foreach (var r in item.Reasons) pills.Children.Add(ReasonPill(r));
             body.Children.Add(pills);
         }
 
-        var open = OutlineButton("Open in GitHub", Fg);
+        var open = OutlineButton("Open in GitHub");
         ToolTip.SetTip(open, pr.Url);
         open.Click += (_, _) =>
         {
@@ -395,35 +414,58 @@ internal sealed class GitHubAlertsWindow : Window
 
         var actions = new StackPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 0, 0), Children = { dismiss },
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0), Children = { dismiss, open },
         };
         if (StartSessionRequested is { } startSession)
         {
-            var start = GhostButton("Start session…");
-            start.Foreground = Accent;
-            ToolTip.SetTip(start, "Start a background Claude session on this PR with a quick prompt");
+            var start = PrimaryButton("Start session");
+            ToolTip.SetTip(start, "Start a Claude session on this PR: pick how it's checked out and what to ask");
             start.Click += (_, _) => startSession(item);
             actions.Children.Add(start);
         }
-        actions.Children.Add(open);
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        Grid.SetColumn(actions, 1);
-        grid.Children.Add(body);
-        grid.Children.Add(actions);
-
-        // The left rule carries the headline reason's colour, so the list scans by urgency.
-        var rule = item.NeedsYou && !item.Dismissed ? new SolidColorBrush(KindColor(item.Reasons[0].Kind)) : (IBrush)Brushes.Transparent;
-        var row = new Border
+        // The branches, "feature/checkout-form → main", when the poll knows them. Branch names are the author's, but
+        // this is display only.
+        var branches = new TextBlock
         {
-            Child = grid, Padding = new Thickness(18, 9, 18, 9), Margin = new Thickness(0, 0, 0, 1),
-            BorderThickness = new Thickness(2, 0, 0, 0), BorderBrush = rule, Background = Brushes.Transparent,
+            Text = Branches(pr),
+            FontFamily = Mono, FontSize = 11.5, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        row.PointerEntered += (_, _) => row.Background = RowHover;
-        row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
-        return row;
+        if (pr.HeadBranch.Length > 0) ToolTip.SetTip(branches, pr.IsCrossRepository && pr.HeadRepo.Length > 0
+            ? $"From {pr.HeadRepo}:{pr.HeadBranch} into {pr.BaseBranch}" : $"{pr.HeadBranch} into {pr.BaseBranch}");
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 12, 0, 0) };
+        Grid.SetColumn(actions, 1);
+        footer.Children.Add(branches);
+        footer.Children.Add(actions);
+        body.Children.Add(footer);
+
+        var strip = new Border
+        {
+            Width = 4,
+            Background = live ? new SolidColorBrush(KindColor(item.Reasons[0].Kind)) : Brushes.Transparent,
+        };
+        body.Margin = new Thickness(16, 14, 16, 14);
+        var layout = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(strip, Dock.Left);
+        layout.Children.Add(strip);
+        layout.Children.Add(body);
+
+        var hover = new SolidColorBrush(Palette.Blend(Palette.Border, Palette.Muted, 0.45f));
+        var card = new Border
+        {
+            Child = layout, Background = CardBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10), ClipToBounds = true, Margin = new Thickness(0, 0, 0, 10),
+        };
+        card.PointerEntered += (_, _) => card.BorderBrush = hover;
+        card.PointerExited += (_, _) => card.BorderBrush = Stroke;
+        return card;
     }
+
+    /// <summary>"feature/x → main", "feature/x" without a base, or "" when the poll didn't name the branches.</summary>
+    internal static string Branches(GhPullRequest pr) =>
+        pr.HeadBranch.Length == 0 ? "" : pr.BaseBranch.Length > 0 ? $"{pr.HeadBranch} → {pr.BaseBranch}" : pr.HeadBranch;
 
     // How you relate to the PR, for the meta line — "yours" wins over the others.
     private static string Role(GhPrRelation r) =>
@@ -448,13 +490,13 @@ internal sealed class GitHubAlertsWindow : Window
 
     private static TextBlock EmptyText(string text) => new()
     {
-        Text = text, Foreground = Muted, FontSize = 12.5, Margin = new Thickness(20, 18), TextWrapping = TextWrapping.Wrap,
+        Text = text, Foreground = Muted, FontSize = 12.5, Margin = new Thickness(2, 22, 2, 4), TextWrapping = TextWrapping.Wrap,
     };
 
     private static TextBlock FootText(string text) => new()
     {
         Text = text, Foreground = Muted, FontSize = 11.5, FontStyle = FontStyle.Italic,
-        Margin = new Thickness(20, 12, 20, 4), TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(2, 8, 2, 4), TextWrapping = TextWrapping.Wrap,
     };
 
     private static ComboBox Picker(IEnumerable<string> labels)
@@ -470,7 +512,7 @@ internal sealed class GitHubAlertsWindow : Window
         Margin = new Thickness(leftGap, 0, 0, 0),
     };
 
-    // A quieter, borderless button for the secondary row action, so "Open in GitHub" stays the obvious one.
+    // A quieter, borderless button for Dismiss / Restore, so the card's other actions stay the obvious ones.
     private static Button GhostButton(string text) => new()
     {
         Content = text, Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
@@ -492,10 +534,18 @@ internal sealed class GitHubAlertsWindow : Window
         b.BorderBrush = on ? Accent : Stroke;
     }
 
-    private static Button OutlineButton(string text, IBrush fg) => new()
+    private static Button OutlineButton(string text) => new()
     {
-        Content = text, Foreground = fg, Background = Brushes.Transparent, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+        Content = text, Foreground = Fg, Background = Brushes.Transparent, BorderBrush = Stroke, BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(7), Padding = new Thickness(12, 5), FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
+    };
+
+    // The card's call to action, filled with the accent.
+    private static Button PrimaryButton(string text) => new()
+    {
+        Content = text, Foreground = Palette.OnAccentBrush, Background = Accent, BorderThickness = new Thickness(0),
+        CornerRadius = new CornerRadius(7), Padding = new Thickness(14, 6), FontSize = 12, FontWeight = FontWeight.SemiBold,
+        Cursor = new Cursor(StandardCursorType.Hand),
     };
 
     protected override void OnKeyDown(KeyEventArgs e)

@@ -1,8 +1,8 @@
 namespace Perch.Data;
 
-/// <summary>Where an inferred <see cref="WorktreeLayout"/> came from: the user's existing worktrees, a hint in an
-/// ignore file, or Perch's default (Claude Code's own <c>.claude/worktrees</c>).</summary>
-public enum WorktreeLayoutSource { Detected, IgnoreHint, Default }
+/// <summary>Where a <see cref="WorktreeLayout"/> came from: the user's existing worktrees, a hint in an ignore file,
+/// Perch's default (Claude Code's own <c>.claude/worktrees</c>), or the user's pick in the start-session dialog.</summary>
+public enum WorktreeLayoutSource { Detected, IgnoreHint, Default, Chosen }
 
 /// <summary>
 /// How a user lays out a repo's worktrees, as a path template over <c>{root}</c> (where git runs for the repo),
@@ -14,6 +14,35 @@ public sealed record WorktreeLayout(string Template, WorktreeLayoutSource Source
 {
     /// <summary>Claude Code's own layout (<c>claude --worktree</c>), the fallback when nothing else is known.</summary>
     public const string DefaultTemplate = "{root}/.claude/worktrees/{name}";
+
+    /// <summary>The common layouts, offered when the user changes where a PR's worktree goes.</summary>
+    public static readonly IReadOnlyList<string> Presets =
+    [
+        "{parent}/{repo}-{name}",
+        "{parent}/{repo}.worktrees/{name}",
+        "{root}/.worktrees/{name}",
+        DefaultTemplate,
+    ];
+
+    /// <summary>
+    /// The layouts to offer for a repo, without duplicates: the <paramref name="inferred"/> one first, then a layout
+    /// the user <paramref name="saved"/> for the repo earlier (when it's something else), then the
+    /// <see cref="Presets"/>. A bare repo also gets its own "beside <c>.bare</c>" layout. Pure.
+    /// </summary>
+    public static IReadOnlyList<WorktreeLayout> ChoicesFor(WorktreeLayout inferred, bool bare, string? saved = null)
+    {
+        var list = new List<WorktreeLayout> { inferred };
+        void Add(string? template, WorktreeLayoutSource source)
+        {
+            if (template is { Length: > 0 } && template.Contains("{name}", StringComparison.Ordinal)
+                && !list.Any(l => l.Template == template))
+                list.Add(new WorktreeLayout(template, source));
+        }
+        Add(saved, WorktreeLayoutSource.Chosen);
+        if (bare) Add("{root}/{name}", WorktreeLayoutSource.Chosen);
+        foreach (var p in Presets) Add(p, WorktreeLayoutSource.Chosen);
+        return list;
+    }
 
     /// <summary>Whether worktrees land inside the repo's own folder — and so need ignoring there, or git shows them
     /// as untracked. False for the bare layout, whose root isn't a working tree.</summary>

@@ -39,6 +39,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.GitHubDashboardMaxAgeDays),
         // Where each repo is checked out, remembered from the start-a-session-from-a-PR dialog.
         nameof(AppSettings.GitHubRepoCheckouts),
+        // The worktree layout picked per repo in that dialog.
+        nameof(AppSettings.GitHubRepoWorktreeLayouts),
         // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.
         nameof(AppSettings.SessionZoom),
         nameof(AppSettings.RoostZoom),
