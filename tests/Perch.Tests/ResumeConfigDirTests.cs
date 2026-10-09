@@ -14,9 +14,12 @@ public sealed class ResumeConfigDirTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("perch-resume-dir-").FullName;
     private const string Cwd = @"C:\proj\app";
 
+    public ResumeConfigDirTests() => SessionAccounts.ResetForTesting();
+
     public void Dispose()
     {
         ClaudeConfigSet.ResetForTesting();
+        SessionAccounts.ResetForTesting();
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
@@ -24,7 +27,22 @@ public sealed class ResumeConfigDirTests : IDisposable
     {
         var root = Path.Combine(_root, name);
         Directory.CreateDirectory(Path.Combine(root, "projects"));
+        Directory.CreateDirectory(Path.Combine(root, "sessions"));
         return new ClaudeConfigDir(root);
+    }
+
+    // `work/projects` junctioned onto `primary/projects` (sessions/ stays per dir): the transcript is found under the
+    // primary whichever account wrote it. Junctions need elevation, so the link resolver fakes one.
+    private static void ShareProjects(ClaudeConfigDir primary, ClaudeConfigDir work) =>
+        ClaudeConfigSet.SetLinkResolverForTesting(p =>
+            ClaudeConfigDir.PathComparer.Equals(p, work.ProjectsDir) ? primary.ProjectsDir : p);
+
+    private static void WriteMarker(ClaudeConfigDir inDir, string sessionId, string root) =>
+        File.WriteAllText(Path.Combine(inDir.SessionsDir, sessionId + ".configdir"), root);
+
+    private sealed class AlwaysAlive : Perch.Platform.IProcessProbe
+    {
+        public bool IsAlive(int pid) => true;
     }
 
     private static string SeedTranscript(ClaudeConfigDir dir, string sessionId, string? projectFolder = null)
@@ -68,6 +86,119 @@ public sealed class ResumeConfigDirTests : IDisposable
         ClaudeConfigSet.SetForTesting(new[] { primary, work });
 
         Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-moved", Cwd));
+    }
+
+    [Fact]
+    public void Shared_projects_resumes_under_the_dir_the_live_session_reported()
+    {
+        // The hook writes the marker to the sessions/ of the dir the session ran under, not the transcript owner's.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-live");
+        WriteMarker(work, "s-live", work.Root);
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-live", Cwd));
+        Assert.Equal("marker", TranscriptLocator.ResumeDir("s-live", Cwd).Source);
+    }
+
+    [Fact]
+    public void Shared_projects_without_a_record_falls_back_to_the_owner()
+    {
+        // What every ended session looked like before SessionAccounts: the hook's SessionEnd cleanup (which /clear
+        // also fires for the old id) deleted the marker, so only the transcript's owner was left.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-ended");
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-ended", Cwd));
+        Assert.Equal("transcript owner", TranscriptLocator.ResumeDir("s-ended", Cwd).Source);
+    }
+
+    [Fact]
+    public void Shared_projects_resumes_under_the_remembered_account_after_the_marker_is_gone()
+    {
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-cleared");
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+        SessionAccounts.Remember("s-cleared", work.Root);
+
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-cleared", Cwd));
+        Assert.Equal("remembered", TranscriptLocator.ResumeDir("s-cleared", Cwd).Source);
+    }
+
+    [Fact]
+    public void The_remembered_account_wins_over_a_marker()
+    {
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-both");
+        WriteMarker(primary, "s-both", primary.Root);
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+        SessionAccounts.Remember("s-both", work.Root);
+
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-both", Cwd));
+    }
+
+    [Fact]
+    public void A_remembered_primary_inherits()
+    {
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-home2");
+        WriteMarker(work, "s-home2", work.Root);   // stale: the session last ran under the primary
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+        SessionAccounts.Remember("s-home2", null);
+
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-home2", Cwd));
+    }
+
+    [Fact]
+    public void A_dir_that_cant_see_the_transcript_is_never_chosen()
+    {
+        // projects/ NOT shared: the transcript only exists under the primary, so `claude --resume` under `work` would
+        // find nothing, whatever the record or the marker says.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        SeedTranscript(primary, "s-unshared");
+        WriteMarker(primary, "s-unshared", work.Root);
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-unshared", Cwd));
+
+        SessionAccounts.Remember("s-unshared", work.Root);
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-unshared", Cwd));
+    }
+
+    [Fact]
+    public void A_scan_remembers_the_account_so_a_resume_after_the_session_ends_finds_it()
+    {
+        // End to end: the monitor sees the session live under `work`; then it ends (the hook deletes its marker) and is
+        // resumed. The record the scan left is what picks the account.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        SeedTranscript(primary, "s-scanned");
+        File.WriteAllText(Path.Combine(work.SessionsDir, "4242.json"), $$"""
+            { "pid": 4242, "sessionId": "s-scanned", "status": "idle",
+              "cwd": {{System.Text.Json.JsonSerializer.Serialize(Cwd)}},
+              "updatedAt": {{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}} }
+            """);
+        WriteMarker(work, "s-scanned", work.Root);
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+
+        using (var monitor = new SessionMonitor(new AlwaysAlive()))
+            Assert.Contains(monitor.Scan(), s => s.SessionId == "s-scanned");
+
+        File.Delete(Path.Combine(work.SessionsDir, "4242.json"));
+        File.Delete(Path.Combine(work.SessionsDir, "s-scanned.configdir"));
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-scanned", Cwd));
     }
 
     [Fact]

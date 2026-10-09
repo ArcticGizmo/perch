@@ -71,6 +71,11 @@ public partial class App
             // What the previous run held is what comes back — read before this run's own sessions are tracked in.
             var holding = _heldSessions.Keys.Select(s => s.SessionId).OfType<string>().ToHashSet();
             _parked = ledger.Sessions.Where(s => !holding.Contains(s.SessionId)).ToList();
+            // A session parked before Perch kept SessionAccounts still resumes under the account it ran under. Only a
+            // pinned dir counts: a null may be one an earlier resume wrongly inherited.
+            foreach (var s in _parked)
+                if (s.ConfigDir is { Length: > 0 } dir && SessionAccounts.Recall(s.SessionId) is null)
+                    SessionAccounts.Remember(s.SessionId, dir);
             foreach (var s in _heldSessions.Keys.ToList()) TrackHeld(s);   // started before the ledger was ready
             OnParkedChanged();
             // The toast waits for the Recent build, so it can also count the sessions a restart interrupted.

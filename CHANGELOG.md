@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.19] - 2026-10-09
+
+- Resumed sessions reopen under the account they ran under
+- Add config directory dialog has Save and Cancel buttons (they existed all along, just never invited)
+
+---
+
 ## [v0.5.18] - 2026-10-09
 
 - Typing `/` no longer makes your draft vanish (it was shy)
