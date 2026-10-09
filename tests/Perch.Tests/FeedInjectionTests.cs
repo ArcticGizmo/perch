@@ -669,7 +669,7 @@ public class FeedInjectionTests
     }
 
     [Fact]
-    public void Discovery_drops_private_feeds_offered_by_a_public_page()
+    public async Task Discovery_drops_private_feeds_offered_by_a_public_page()
     {
         var page = new RouteHandler().On("https://public.example/", _ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -680,7 +680,7 @@ public class FeedInjectionTests
                 "</head><body></body></html>", Encoding.UTF8, "text/html"),
         });
         using var f = new FeedFetcher(page, page, FeedTestSupport.Resolver(new() { ["router.example"] = ["10.0.0.1"] }));
-        var r = f.FetchFeedAsync(new Uri("https://public.example/"), null, null, Now, default).GetAwaiter().GetResult();
+        var r = await f.FetchFeedAsync(new Uri("https://public.example/"), null, null, Now, default);
         Assert.Equal(FeedFetchStatus.Error, r.Status);
         Assert.Equal(["https://public.example/feed"], r.Discovered!.Select(c => c.Url.AbsoluteUri));
     }

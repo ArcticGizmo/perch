@@ -60,6 +60,9 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   (`.github/workflows/release.yml`) — see `README.md`. Bump `<Version>` in
   `src/Perch.App/Perch.App.csproj`.
 
+**Warnings are errors.** `Directory.Build.props` at the root sets `TreatWarningsAsErrors` for every project
+(app, Core, platforms, hook, CLI shim, tools, tests), so fix a new warning rather than suppressing it.
+
 `Perch.Core` and `Perch.Platform.Mac` target plain `net10.0`; `Perch.Platform.Windows` targets
 `net10.0-windows`; the app head multi-targets `net10.0-windows10.0.19041.0` (real Action Center toasts via
 the UWP shim) **and** plain `net10.0` (the macOS/Linux head). `PlatformServices` picks the implementation

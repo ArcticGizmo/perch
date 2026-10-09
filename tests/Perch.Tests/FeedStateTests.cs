@@ -240,8 +240,8 @@ public class FeedStateTests
         store.SaveCache(id, new FeedCacheEntry());
         Assert.Null(store.LoadCache(id));
         Assert.Null(store.SaveIcon(id, Png()));
-        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(root)!, "*.json", SearchOption.TopDirectoryOnly)
-            .Where(f => Path.GetFileName(f) == "x.json"));
+        Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(root)!, "*.json", SearchOption.TopDirectoryOnly),
+            f => Path.GetFileName(f) == "x.json");
     }
 
     [Fact]
