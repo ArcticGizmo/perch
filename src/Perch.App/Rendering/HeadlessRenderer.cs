@@ -2794,14 +2794,18 @@ internal static class HeadlessRenderer
         var fork = Item(418) with { Pr = Item(418).Pr with { IsCrossRepository = true, HeadBranch = "patch-1" } };
         Capture("pr_session_fork_review_1x.png", fork, new CheckoutMatch(web, [web]), context: ownBranch);
         Capture("pr_session_no_checkout_1x.png", Item(418), new CheckoutMatch(web, [web]), context: ownBranch, noCheckout: true);
+        // No worktree on a checkout that's on main: the warning shows with the row collapsed.
         Capture("pr_session_no_worktree_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, worktree: "none");
+        // The editors opened in place: the worktree's New | Existing | None with its Location, and the clone search.
+        Capture("pr_session_worktree_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editWorktree: true);
+        Capture("pr_session_clone_open_1x.png", Item(77), new CheckoutMatch(api, [api]), context: siblings, editClone: true);
 
         void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
             bool showPreview = false, string? template = null, PrWorktreeContext? context = null, bool noCheckout = false,
-            string? worktree = null)
+            string? worktree = null, bool editWorktree = false, bool editClone = false)
         {
             var w = new PrSessionWindow(item, () => [], null, null, (_, _) => { }, (_, _) => { }, () => null, _ => null);
-            w.SeedForRender(match, accounts, showPreview, template, context, noCheckout, worktree);
+            w.SeedForRender(match, accounts, showPreview, template, context, noCheckout, worktree, editWorktree, editClone);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

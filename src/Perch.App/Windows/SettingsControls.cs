@@ -153,7 +153,7 @@ internal static class SettingsUi
     }
 
     // One segment's resting vs selected look: the selected half fills with the accent (bold, on-accent text).
-    private static void StyleSegment(Button btn, bool selected)
+    internal static void StyleSegment(Button btn, bool selected)
     {
         btn.Background = selected ? Palette.AccentBrush : Brushes.Transparent;
         btn.Foreground = selected ? Palette.OnAccentBrush : Palette.FgBrush;

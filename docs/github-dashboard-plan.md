@@ -283,27 +283,32 @@ render only; the real app hasn't run it.
 
 ### Start dialog (`PrSessionWindow`)
 
-First question: **how should it be checked out?** Two tiles:
+Layout A of `docs/pr-session-dialog-layouts.md` (the user's pick after the first version read as too dense; mock-ups
+in the "Start-a-session dialog: layout proposals" doc). 820 wide. The usual case is one decision, confirm and
+launch, so the workspace is a short summary card and each detail opens in place on request:
 
-- **No checkout**: just prompting. Runs in the empty `PrScratch` folder (`PrWorkspace.DiffOnly`). Now offered for
-  every task, not only read-only ones: the scratch folder has nothing to break.
-- **Checkout** (default): a panel with:
-  - **Clone**: the session launcher's folder search (`FolderSearchBox` over the folders sessions ran in, matches
-    first), plus Browse…. A searched or browsed folder is checked to be a checkout of the repo before it's used. When
-    several clones are found, the first is used and the note says so. When none is found, the note says Perch will
-    make a fresh clone (`PrClone`), so Clone stops being a separate choice.
-  - **Worktree**:
-    - **New worktree** (placed by the **strategy** picker: the inferred layout first, labelled with where it came
-      from, then `WorktreeLayout.Presets`; each choice is described by where *this* PR's worktree would land).
-    - **Existing worktree** (a picker over the repo's linked worktrees, preselecting the one on the PR's head branch
-      or `perch/pr-<n>`).
-    - **No worktree** (the checkout as it is; hidden for a bare repo).
-
-    The default is an existing worktree on the PR's branch, else the checkout itself if it's on that branch, else a
-    new worktree.
-
-Then **Prompt**: a quick-prompt dropdown (fitting ones first, with a "Read-only" badge for plan-mode ones) over the
-editable task, with the full-prompt preview as before. Then the account when there's a choice.
+- **Header**: the PR title is the strongest text, under a small-caps START A SESSION; then repo #n, then the
+  branches and reason pills on one line.
+- **WORKSPACE** heading with a `Checkout | No checkout` segmented toggle (`SegmentedPicker`), Checkout first.
+  - **No checkout**: just prompting, in the empty `PrScratch` folder (`PrWorkspace.DiffOnly`); the card shrinks to
+    one line. Offered for every task: the scratch folder has nothing to break.
+  - **Checkout** (default): a card of rows on one label column:
+    - **Clone**: the folder name pinned, its directory elided from the front (the path rule). *Change* swaps in the
+      session launcher's folder search (`FolderSearchBox`, matches first) with Browse… and Done. A searched or
+      browsed folder is checked to be a checkout of the repo before it's used. With several clones found, the first
+      is used and a "1 of 2" chip opens the search. With none, the row reads "None found. Perch will make a fresh
+      clone on perch/pr-n" (`PrClone`) and *Find…* opens the search.
+    - **Worktree**: one line for what the session gets ("New · .claude\worktrees\pr-12 · on perch/pr-12",
+      "Existing · …", "Your checkout · on main"). *Change* opens `New | Existing | None` and one row for that
+      choice: **Location** (the strategy: the inferred layout, then `WorktreeLayout.Presets`, each shown as where
+      this PR's worktree lands plus where the layout came from) or the existing worktree to use. Existing is greyed
+      when the repo has none; None is hidden for a bare repo. The default is an existing worktree on the PR's
+      branch, else the checkout itself if it's on that branch, else a new worktree.
+    - A **warning line**, shown collapsed too, when the choice edits a working copy that isn't on the PR's branch.
+    - **Account**, when there's a choice: beside the folder that decides it.
+- **PROMPT** heading with the quick-prompt picker beside it (fitting ones first; "Read-only" badge for plan mode),
+  the editable task, and a muted "▸ Full prompt" disclosure whose preview is capped at 220 high.
+- Esc closes an open editor first, then the dialog.
 
 Bottom right: **Copy command** and **Launch in Perch**. Both prepare the folder and resolve the account. Launch then
 asks for folder trust and opens the session window, as before. Copy writes `PrSessionCommand.Build` to the clipboard

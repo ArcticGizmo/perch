@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -20,21 +21,24 @@ namespace Perch.Avalonia.Windows;
 internal sealed record PrSessionLaunch(string Cwd, string Prompt, string PermissionMode, string? ConfigDir, string Title);
 
 /// <summary>
-/// "Start session" on a GitHub dashboard card (part 5 of docs/github-dashboard-plan.md). One question first: <b>how
-/// should the PR be checked out?</b>
+/// "Start session" on a GitHub dashboard card: layout A of docs/pr-session-dialog-layouts.md (part 5 of
+/// docs/github-dashboard-plan.md). The usual case is one decision, confirm and launch, so the workspace reads as a
+/// short summary card and the details open only on request:
 /// <list type="bullet">
-/// <item><b>No checkout</b>: just prompting. The session runs in an empty Perch scratch folder and reads the PR
-/// through <c>gh</c>.</item>
-/// <item><b>Checkout</b> (the default): the user's clone of the repo, found among the folders Claude sessions have run
-/// in (or the one remembered for the repo) and changeable with the same folder search the session launcher uses.
-/// Then the worktree: a <b>new worktree</b> placed by the repo's worktree strategy (inferred from the user's own
-/// worktrees, changeable, remembered per repo), an <b>existing worktree</b> of the repo, or <b>no worktree</b> (the
-/// checkout as it is). With no clone found, Perch makes a fresh one in its data folder.</item>
+/// <item><b>Workspace</b>: a <c>Checkout | No checkout</c> toggle. No checkout is just prompting, in an empty Perch
+/// scratch folder.</item>
+/// <item><b>Clone</b>: the folder name pinned, its directory elided from the front. <i>Change</i> opens the session
+/// launcher's folder search (<see cref="FolderSearchBox"/>) and Browse in place. With several clones found a
+/// "1 of 2" chip says so; with none, Perch will make a fresh clone.</item>
+/// <item><b>Worktree</b>: what the session gets ("New · .claude\worktrees\pr-12 · on perch/pr-12"). <i>Change</i>
+/// opens <c>New | Existing | None</c> and one row for that choice: the worktree <b>Location</b> (the strategy,
+/// inferred from the user's own worktrees, remembered per repo when changed) or the existing worktree to use. A
+/// choice that edits a working copy off the PR's branch carries a warning line even while collapsed.</item>
+/// <item><b>Account</b>, when there's a choice, beside the folder that decides it.</item>
 /// </list>
-/// Then the prompt: a quick-prompt picker (the ones fitting the PR's reasons first) filling an editable task, which
-/// Perch wraps with the PR link and the rules (previewable). Bottom right, <b>Launch in Perch</b> opens an ordinary
-/// Perch-controlled session window named after the PR; <b>Copy command</b> prepares the same folder and copies the
-/// one-line terminal command instead (<see cref="PrSessionCommand"/>).
+/// Then the prompt (a quick-prompt picker over an editable task, with the full composed prompt behind a disclosure),
+/// and bottom right <b>Copy command</b> (prepare the folder, copy a one-line terminal command,
+/// <see cref="PrSessionCommand"/>) or <b>Launch in Perch</b> (open a session window named after the PR).
 ///
 /// <para>Folder trust is asked the way a new session asks it, for the final folder: a worktree's code is the PR's,
 /// which may come from someone else. The account follows the same rules and guardrails as the session launcher,
@@ -43,16 +47,19 @@ internal sealed record PrSessionLaunch(string Cwd, string Prompt, string Permiss
 internal sealed class PrSessionWindow : Window
 {
     private static readonly IBrush Bg     = Palette.OverlaySurfaceBrush;
-    private static readonly IBrush Sunken = Palette.SurfaceSunkenBrush;
+    private static readonly IBrush CardBg = Palette.FormBgBrush;
     private static readonly IBrush Stroke = Palette.BorderBrush;
     private static readonly IBrush Fg     = Palette.FgBrush;
     private static readonly IBrush Muted  = Palette.MutedBrush;
     private static readonly IBrush Accent = Palette.AccentBrush;
     private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, Menlo, monospace");
 
-    private const double LabelColumn = 76;
+    private const double LabelColumn = 88;
+    private const int WtNew = 0, WtExisting = 1, WtNone = 2;
 
-    private enum WorktreeChoice { New, Existing, None }
+    /// <summary>A worktree strategy as its picker shows it: where this PR's worktree would land, and where the
+    /// layout came from.</summary>
+    private sealed record LayoutChoice(string Path, string Source);
 
     private readonly GhPrItem _item;
     private readonly GitRepoRef _repo;
@@ -64,20 +71,29 @@ internal sealed class PrSessionWindow : Window
     private readonly Func<IReadOnlyList<AccountRule>?> _rules;
     private readonly Func<PrSessionLaunch, string?> _launch;
 
-    // How: no checkout | checkout
-    private readonly RadioButton _noCheckout, _checkout;
-    private readonly Border _noCheckoutTile, _checkoutTile;
-    private readonly Border _checkoutPanel;
+    // Workspace: Checkout | No checkout, and the summary card's rows
+    private readonly SegmentedPicker _how;
+    private readonly Border _cloneRow, _worktreeRow, _scratchRow, _accountRow;
+
+    // Clone: summary (name pinned, directory elided from the front) or the folder search
+    private readonly Grid _cloneSummary, _cloneEditor;
+    private readonly TextBlock _cloneName, _cloneDir, _cloneNote;
+    private readonly Button _cloneChange, _cloneChip;
     private readonly AutoCompleteBox _cloneBox;
-    private readonly TextBlock _cloneNote;
-    private readonly StackPanel _worktreeOptions;
-    private readonly RadioButton _newWorktree, _existingWorktree, _noWorktree;
-    private readonly TextBlock _newDesc, _existingDesc, _noWorktreeDesc;
+    private bool _cloneEditing;
+    private CheckoutMatch? _match;
+
+    // Worktree: summary or New | Existing | None plus one row for the choice
+    private readonly Grid _worktreeSummary;
+    private readonly StackPanel _worktreeEditor;
+    private readonly TextBlock _wtKind, _wtDetail, _consequence;
+    private readonly SegmentedPicker _worktree;
     private readonly ComboBox _layoutBox, _existingBox;
     private readonly Grid _layoutRow, _existingRow;
     private IReadOnlyList<WorktreeLayout> _layouts = [];
     private IReadOnlyList<GitWorktree> _existing = [];
     private PrWorktreeContext? _context;          // the chosen checkout's worktrees + inferred layout, read off the UI thread
+    private bool _worktreeEditing;
     private bool _worktreeTouched;                // the user picked a worktree option; stop moving the default under them
     private bool _syncing;                        // setting controls from code; ignore their change events
     private bool _resolved;                       // the clone search has finished (so "no clone found" is final)
@@ -93,7 +109,6 @@ internal sealed class PrSessionWindow : Window
     private readonly Border _previewBox;
     private readonly SelectableTextBlock _preview;
 
-    private readonly Grid _accountRow;
     private readonly ComboBox _accountBox;
 
     private readonly TextBlock _status;
@@ -124,59 +139,85 @@ internal sealed class PrSessionWindow : Window
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 820;   // room for a real clone path and a worktree strategy on one line
+        Width = 820;   // room for a real clone path and a worktree location on one line
         SizeToContent = SizeToContent.Height;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        // ── Header: the PR, as its card shows it ──
-        var heading = new TextBlock { Text = "Start a session", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
+        // ── Header: the PR is the subject, so its title is the strongest text ──
         var close = new Button
         {
             Content = "✕", Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            Padding = new Thickness(4, 0), FontSize = 14, Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Top,
+            Padding = new Thickness(4, 0), FontSize = 14, Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
         };
         close.Click += (_, _) => Close();
-        var headRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var eyebrowRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(close, 1);
-        headRow.Children.Add(heading);
-        headRow.Children.Add(close);
+        eyebrowRow.Children.Add(Eyebrow("START A SESSION"));
+        eyebrowRow.Children.Add(close);
 
         var prTitle = new TextBlock
         {
-            Text = item.Pr.Title.Length > 0 ? item.Pr.Title : "(untitled)", Foreground = Fg, FontSize = 13.5,
+            Text = item.Pr.Title.Length > 0 ? item.Pr.Title : "(untitled)", Foreground = Fg, FontSize = 16,
             FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap, MaxLines = 2,
-            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 10, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 6, 0, 0),
         };
-        var meta = $"{item.Pr.Repo} #{item.Pr.Number}";
-        if (GitHubAlertsWindow.Branches(item.Pr) is { Length: > 0 } branches) meta += $" · {branches}";
-        var prMeta = new TextBlock
+        var prRepo = new TextBlock
         {
-            Text = meta, Foreground = Muted, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+            Text = $"{item.Pr.Repo} #{item.Pr.Number}", Foreground = Muted, FontSize = 12,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 0),
         };
-        var pills = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
-        foreach (var r in item.Reasons) pills.Children.Add(ReasonPill(r));
-        pills.IsVisible = item.Reasons.Count > 0;
-        var header = new StackPanel { Margin = new Thickness(22, 18, 18, 16), Children = { headRow, prTitle, prMeta, pills } };
+        var tags = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+        if (GitHubAlertsWindow.Branches(item.Pr) is { Length: > 0 } branches)
+            tags.Children.Add(new TextBlock
+            {
+                Text = branches, FontFamily = Mono, FontSize = 11.5, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 4),
+            });
+        foreach (var r in item.Reasons) tags.Children.Add(ReasonPill(r));
+        tags.IsVisible = tags.Children.Count > 0;
+        var header = new StackPanel { Margin = new Thickness(24, 18, 18, 16), Children = { eyebrowRow, prTitle, prRepo, tags } };
 
-        // ── How should it be checked out? Two tiles side by side, the usual one (Checkout) first ──
-        (_checkout, _checkoutTile) = ChoiceTile("Checkout", "Work on the PR's code in your clone of the repo.");
-        (_noCheckout, _noCheckoutTile) = ChoiceTile("No checkout", "Just prompting. Claude reads the PR through gh, with no code on disk.");
-        _checkout.IsChecked = true;
-        _noCheckout.IsCheckedChanged += (_, _) => HowChanged();
-        _checkout.IsCheckedChanged += (_, _) => HowChanged();
-        var tiles = new Grid { ColumnDefinitions = new ColumnDefinitions("*,10,*") };
-        Grid.SetColumn(_noCheckoutTile, 2);
-        tiles.Children.Add(_checkoutTile);
-        tiles.Children.Add(_noCheckoutTile);
+        // ── Workspace: Checkout | No checkout on the heading, then the summary card ──
+        _how = new SegmentedPicker(["Checkout", "No checkout"], 0);
+        _how.Changed += _ => HowChanged();
+        var workspaceHead = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 18, 0, 10) };
+        var wsLabel = Eyebrow("WORKSPACE");
+        wsLabel.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(_how.View, 1);
+        workspaceHead.Children.Add(wsLabel);
+        workspaceHead.Children.Add(_how.View);
 
-        // Clone: the session launcher's folder search, over the folders Claude sessions have run in.
+        // Clone, collapsed: the folder name pinned, the directory taking the leading ellipsis, then Change.
+        _cloneName = new TextBlock { Foreground = Fg, FontSize = 13, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        _cloneDir = new TextBlock
+        {
+            Foreground = Muted, FontFamily = Mono, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0), TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        };
+        var clonePath = new DockPanel { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(_cloneName, Dock.Left);
+        clonePath.Children.Add(_cloneName);
+        clonePath.Children.Add(_cloneDir);
+        _cloneChip = new Button
+        {
+            Foreground = Muted, Background = Palette.ButtonBgBrush, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(999),
+            Padding = new Thickness(8, 1), FontSize = 11, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand), IsVisible = false,
+        };
+        ToolTip.SetTip(_cloneChip, "Several clones of this repo are among your projects. Pick another");
+        _cloneChip.Click += (_, _) => OpenCloneEditor();
+        _cloneChange = LinkButton("Change");
+        _cloneChange.Margin = new Thickness(12, 0, 0, 0);
+        _cloneChange.Click += (_, _) => OpenCloneEditor();
+        _cloneSummary = Columns(clonePath, _cloneChip, _cloneChange);
+
+        // Clone, editing: the session launcher's folder search, Browse, Done.
         _cloneBox = new AutoCompleteBox { FontSize = 12.5, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center };
         FolderSearchBox.Configure(_cloneBox, $"Search your projects for {_repo.Repo}…", Fg, Muted, Palette.FormBgBrush, Stroke,
             FontFamily.Default, Mono, borderless: false);
-        // Committed when the suggestions close (a pick), on Enter, or on leaving the box — not per arrow-key move.
-        _cloneBox.DropDownClosed += (_, _) => CommitCloneText();
-        _cloneBox.LostFocus += (_, _) => CommitCloneText();
+        // Committed when the suggestions close on a pick or on Enter — not per arrow-key move.
+        _cloneBox.DropDownClosed += (_, _) => { if (!_syncing && _cloneBox.SelectedItem is string) CommitCloneText(); };
         _cloneBox.AddHandler(KeyDownEvent, (_, e) =>
         {
             if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Control) && !_cloneBox.IsDropDownOpen)
@@ -188,44 +229,79 @@ internal sealed class PrSessionWindow : Window
         var browse = OutlineButton("Browse…");
         browse.Margin = new Thickness(8, 0, 0, 0);
         browse.Click += async (_, _) => await BrowseAsync();
-        var cloneRow = LabeledRow("Clone", _cloneBox, browse);
-        _cloneNote = new TextBlock
-        {
-            Foreground = Muted, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(LabelColumn, 4, 0, 0),
-        };
+        var cloneDone = LinkButton("Done");
+        cloneDone.Margin = new Thickness(12, 0, 0, 0);
+        cloneDone.Click += (_, _) => CommitCloneText();
+        _cloneEditor = Columns(_cloneBox, browse, cloneDone);
+        _cloneEditor.IsVisible = false;
 
-        // Worktree: new (placed by the strategy) | existing | none.
-        _newWorktree = OptionRow("worktree", "New worktree", out _newDesc);
-        _existingWorktree = OptionRow("worktree", "Existing worktree", out _existingDesc);
-        _noWorktree = OptionRow("worktree", "No worktree", out _noWorktreeDesc);
-        _newWorktree.IsChecked = true;
-        foreach (var rb in new[] { _newWorktree, _existingWorktree, _noWorktree })
+        _cloneNote = new TextBlock { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(LabelColumn, 6, 0, 0), IsVisible = false };
+        _cloneRow = CardRow("Clone", new Panel { Children = { _cloneSummary, _cloneEditor } }, _cloneNote, first: true);
+
+        // Worktree, collapsed: what the session gets, then Change.
+        _wtKind = new TextBlock { Foreground = Fg, FontSize = 13, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        _wtDetail = new TextBlock
         {
-            rb.IsCheckedChanged += (_, _) => WorktreeChanged();
-            rb.Click += (_, _) => _worktreeTouched = true;
-        }
-        _layoutBox = new ComboBox { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
-        _layoutBox.SelectionChanged += (_, _) => { if (!_syncing) { UpdateWorktreeText(); UpdatePreview(); } };
+            Foreground = Muted, FontFamily = Mono, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0), TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        };
+        var wtText = new DockPanel { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(_wtKind, Dock.Left);
+        wtText.Children.Add(_wtKind);
+        wtText.Children.Add(_wtDetail);
+        var wtChange = LinkButton("Change");
+        wtChange.Margin = new Thickness(12, 0, 0, 0);
+        wtChange.Click += (_, _) => { _worktreeEditing = true; WorktreeChanged(); };
+        _worktreeSummary = Columns(wtText, wtChange);
+
+        // Worktree, editing: New | Existing | None, then Location (the strategy) or the existing worktree.
+        _worktree = new SegmentedPicker(["New", "Existing", "None"], WtNew);
+        _worktree.Changed += _ => { _worktreeTouched = true; WorktreeChanged(); };
+        ToolTip.SetTip(_worktree.View, "New: a worktree for this PR. Existing: one of the repo's worktrees as it is. None: your checkout as it is.");
+        var wtDone = LinkButton("Done");
+        wtDone.Click += (_, _) => { _worktreeEditing = false; WorktreeChanged(); };
+        var segRow = Columns(_worktree.View, wtDone);
+        _layoutBox = new ComboBox { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch, ItemTemplate = LayoutTemplate() };
+        _layoutBox.SelectionChanged += (_, _) => { if (!_syncing) { UpdateWorktreeSummary(); UpdatePreview(); } };
         ToolTip.SetTip(_layoutBox, "Where new worktrees go for this repo. Perch follows your existing worktrees; a change is remembered for the repo.");
-        _layoutRow = Indented("Strategy", _layoutBox);
+        _layoutRow = SubRow("Location", _layoutBox);
         _existingBox = new ComboBox { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
-        _existingBox.SelectionChanged += (_, _) => { if (!_syncing) { UpdateWorktreeText(); UpdatePreview(); } };
-        _existingRow = Indented("Worktree", _existingBox);
-        _worktreeOptions = new StackPanel
+        _existingBox.SelectionChanged += (_, _) => { if (!_syncing) { UpdateWorktreeSummary(); UpdatePreview(); } };
+        _existingRow = SubRow("Worktree", _existingBox);
+        _worktreeEditor = new StackPanel { Spacing = 8, IsVisible = false, Children = { segRow, _layoutRow, _existingRow } };
+
+        // The one warning: a choice that edits a working copy off the PR's branch, shown collapsed too.
+        _consequence = new TextBlock
         {
-            Spacing = 2, Margin = new Thickness(0, 12, 0, 0),
-            Children = { SubLabel("Worktree"), _newWorktree, _layoutRow, _existingWorktree, _existingRow, _noWorktree },
+            Foreground = Palette.WarnBrush, FontSize = 11.5, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(LabelColumn, 6, 0, 0), IsVisible = false,
+        };
+        _worktreeRow = CardRow("Worktree", new Panel { Children = { _worktreeSummary, _worktreeEditor } }, _consequence, first: false);
+
+        // No checkout: the card shrinks to one line (plus Account).
+        _scratchRow = new Border
+        {
+            Padding = new Thickness(16, 12), IsVisible = false,
+            Child = new TextBlock
+            {
+                Text = "Nothing is checked out. Claude reads the PR with gh, in an empty scratch folder.",
+                Foreground = Muted, FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            },
         };
 
-        _checkoutPanel = new Border
+        _accountBox = new ComboBox { FontSize = 12, MinWidth = 280, HorizontalAlignment = HorizontalAlignment.Left };
+        _accountRow = CardRow("Account", _accountBox, null, first: false);
+        _accountRow.IsVisible = false;
+
+        var card = new Border
         {
-            Background = Sunken, BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(14, 12), Margin = new Thickness(0, 10, 0, 0),
-            Child = new StackPanel { Children = { cloneRow, _cloneNote, _worktreeOptions } },
+            Background = CardBg, BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10),
+            ClipToBounds = true,
+            Child = new StackPanel { Children = { _cloneRow, _worktreeRow, _scratchRow, _accountRow } },
         };
 
-        // ── Prompt: a quick-prompt picker and the editable task ──
-        _templateBox = new ComboBox { FontSize = 12, MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
+        // ── Prompt: the picker beside its heading, the editable task, the full prompt behind a disclosure ──
+        _templateBox = new ComboBox { FontSize = 12, MinWidth = 240, VerticalAlignment = VerticalAlignment.Center };
         foreach (var t in _templates) _templateBox.Items.Add(t.Label);
         _templateBox.SelectionChanged += (_, _) =>
         {
@@ -233,24 +309,22 @@ internal sealed class PrSessionWindow : Window
         };
         _readOnlyBadge = new Border
         {
-            CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 1), Margin = new Thickness(8, 0, 0, 0),
-            BorderBrush = Stroke, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center,
+            CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 1), BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock { Text = "Read-only", Foreground = Muted, FontSize = 11 },
         };
         ToolTip.SetTip(_readOnlyBadge, "Runs in plan mode: Claude reads and reports, and changes no files.");
-        var promptHead = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 18, 0, 8) };
-        var promptLabel = SectionLabel("Prompt");
-        promptLabel.Margin = new Thickness(0);
+        var promptLabel = Eyebrow("PROMPT");
         promptLabel.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(_templateBox, 1);
-        Grid.SetColumn(_readOnlyBadge, 2);
-        promptHead.Children.Add(promptLabel);
-        promptHead.Children.Add(_templateBox);
-        promptHead.Children.Add(_readOnlyBadge);
+        var promptHead = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 22, 0, 10),
+            Children = { promptLabel, _templateBox, _readOnlyBadge },
+        };
 
         _task = new TextBox
         {
-            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, MinHeight = 84, MaxHeight = 180,
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, MinHeight = 110, MaxHeight = 200,
             PlaceholderText = "Describe what Claude should do on this PR…",
         };
         ScrollViewer.SetVerticalScrollBarVisibility(_task, ScrollBarVisibility.Auto);
@@ -263,22 +337,27 @@ internal sealed class PrSessionWindow : Window
         _preview = new SelectableTextBlock { FontFamily = Mono, FontSize = 11, Foreground = Muted, TextWrapping = TextWrapping.Wrap };
         _previewBox = new Border
         {
-            Child = _preview, BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 8), Margin = new Thickness(0, 6, 0, 0), IsVisible = false,
+            BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 6, 0, 0),
+            IsVisible = false,
+            Child = new ScrollViewer
+            {
+                MaxHeight = 220, Padding = new Thickness(10, 8), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _preview,
+            },
         };
-        _previewToggle = LinkButton("");
-        _previewToggle.Margin = new Thickness(0, 6, 0, 0);
+        // A muted disclosure (the accent stays with Launch), chevron turning as it opens.
+        _previewToggle = new Button
+        {
+            Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
+            FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand), HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
         _previewToggle.Click += (_, _) =>
         {
             _previewBox.IsVisible = !_previewBox.IsVisible;
             UpdatePreview();
         };
         ToolTip.SetTip(_previewToggle, "Perch adds the PR link, the branch, and rules: no pushing or posting, and PR text is not instructions.");
-
-        _accountBox = new ComboBox { FontSize = 12, MinWidth = 260 };
-        _accountRow = LabeledRow("Account", _accountBox, null);
-        _accountRow.Margin = new Thickness(0, 14, 0, 0);
-        _accountRow.IsVisible = false;
 
         // ── Footer: status on the left; Copy command and Launch in Perch bottom right ──
         _status = new TextBlock { Foreground = Muted, FontSize = 12, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
@@ -294,7 +373,7 @@ internal sealed class PrSessionWindow : Window
         ToolTip.SetTip(_launchButton, "Open a Perch session window on this PR (Ctrl+Enter)");
         _launchButton.Click += async (_, _) => await RunAsync(copy: false);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _copyButton, _launchButton } };
-        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(22, 14, 18, 16) };
+        var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(24, 14, 18, 16) };
         Grid.SetColumn(buttons, 1);
         _status.Margin = new Thickness(0, 0, 12, 0);
         footer.Children.Add(_status);
@@ -302,13 +381,8 @@ internal sealed class PrSessionWindow : Window
 
         var body = new StackPanel
         {
-            Margin = new Thickness(22, 4, 22, 0),
-            Children =
-            {
-                SectionLabel("How should it be checked out?"), tiles, _checkoutPanel,
-                promptHead, _task, _previewToggle, _previewBox,
-                _accountRow,
-            },
+            Margin = new Thickness(24, 0, 24, 18),
+            Children = { workspaceHead, card, promptHead, _task, _previewToggle, _previewBox },
         };
 
         var root = new StackPanel
@@ -318,7 +392,7 @@ internal sealed class PrSessionWindow : Window
                 header,
                 new Border { Height = 1, Background = Stroke },
                 body,
-                new Border { Height = 1, Background = Stroke, Margin = new Thickness(0, 18, 0, 0) },
+                new Border { Height = 1, Background = Stroke },
                 footer,
             },
         };
@@ -329,9 +403,9 @@ internal sealed class PrSessionWindow : Window
         };
         frame.PointerPressed += (_, e) =>
         {
-            if (e.Source is Visual v && (v is Button or TextBox or ComboBox or RadioButton or SelectableTextBlock or AutoCompleteBox
+            if (e.Source is Visual v && (v is Button or TextBox or ComboBox or SelectableTextBlock or AutoCompleteBox
                 || v.FindAncestorOfType<Button>() is not null || v.FindAncestorOfType<TextBox>() is not null
-                || v.FindAncestorOfType<ComboBox>() is not null || v.FindAncestorOfType<RadioButton>() is not null)) return;
+                || v.FindAncestorOfType<ComboBox>() is not null)) return;
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
         };
         Content = frame;
@@ -340,7 +414,7 @@ internal sealed class PrSessionWindow : Window
         _templateBox.SelectedIndex = 0;
         _syncing = false;
         PickTemplate(_template);
-        _cloneNote.Text = $"Looking for your clone of {_repo.Slug}…";
+        UpdateCloneSummary();
         UpdateWorktreeOptions(null);
         HowChanged();
         // Deferred to Opened, so the render seam can claim the dialog first.
@@ -353,9 +427,11 @@ internal sealed class PrSessionWindow : Window
 
     /// <summary>Headless-render seam: show the dialog with a resolved clone (or a choice, or none) and sample accounts,
     /// touching no files (no folder scan, no sign-in reads — so a render never shows the machine's real accounts).
-    /// Call right after construction.</summary>
+    /// <paramref name="worktree"/> picks "new" / "existing" / "none"; <paramref name="editWorktree"/> and
+    /// <paramref name="editClone"/> open those rows' editors. Call right after construction.</summary>
     internal void SeedForRender(CheckoutMatch match, IReadOnlyList<string>? accounts = null, bool showPreview = false,
-        string? template = null, PrWorktreeContext? context = null, bool noCheckout = false, string? worktree = null)
+        string? template = null, PrWorktreeContext? context = null, bool noCheckout = false, string? worktree = null,
+        bool editWorktree = false, bool editClone = false)
     {
         _renderOnly = true;
         if (template is not null && _templates.FirstOrDefault(t => t.Id == template) is { } t)
@@ -370,9 +446,12 @@ internal sealed class PrSessionWindow : Window
         if (worktree is not null)
         {
             _worktreeTouched = true;
-            (worktree switch { "existing" => _existingWorktree, "none" => _noWorktree, _ => _newWorktree }).IsChecked = true;
+            _worktree.Selected = worktree switch { "existing" => WtExisting, "none" => WtNone, _ => WtNew };
         }
-        if (noCheckout) _noCheckout.IsChecked = true;
+        _worktreeEditing = editWorktree;
+        WorktreeChanged();
+        if (editClone) OpenCloneEditor();
+        if (noCheckout) { _how.Selected = 1; HowChanged(); }
         if (accounts is { Count: > 1 })
         {
             _accountBox.ItemsSource = accounts;
@@ -392,10 +471,7 @@ internal sealed class PrSessionWindow : Window
 
     // ── What the choices add up to ──
 
-    private WorktreeChoice Choice =>
-        _existingWorktree.IsChecked == true ? WorktreeChoice.Existing
-        : _noWorktree.IsChecked == true ? WorktreeChoice.None
-        : WorktreeChoice.New;
+    private bool NoCheckout => _how.Selected == 1;
 
     private WorktreeLayout? SelectedLayout =>
         _layoutBox.SelectedIndex >= 0 && _layoutBox.SelectedIndex < _layouts.Count ? _layouts[_layoutBox.SelectedIndex] : _context?.Layout;
@@ -413,10 +489,10 @@ internal sealed class PrSessionWindow : Window
     // worktree, or an existing folder (a worktree or the checkout itself), described by what it has checked out.
     private (PrWorkspace Where, string? LocalBranch, string? Existing) Workspace()
     {
-        if (_noCheckout.IsChecked == true) return (PrWorkspace.DiffOnly, null, null);
+        if (NoCheckout) return (PrWorkspace.DiffOnly, null, null);
         if (_folder is null) return (PrWorkspace.Clone, PrBranch, null);
-        if (Choice == WorktreeChoice.New) return (PrWorkspace.Worktree, PrBranch, null);
-        var (path, branch) = Choice == WorktreeChoice.Existing
+        if (_worktree.Selected == WtNew) return (PrWorkspace.Worktree, PrBranch, null);
+        var (path, branch) = _worktree.Selected == WtExisting
             ? (SelectedExisting?.Path, SelectedExisting?.Branch)
             : (_folder, _context?.Set.MainBranch);
         if (branch == PrBranch) return (PrWorkspace.Worktree, PrBranch, path);
@@ -426,19 +502,20 @@ internal sealed class PrSessionWindow : Window
 
     private void HowChanged()
     {
-        bool checkout = _checkout.IsChecked == true;
-        StyleTile(_checkoutTile, checkout);
-        StyleTile(_noCheckoutTile, !checkout);
-        _checkoutPanel.IsVisible = checkout;
+        _cloneRow.IsVisible = !NoCheckout;
+        _worktreeRow.IsVisible = !NoCheckout && _folder is not null;
+        _scratchRow.IsVisible = NoCheckout;
         UpdatePreview();
         UpdateEnabled();
     }
 
     private void WorktreeChanged()
     {
-        _layoutRow.IsVisible = Choice == WorktreeChoice.New && _layouts.Count > 0;
-        _existingRow.IsVisible = Choice == WorktreeChoice.Existing && _existing.Count > 0;
-        UpdateWorktreeText();
+        _worktreeSummary.IsVisible = !_worktreeEditing;
+        _worktreeEditor.IsVisible = _worktreeEditing;
+        _layoutRow.IsVisible = _worktree.Selected == WtNew && _layouts.Count > 0;
+        _existingRow.IsVisible = _worktree.Selected == WtExisting && _existing.Count > 0;
+        UpdateWorktreeSummary();
         UpdatePreview();
         UpdateEnabled();
     }
@@ -454,7 +531,7 @@ internal sealed class PrSessionWindow : Window
 
     private void UpdatePreview()
     {
-        _previewToggle.Content = _previewBox.IsVisible ? "Hide the full prompt" : "Show the full prompt Perch will send";
+        _previewToggle.Content = _previewBox.IsVisible ? "▾  Full prompt" : "▸  Full prompt";
         if (!_previewBox.IsVisible) return;
         var (where, local, _) = Workspace();
         _preview.Text = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, where, local);
@@ -462,19 +539,88 @@ internal sealed class PrSessionWindow : Window
 
     private void UpdateEnabled()
     {
-        bool ready = !_busy && !string.IsNullOrWhiteSpace(_task.Text) && (_noCheckout.IsChecked == true || CheckoutReady);
+        bool ready = !_busy && !string.IsNullOrWhiteSpace(_task.Text) && (NoCheckout || CheckoutReady);
         _launchButton.IsEnabled = ready;
         _copyButton.IsEnabled = ready;
     }
 
-    // A checkout is ready once the clone search is done (no clone → a fresh one) and an existing worktree, if that's
-    // the choice, is picked.
+    // A checkout is ready once the clone search is done (no clone → a fresh one), no folder edit is half-typed, and an
+    // existing worktree, if that's the choice, is picked.
     private bool CheckoutReady =>
-        _folder is null ? _resolved : Choice != WorktreeChoice.Existing || SelectedExisting is not null;
+        !_cloneEditing && (_folder is null ? _resolved : _worktree.Selected != WtExisting || SelectedExisting is not null);
 
-    // ── The worktree options, for the chosen clone ──
+    // ── The clone row ──
 
-    // Fills the strategy and existing-worktree pickers from the checkout's worktree picture (null while it's being
+    private void UpdateCloneSummary()
+    {
+        _cloneSummary.IsVisible = !_cloneEditing;
+        _cloneEditor.IsVisible = _cloneEditing;
+        _cloneChip.IsVisible = false;
+        ToolTip.SetTip(_cloneSummary, null);
+        if (!_resolved)
+        {
+            _cloneName.Text = "Looking…";
+            _cloneName.Foreground = Muted;
+            _cloneDir.Text = $"for your clone of {_repo.Slug}";
+            _cloneChange.IsVisible = false;
+            return;
+        }
+        _cloneChange.IsVisible = true;
+        if (_folder is not { } folder)
+        {
+            _cloneName.Text = "None found.";
+            _cloneName.Foreground = Fg;
+            _cloneDir.Text = $"Perch will make a fresh clone on {PrBranch}";
+            _cloneChange.Content = "Find…";
+            return;
+        }
+        var trimmed = Path.TrimEndingDirectorySeparator(folder);
+        _cloneName.Text = Path.GetFileName(trimmed) is { Length: > 0 } n ? n : trimmed;
+        _cloneName.Foreground = Fg;
+        _cloneDir.Text = Path.GetDirectoryName(trimmed) ?? "";
+        _cloneChange.Content = "Change";
+        ToolTip.SetTip(_cloneSummary, folder);
+        // Several clones found: say which of them this is, one click from picking another.
+        if (_match is { Candidates.Count: > 1 } m && m.Candidates.ToList().FindIndex(c => PathEquals(c, folder)) is >= 0 and var i)
+        {
+            _cloneChip.Content = $"{i + 1} of {m.Candidates.Count}";
+            _cloneChip.IsVisible = true;
+        }
+    }
+
+    private void OpenCloneEditor()
+    {
+        _cloneEditing = true;
+        _syncing = true;
+        _cloneBox.Text = _folder ?? "";
+        _syncing = false;
+        UpdateCloneSummary();
+        UpdateEnabled();
+        if (_renderOnly) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _cloneBox.Focus();
+            _cloneBox.IsDropDownOpen = true;
+        }, DispatcherPriority.Input);
+    }
+
+    private void CloseCloneEditor()
+    {
+        _cloneEditing = false;
+        UpdateCloneSummary();
+        UpdateEnabled();
+    }
+
+    private void SetCloneNote(string? text, IBrush? brush = null)
+    {
+        _cloneNote.Text = text ?? "";
+        _cloneNote.Foreground = brush ?? Muted;
+        _cloneNote.IsVisible = !string.IsNullOrEmpty(text);
+    }
+
+    // ── The worktree row ──
+
+    // Fills the Location and existing-worktree pickers from the checkout's worktree picture (null while it's being
     // read, or with no clone), and picks the default unless the user already chose: the PR's own branch or Perch's
     // earlier worktree for it when one exists, else a new worktree.
     private void UpdateWorktreeOptions(PrWorktreeContext? ctx)
@@ -484,84 +630,112 @@ internal sealed class PrSessionWindow : Window
         try
         {
             _layouts = ctx is null ? [] : WorktreeLayout.ChoicesFor(ctx.Layout, ctx.Set.Bare, _rememberedLayout);
-            _layoutBox.ItemsSource = _layouts.Select(l => LayoutLabel(l, ctx!)).ToList();
+            _layoutBox.ItemsSource = _layouts.Select(l => Describe(l, ctx!)).ToList();
             int saved = _layouts.ToList().FindIndex(l => l.Template == _rememberedLayout);
             _layoutBox.SelectedIndex = _layouts.Count == 0 ? -1 : Math.Max(saved, 0);
 
             _existing = ctx?.Set.Linked ?? [];
-            _existingBox.ItemsSource = _existing.Select(w => $"{Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path))}  ·  {w.Branch ?? "detached"}").ToList();
+            _existingBox.ItemsSource = _existing.Select(w => $"{Leaf(w.Path)}  ·  {w.Branch ?? "detached"}").ToList();
             int onPr = _existing.ToList().FindIndex(w => w.Branch == PrBranch || IsPrHead(w.Branch));
             _existingBox.SelectedIndex = _existing.Count == 0 ? -1 : Math.Max(onPr, 0);
         }
         finally { _syncing = false; }
 
-        _worktreeOptions.IsVisible = _folder is not null;
-        _existingWorktree.IsEnabled = _existing.Count > 0;
-        _existingWorktree.Opacity = _existing.Count > 0 ? 1 : 0.5;   // the row's text sets its own colours, so dim it
-        _noWorktree.IsVisible = ctx is not { Set.Bare: true };       // a bare repo's root isn't a working tree
+        _worktreeRow.IsVisible = !NoCheckout && _folder is not null;
+        _worktree.SetEnabled(WtExisting, _existing.Count > 0, "This repo has no other worktrees");
+        bool bare = ctx is { Set.Bare: true };
+        _worktree.SetVisible(WtNone, !bare);                     // a bare repo's root isn't a working tree
 
-        if (!_worktreeTouched || !_existingWorktree.IsEnabled && _existingWorktree.IsChecked == true
-            || !_noWorktree.IsVisible && _noWorktree.IsChecked == true)
+        if (!_worktreeTouched || _existing.Count == 0 && _worktree.Selected == WtExisting || bare && _worktree.Selected == WtNone)
         {
             bool existingOnPr = _existing.Any(w => w.Branch == PrBranch || IsPrHead(w.Branch));
             bool rootOnPr = ctx is { Set.Bare: false } && IsPrHead(ctx.Set.MainBranch);
-            (existingOnPr ? _existingWorktree : rootOnPr ? _noWorktree : _newWorktree).IsChecked = true;
+            _worktree.Selected = existingOnPr ? WtExisting : rootOnPr ? WtNone : WtNew;
         }
         WorktreeChanged();
     }
 
-    // "web-pr-12 beside your checkout (yours)" — the folder a new worktree for this PR would get under that layout.
-    private string LayoutLabel(WorktreeLayout l, PrWorktreeContext ctx)
-    {
-        var where = Near(l.Render(ctx.Set.Root, $"pr-{_item.Pr.Number}"), ctx.Set.Root);
-        return l.Source switch
+    // What a layout means for this PR: the folder its worktree would get, and where the layout came from.
+    private LayoutChoice Describe(WorktreeLayout l, PrWorktreeContext ctx) => new(
+        RelPath(l.Render(ctx.Set.Root, $"pr-{_item.Pr.Number}"), ctx.Set.Root),
+        l.Source switch
         {
-            WorktreeLayoutSource.Detected => $"{where} (like your other worktrees)",
-            WorktreeLayoutSource.IgnoreHint => $"{where} (from your ignore file)",
-            WorktreeLayoutSource.Default => $"{where} (Claude Code's default)",
-            _ => where,
-        };
-    }
+            WorktreeLayoutSource.Detected => "matches yours",
+            WorktreeLayoutSource.IgnoreHint => "from your ignore file",
+            WorktreeLayoutSource.Default => "Claude Code default",
+            _ when l.Template == WorktreeLayout.DefaultTemplate => "Claude Code default",
+            _ when l.Template == _rememberedLayout => "your pick for this repo",
+            _ => "",
+        });
 
-    private void UpdateWorktreeText()
+    // The Location picker's rows: the path (a path, so its tail stays legible) with the source muted on the right.
+    private static FuncDataTemplate<LayoutChoice> LayoutTemplate() => new((c, _) =>
     {
-        var pr = _item.Pr;
+        var source = new TextBlock { Text = c?.Source ?? "", Foreground = Muted, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) };
+        DockPanel.SetDock(source, Dock.Right);
+        var path = new TextBlock
+        {
+            Text = c?.Path ?? "", Foreground = Fg, FontFamily = Mono, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        };
+        return new DockPanel { LastChildFill = true, Children = { source, path } };
+    }, supportsRecycling: true);
+
+    // The collapsed worktree line ("New · .claude\worktrees\pr-12 · on perch/pr-12") and the warning under it.
+    private void UpdateWorktreeSummary()
+    {
         var ctx = _context;
-        var layout = SelectedLayout;
-        if (ctx is null || layout is null)
-            _newDesc.Text = $"Checks out the PR on branch {PrBranch}. Your own working copy isn't touched.";
-        else if (ctx.Set.PathOfBranch(PrBranch) is { } earlier)
-            _newDesc.Text = $"Reuses your earlier worktree for this PR, {Near(earlier, ctx.Set.Root)}.";
-        else
-            _newDesc.Text = $"Checks out the PR on branch {PrBranch} in {Near(layout.Render(ctx.Set.Root, $"pr-{pr.Number}"), ctx.Set.Root)}. "
-                + "Your own working copy isn't touched.";
+        switch (_worktree.Selected)
+        {
+            case WtExisting when SelectedExisting is { } w:
+                _wtKind.Text = "Existing";
+                _wtDetail.Text = $"{(ctx is null ? w.Path : RelPath(w.Path, ctx.Set.Root))} · on {w.Branch ?? "a detached HEAD"}";
+                break;
+            case WtExisting:
+                _wtKind.Text = "Existing";
+                _wtDetail.Text = "pick a worktree";
+                break;
+            case WtNone:
+                _wtKind.Text = "Your checkout";
+                _wtDetail.Text = ctx?.Set.MainBranch is { Length: > 0 } main ? $"on {main}" : "as it is";
+                break;
+            default:
+                _wtKind.Text = "New";
+                _wtDetail.Text = ctx is null || SelectedLayout is not { } layout ? $"on {PrBranch}"
+                    : ctx.Set.PathOfBranch(PrBranch) is { } earlier ? $"{RelPath(earlier, ctx.Set.Root)} · your earlier one, on {PrBranch}"
+                    : $"{RelPath(layout.Render(ctx.Set.Root, $"pr-{_item.Pr.Number}"), ctx.Set.Root)} · on {PrBranch}";
+                break;
+        }
 
-        _existingDesc.Text = _existing.Count == 0 ? "This repo has no other worktrees."
-            : SelectedExisting is not { } w || Choice != WorktreeChoice.Existing ? "One of the repo's worktrees, as it is."
-            : w.Branch == PrBranch ? $"Perch's earlier worktree for this PR, {Near(w.Path, ctx!.Set.Root)}."
-            : IsPrHead(w.Branch) ? "On the PR's own branch, so changes are ready to push."
-            : $"On {w.Branch ?? "a detached HEAD"}, not the PR's branch. Changes land in that worktree.";
-
-        var main = ctx?.Set.MainBranch;
-        _noWorktreeDesc.Text = IsPrHead(main)
-            ? $"Your checkout, already on the PR's branch {PrSessionPrompts.OneLine(main!, 60)}. Changes are ready to push."
-            : main is { Length: > 0 }
-                ? $"Your checkout as it is, on {main}, not the PR's branch. Changes land in your working copy."
-                : "Your checkout as it is, not the PR's branch. Changes land in your working copy.";
+        // Only a choice that edits a working copy that isn't on the PR's branch earns the warning.
+        var (where, _, path) = Workspace();
+        bool warn = !NoCheckout && _folder is not null && where == PrWorkspace.Checkout && path is not null;
+        if (warn)
+        {
+            var branch = _worktree.Selected == WtExisting ? SelectedExisting?.Branch : ctx?.Set.MainBranch;
+            var on = branch is { Length: > 0 } ? $"On {branch}, not the PR's branch" : "Not on the PR's branch";
+            _consequence.Text = _worktree.Selected == WtExisting
+                ? $"⚠  {on}: edits land in that worktree."
+                : $"⚠  {on}: edits land in your working copy.";
+        }
+        _consequence.IsVisible = warn;
     }
 
-    // A worktree path said relative to the checkout, so it fits a line: ".claude\worktrees\pr-12 inside your checkout",
-    // "acme-api-pr-12 beside your checkout", else the full path.
-    private static string Near(string path, string root)
+    // A worktree path said relative to the checkout so it fits a line: ".claude\worktrees\pr-12" inside it,
+    // "..\acme-api-pr-12" beside it, else the full path.
+    private static string RelPath(string path, string root)
     {
         var r = Path.TrimEndingDirectorySeparator(root);
         var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         if (path.StartsWith(r + Path.DirectorySeparatorChar, cmp))
-            return $"{path[(r.Length + 1)..]} inside your checkout";
+            return path[(r.Length + 1)..];
         if (Path.GetDirectoryName(r) is { } parent && path.StartsWith(parent + Path.DirectorySeparatorChar, cmp))
-            return $"{path[(parent.Length + 1)..]} beside your checkout";
+            return ".." + Path.DirectorySeparatorChar + path[(parent.Length + 1)..];
         return path;
     }
+
+    private static string Leaf(string path) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } n ? n : path;
 
     private static bool PathEquals(string? a, string? b) => a is not null && b is not null && string.Equals(
         Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b),
@@ -593,36 +767,22 @@ internal sealed class PrSessionWindow : Window
         }));
     }
 
+    // Several clones: the first is used, and the "1 of 2" chip offers the rest.
     private void ApplyMatch(CheckoutMatch match)
     {
+        _match = match;
         _resolved = true;
-        if (match.Path is { } path)
-        {
-            SetFolder(path, "Found among your projects. Search to use another clone.");
-            return;
-        }
-        if (match.NeedsChoice)
-        {
-            SetFolder(match.Candidates[0],
-                $"Found {match.Candidates.Count} clones of {_repo.Slug}. Using the first; search to pick another.");
-            return;
-        }
-        SetFolder(null, $"No clone of {_repo.Slug} among your projects. Search or browse for one, or Perch will make a "
-            + $"fresh clone in its data folder (on branch {PrBranch}).");
+        SetFolder(match.Path ?? (match.NeedsChoice ? match.Candidates[0] : null));
     }
 
-    private void SetFolder(string? folder, string note, bool error = false)
+    private void SetFolder(string? folder, string? note = null, IBrush? noteBrush = null)
     {
         _folder = folder;
-        _syncing = true;
-        _cloneBox.Text = folder ?? "";
-        _syncing = false;
-        _cloneNote.Text = note;
-        _cloneNote.Foreground = error ? Palette.ErrorBrush : Muted;
-        _worktreeOptions.IsVisible = folder is not null;
+        _cloneEditing = false;
+        SetCloneNote(note, noteBrush);
+        UpdateCloneSummary();
         UpdateWorktreeOptions(null);
-        UpdatePreview();
-        UpdateEnabled();
+        HowChanged();
         if (_renderOnly) return;
         ResolveAccountsAsync(folder);
         if (folder is null) return;
@@ -632,12 +792,17 @@ internal sealed class PrSessionWindow : Window
         }));
     }
 
-    // The search box's text, committed (Enter or leaving the box): use it when it names another folder.
+    // The search box's text, committed (a pick, Enter or Done): use it when it names another folder, else just close.
     private void CommitCloneText()
     {
         if (_syncing || _renderOnly) return;
         var text = _cloneBox.Text?.Trim() ?? "";
-        if (text.Length == 0 || PathEquals(text, _folder)) return;
+        if (text.Length == 0 || PathEquals(text, _folder))
+        {
+            SetCloneNote(null);
+            CloseCloneEditor();
+            return;
+        }
         _ = UseFolderAsync(text);
     }
 
@@ -655,7 +820,7 @@ internal sealed class PrSessionWindow : Window
     // would only fail later, at the fetch). A linked worktree picked by mistake stands for its repo.
     private async Task UseFolderAsync(string picked)
     {
-        if (PathEquals(picked, _folder)) return;
+        if (PathEquals(picked, _folder)) { CloseCloneEditor(); return; }
         var repo = _repo;
         var found = await Task.Run(() =>
         {
@@ -667,18 +832,18 @@ internal sealed class PrSessionWindow : Window
         if (!IsVisible) return;
         if (found.Root is null)
         {
-            _cloneNote.Text = $"{picked} isn't a git checkout.";
-            _cloneNote.Foreground = Palette.ErrorBrush;
+            SetCloneNote($"{picked} isn't a git checkout.", Palette.ErrorBrush);   // the editor stays open to try again
             return;
         }
-        SetFolder(found.Root, found.Remote is null
-            ? $"No remote there points at {_repo.Slug}, so a new worktree can't fetch the PR. Use an existing worktree or no worktree, or pick another clone."
-            : "", error: found.Remote is null);
         if (found.Remote is null)
         {
-            _noWorktree.IsChecked = true;
+            // Without a remote naming the repo a new worktree can't fetch the PR; the checkout as it is still works.
             _worktreeTouched = true;
+            _worktree.Selected = WtNone;
         }
+        SetFolder(found.Root, found.Remote is null
+            ? $"No remote there points at {_repo.Slug}, so a new worktree can't fetch the PR."
+            : null, Palette.WarnBrush);
     }
 
     // The accounts this folder may use (the same rules and guardrails as the session launcher), off the UI thread.
@@ -706,21 +871,21 @@ internal sealed class PrSessionWindow : Window
         if (_busy || !_launchButton.IsEnabled) return;
         var (where, local, existing) = Workspace();
         var root = _folder;
-        var choice = Choice;
+        bool newWorktree = !NoCheckout && root is not null && _worktree.Selected == WtNew;
         var layout = SelectedLayout;
         var prompt = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, where, local);
         SetBusy(true, where switch
         {
-            PrWorkspace.Worktree when existing is null => "Preparing the worktree…",
-            PrWorkspace.Clone when root is null => "Cloning… (a big repo can take a few minutes)",
+            PrWorkspace.Worktree when newWorktree => "Preparing the worktree…",
+            PrWorkspace.Clone => "Cloning… (a big repo can take a few minutes)",
             _ => copy ? "Preparing…" : "Starting…",
         });
 
         var repo = _repo;
         int number = _item.Pr.Number;
-        var wt = _noCheckout.IsChecked == true ? await Task.Run(() => PrScratch.Ensure(repo, number))
+        var wt = NoCheckout ? await Task.Run(() => PrScratch.Ensure(repo, number))
             : root is null ? await Task.Run(() => PrClone.Ensure(repo, number))
-            : choice == WorktreeChoice.New ? await Task.Run(() => PrWorktree.Ensure(root, repo, number, layout))
+            : newWorktree ? await Task.Run(() => PrWorktree.Ensure(root, repo, number, layout))
             : existing is not null ? new PrWorktreeResult(existing, true, null)
             : new PrWorktreeResult(null, false, "Pick the worktree to use.");
         if (!IsVisible) return;
@@ -729,11 +894,11 @@ internal sealed class PrSessionWindow : Window
             SetBusy(false, wt.Error ?? "Couldn't prepare the folder.");
             return;
         }
-        if (root is not null)
+        if (root is not null && !NoCheckout)
         {
             _remember(repo.Slug, root);
-            // A strategy the user changed sticks for the repo; going back to the inferred one forgets it.
-            if (choice == WorktreeChoice.New && _context is { } ctx && layout is not null)
+            // A Location the user changed sticks for the repo; going back to the inferred one forgets it.
+            if (newWorktree && _context is { } ctx && layout is not null)
                 _rememberLayout(repo.Slug, layout.Template == ctx.Layout.Template ? null : layout.Template);
         }
 
@@ -806,7 +971,10 @@ internal sealed class PrSessionWindow : Window
     {
         if (e.Key == Key.Escape && !_busy && !_cloneBox.IsDropDownOpen)
         {
-            Close();
+            // Esc backs out of an open editor first, then closes.
+            if (_cloneEditing) { SetCloneNote(null); CloseCloneEditor(); }
+            else if (_worktreeEditing) { _worktreeEditing = false; WorktreeChanged(); }
+            else Close();
             e.Handled = true;
         }
         else if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _launchButton.IsEnabled)
@@ -819,86 +987,56 @@ internal sealed class PrSessionWindow : Window
 
     // ── Building blocks ──
 
-    private static TextBlock SectionLabel(string text) => new()
+    // A small-caps section heading: START A SESSION, WORKSPACE, PROMPT.
+    private static TextBlock Eyebrow(string text) => new()
     {
-        Text = text, Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 16, 0, 8),
+        Text = text, Foreground = Muted, FontSize = 11, FontWeight = FontWeight.SemiBold, LetterSpacing = 1.5,
     };
 
-    private static TextBlock SubLabel(string text) => new()
+    // A row of the workspace card: "Label  content", on the shared label column, an optional line under it, and a
+    // rule above every row but the first.
+    private static Border CardRow(string label, Control content, Control? under, bool first)
     {
-        Text = text, Foreground = Muted, FontSize = 12, Margin = new Thickness(0, 0, 0, 4),
-    };
-
-    // A tile for one of the two "how" choices: a radio filling a bordered box, accented when chosen (StyleTile).
-    private static (RadioButton, Border) ChoiceTile(string title, string description)
-    {
-        var rb = new RadioButton
-        {
-            GroupName = "how", HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch, Cursor = new Cursor(StandardCursorType.Hand), Padding = new Thickness(6, 0, 0, 0),
-            Content = new StackPanel
-            {
-                Children =
-                {
-                    new TextBlock { Text = title, Foreground = Fg, FontSize = 13, FontWeight = FontWeight.SemiBold },
-                    new TextBlock { Text = description, Foreground = Muted, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0) },
-                },
-            },
-        };
-        var tile = new Border
-        {
-            Child = rb, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8, 12, 10),
-        };
-        return (rb, tile);
-    }
-
-    private static void StyleTile(Border tile, bool on)
-    {
-        tile.BorderBrush = on ? Accent : Stroke;
-        tile.Background = on ? new SolidColorBrush(Palette.Accent) { Opacity = 0.08 } : Brushes.Transparent;
-    }
-
-    // A radio row: label (semibold) over a muted description.
-    private static RadioButton OptionRow(string group, string label, out TextBlock desc)
-    {
-        desc = new TextBlock { Foreground = Muted, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0) };
-        var text = new StackPanel
-        {
-            Children = { new TextBlock { Text = label, Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold }, desc },
-        };
-        return new RadioButton
-        {
-            GroupName = group, Content = text, HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(6, 3, 0, 3),
-            Cursor = new Cursor(StandardCursorType.Hand),
-        };
-    }
-
-    // A picker under a radio row, indented to the row's text: "Strategy  [ … ▾ ]".
-    private static Grid Indented(string label, Control content)
-    {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Margin = new Thickness(28, 2, 0, 8) };
-        var l = new TextBlock { Text = label, Foreground = Muted, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions($"{LabelColumn},*") };
+        var l = new TextBlock { Text = label, Foreground = Muted, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 6, 0, 0) };
         grid.Children.Add(l);
+        Grid.SetColumn(content, 1);
+        content.VerticalAlignment = VerticalAlignment.Center;
+        content.MinHeight = 28;
+        grid.Children.Add(content);
+        var stack = new StackPanel { Children = { grid } };
+        if (under is not null) stack.Children.Add(under);
+        return new Border
+        {
+            Child = stack, Padding = new Thickness(16, 10), BorderBrush = Stroke,
+            BorderThickness = new Thickness(0, first ? 0 : 1, 0, 0),
+        };
+    }
+
+    // An inline editor row under the worktree toggle: "Location  [ … ▾ ]".
+    private static Grid SubRow(string label, Control content)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        grid.Children.Add(new TextBlock
+        {
+            Text = label, Foreground = Muted, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0),
+        });
         Grid.SetColumn(content, 1);
         content.VerticalAlignment = VerticalAlignment.Center;
         grid.Children.Add(content);
         return grid;
     }
 
-    // "Label   content   [action]" on a fixed label column, so Clone and Account line up.
-    private static Grid LabeledRow(string label, Control content, Control? action)
+    // The fill control first, then fixed controls on the right.
+    private static Grid Columns(Control fill, params Control[] right)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions($"{LabelColumn},*,Auto") };
-        var l = new TextBlock { Text = label, Foreground = Muted, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center };
-        grid.Children.Add(l);
-        Grid.SetColumn(content, 1);
-        content.VerticalAlignment = VerticalAlignment.Center;
-        grid.Children.Add(content);
-        if (action is not null)
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*" + string.Concat(right.Select(_ => ",Auto"))) };
+        grid.Children.Add(fill);
+        for (int i = 0; i < right.Length; i++)
         {
-            Grid.SetColumn(action, 2);
-            grid.Children.Add(action);
+            Grid.SetColumn(right[i], i + 1);
+            right[i].VerticalAlignment = VerticalAlignment.Center;
+            grid.Children.Add(right[i]);
         }
         return grid;
     }
@@ -909,7 +1047,7 @@ internal sealed class PrSessionWindow : Window
         return new Border
         {
             CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 2), Margin = new Thickness(0, 0, 6, 4),
-            Background = new SolidColorBrush(c) { Opacity = 0.16 },
+            Background = new SolidColorBrush(c) { Opacity = 0.16 }, VerticalAlignment = VerticalAlignment.Center,
             Child = new TextBlock { Text = r.Text, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = new SolidColorBrush(c) },
         };
     }
@@ -917,7 +1055,7 @@ internal sealed class PrSessionWindow : Window
     private static Button LinkButton(string text) => new()
     {
         Content = text, Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-        Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
+        Padding = new Thickness(0), FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
         HorizontalAlignment = HorizontalAlignment.Left,
     };
 
