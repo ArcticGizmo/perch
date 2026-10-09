@@ -72,6 +72,69 @@ public class ComposerHighlighterTests
     }
 
     [Fact]
+    public void InlineCommand_MidText_OnlyWhenPredicateAccepts()
+    {
+        const string src = "please /grill-me and /context";
+        var toks = ComposerHighlighter.Tokenize(src, isInlineCommand: name => name == "grill-me");
+        var cmd = Assert.Single(toks, t => t.Kind == InputTokenKind.Command);   // /context mid-text stays plain
+        Assert.Equal("/grill-me", src.Substring(cmd.Start, cmd.Length));
+    }
+
+    [Fact]
+    public void InlineCommand_NotInsideAWord()
+    {
+        var toks = ComposerHighlighter.Tokenize("see src/grill-me", isInlineCommand: _ => true);
+        Assert.DoesNotContain(toks, t => t.Kind == InputTokenKind.Command);
+    }
+
+    [Fact]
+    public void LeadingCommand_UsesKnownPredicate_NotInline()
+    {
+        // The first token is judged by isKnownCommand alone — the inline predicate doesn't widen it.
+        var toks = ComposerHighlighter.Tokenize("/grill-me", isInlineCommand: _ => true);
+        Assert.DoesNotContain(toks, t => t.Kind == InputTokenKind.Command);
+    }
+
+    [Fact]
+    public void ImageMarkers_AreTokens()
+    {
+        const string src = "compare [Image #1] with [Image #12] please";
+        var imgs = ComposerHighlighter.Tokenize(src).Where(t => t.Kind == InputTokenKind.Image)
+            .Select(t => src.Substring(t.Start, t.Length)).ToList();
+        Assert.Equal(["[Image #1]", "[Image #12]"], imgs);
+    }
+
+    [Theory]
+    [InlineData("[Image #]")]
+    [InlineData("[image #1]")]
+    [InlineData("Image #1")]
+    public void ImageMarker_Malformed_IsPlain(string src) => Assert.Empty(ImageMarker.Find(src));
+
+    [Fact]
+    public void ImageMarker_Format_RoundTrips()
+    {
+        var m = ImageMarker.Format(3);
+        Assert.Equal("[Image #3]", m);
+        Assert.Equal((0, m.Length), Assert.Single(ImageMarker.Find(m)));
+    }
+
+    // SpanToDelete: caret = '|' in the input (removed before the call). "see [Image #1] x" → marker at 4, length 10.
+    [Theory]
+    [InlineData("see [Image #1]| x", true, true)]    // backspace at the end
+    [InlineData("see [Image #|1] x", true, true)]    // backspace inside
+    [InlineData("see |[Image #1] x", true, false)]   // backspace before it touches the space, not the marker
+    [InlineData("see [Image #1] |x", true, false)]   // backspace after the trailing space
+    [InlineData("see |[Image #1] x", false, true)]   // delete at the start
+    [InlineData("see [Ima|ge #1] x", false, true)]   // delete inside
+    [InlineData("see [Image #1]| x", false, false)]  // delete after it touches the space
+    public void ImageMarker_SpanToDelete(string marked, bool backward, bool hits)
+    {
+        int caret = marked.IndexOf('|');
+        var span = ImageMarker.SpanToDelete(marked.Remove(caret, 1), caret, backward);
+        Assert.Equal(hits ? (4, 10) : null, span);
+    }
+
+    [Fact]
     public void Link_InSentence_TrimsTrailingPunctuation()
     {
         const string src = "see https://example.com/x, then stop";

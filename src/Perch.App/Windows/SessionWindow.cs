@@ -224,6 +224,10 @@ internal sealed partial class SessionWindow : Window
     private readonly StackPanel _paletteRows;
     private IReadOnlyList<SlashCommandInfo> _paletteItems = [];
     private int _paletteIndex;
+    // The slash token the palette is completing: where it starts/ends in the text, and whether it opens the message
+    // (a real command: every built-in + skill, and can run) or sits mid-prompt (skills only, completes in place).
+    private int _paletteStart = -1, _paletteEnd = -1;
+    private bool _paletteLeading;
 
     // Skills (user/project/plugin slash commands) offered in the palette below the built-ins. Discovered off
     // the UI thread from disk + the session's advertised command list; rebuilt when the cwd or that list
@@ -608,6 +612,7 @@ internal sealed partial class SessionWindow : Window
             UpdateHighlight();
             UpdatePaletteFromText();
             UpdateMentionsFromText();
+            SyncAttachmentsToMarkers();
             if (!_suppressHistoryReset) _historyIndex = -1;   // any real edit stops history navigation
         };
 
@@ -620,7 +625,9 @@ internal sealed partial class SessionWindow : Window
         _composerFrame.AddHandler(DragDrop.DropEvent, OnComposerDrop, handledEventsToo: true);
 
         // The command palette floats above the composer frame; it lives inside the composer stack so it shares
-        // the tree (Popups take no layout space).
+        // the tree (Popups take no layout space). It and the mention popup draw in the window's overlay layer rather
+        // than as their own native window: creating that window on the keystroke that opened the popup left the
+        // composer's highlight layer unpainted (the whole draft vanished) until the next keystroke repainted it.
         _paletteRows = new StackPanel { Spacing = 1 };
         var paletteHint = new TextBlock
         {
@@ -629,6 +636,7 @@ internal sealed partial class SessionWindow : Window
         };
         _palettePopup = new Popup
         {
+            ShouldUseOverlayLayer = true,
             PlacementTarget = _composerFrame, Placement = PlacementMode.Top,
             HorizontalOffset = 0, VerticalOffset = -8, IsLightDismissEnabled = false,
             Child = new Border
@@ -659,6 +667,7 @@ internal sealed partial class SessionWindow : Window
         _mentionRows = new StackPanel { Spacing = 1 };
         _mentionPopup = new Popup
         {
+            ShouldUseOverlayLayer = true,
             PlacementTarget = _composerFrame, Placement = PlacementMode.Top,
             HorizontalOffset = 0, VerticalOffset = -8, IsLightDismissEnabled = false,
             Child = new Border
@@ -909,7 +918,8 @@ internal sealed partial class SessionWindow : Window
     }
 
     // The composer takes input for a live session, and for a dormant one (its first send starts claude).
-    private bool CanCompose => _session is { IsRunning: true } or { IsDormant: true };
+    private bool CanCompose => _session is { IsRunning: true } or { IsDormant: true } || _composeForRender;
+    private bool _composeForRender;   // HeadlessRenderer: let the popups open without a live session
 
     // Composer / buttons follow whether the viewed session is running, dormant, or has ended.
     private void ApplyRunState()
@@ -1707,9 +1717,11 @@ internal sealed partial class SessionWindow : Window
     }
 
     // Insert a dropped (non-image) file's path at the caret — quoted if it has spaces — so Claude can read it.
-    private void InsertPathIntoComposer(string path)
+    private void InsertPathIntoComposer(string path) => InsertTokenIntoComposer(path.Contains(' ') ? $"\"{path}\"" : path);
+
+    // Insert a token at the caret, space-separated from the text before it and followed by a space.
+    private void InsertTokenIntoComposer(string token)
     {
-        var token = path.Contains(' ') ? $"\"{path}\"" : path;
         var text = _composer.Text ?? "";
         int caret = Math.Clamp(_composer.CaretIndex, 0, text.Length);
         var lead = caret > 0 && !char.IsWhiteSpace(text[caret - 1]) ? " " : "";
@@ -1732,7 +1744,7 @@ internal sealed partial class SessionWindow : Window
             {
                 if (await data.TryGetBitmapAsync() is not { } bmp) return;
                 if (SaveTempBitmap(bmp) is { } path)
-                    AddAttachment(new MessageAttachment { Kind = AttachmentKind.Image, Path = path, MediaType = "image/png" });
+                    AddAttachment(new MessageAttachment { Kind = AttachmentKind.Image, Path = path, MediaType = "image/png", Pasted = true });
             }
             finally { (data as IDisposable)?.Dispose(); }
         }
@@ -1762,8 +1774,32 @@ internal sealed partial class SessionWindow : Window
                 NoteKind.Error);
             return;
         }
+        // An image also leaves an "[Image #N]" marker at the caret, as the terminal does: it shows where the image
+        // sits in the prompt and gives a name to refer to it by. Deleting the marker drops the image (and removing
+        // the chip deletes the marker) — see SyncAttachmentsToMarkers / RemoveAttachment.
+        if (a.Kind == AttachmentKind.Image && a.Marker is null)
+            a = new MessageAttachment
+            {
+                Kind = a.Kind, Path = a.Path, MediaType = a.MediaType, Pasted = a.Pasted,
+                Marker = ImageMarker.Format(_nextImageNumber++),
+            };
         _pendingAttachments.Add(a);
         RenderAttachTray();
+        if (a.Marker is { } marker) InsertTokenIntoComposer(marker);
+    }
+
+    // Image numbers run on across the window's messages (like the terminal), so "[Image #2]" never means two things
+    // in one conversation.
+    private int _nextImageNumber = 1;
+
+    // The user deleted an image's marker from the text → drop that image too. Skipped while recalling history,
+    // which swaps the whole text out (the draft, markers and all, comes back on ↓).
+    private void SyncAttachmentsToMarkers()
+    {
+        if (_suppressHistoryReset || _historyIndex != -1) return;
+        var text = _composer.Text ?? "";
+        if (_pendingAttachments.RemoveAll(a => a.Marker is { } m && !text.Contains(m, StringComparison.Ordinal)) > 0)
+            RenderAttachTray();
     }
 
     private static long? FileLength(string path)
@@ -1771,7 +1807,22 @@ internal sealed partial class SessionWindow : Window
         try { return new FileInfo(path).Length; }
         catch { return null; }
     }
-    private void RemoveAttachment(MessageAttachment a) { _pendingAttachments.Remove(a); RenderAttachTray(); }
+    private void RemoveAttachment(MessageAttachment a)
+    {
+        _pendingAttachments.Remove(a);
+        RenderAttachTray();
+        // Take its marker (and one adjoining space) out of the text too.
+        if (a.Marker is not { } m) return;
+        var text = _composer.Text ?? "";
+        int at = text.IndexOf(m, StringComparison.Ordinal);
+        if (at < 0) return;
+        int len = m.Length;
+        if (at + len < text.Length && text[at + len] == ' ') len++;
+        else if (at > 0 && text[at - 1] == ' ') { at--; len++; }
+        int caret = _composer.CaretIndex;
+        _composer.Text = text.Remove(at, len);
+        _composer.CaretIndex = caret <= at ? caret : Math.Max(at, caret - len);
+    }
     private void ClearAttachments() { _pendingAttachments.Clear(); RenderAttachTray(); }
 
     private void RenderAttachTray()
@@ -2612,15 +2663,19 @@ internal sealed partial class SessionWindow : Window
     {
         var text = _composer.Text ?? "";
         _highlightLayer.Inlines?.Clear();
-        foreach (var tok in ComposerHighlighter.Tokenize(text, IsKnownCommand))
+        foreach (var tok in ComposerHighlighter.Tokenize(text, IsKnownCommand, IsSkillCommand))
         {
             var run = new Run(text.Substring(tok.Start, tok.Length));
             switch (tok.Kind)
             {
+                // Colour and decoration only, never weight or size: the caret and selection are laid out by the
+                // box's own (transparent, regular-weight) text, so a wider bold run would pull them off the glyphs.
                 case InputTokenKind.Command:
-                    run.Foreground = _p.Brand; run.FontWeight = FontWeight.SemiBold; break;
+                    run.Foreground = _p.Brand; break;
                 case InputTokenKind.Link:
                     run.Foreground = _p.Violet; run.TextDecorations = TextDecorations.Underline; break;
+                case InputTokenKind.Image:
+                    run.Foreground = _p.Code; break;
                 default:
                     run.Foreground = _p.Text; break;
             }
@@ -2635,24 +2690,30 @@ internal sealed partial class SessionWindow : Window
         if (SlashCommandCatalog.IsInternal(name)) return false;
         return SlashCommandCatalog.IsBuiltIn(name)
             || Conv.SlashCommands.Any(c => string.Equals(c.TrimStart('/'), name, StringComparison.OrdinalIgnoreCase))
-            || _skillCommands.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            || IsSkillCommand(name);
     }
+
+    // Mid-prompt, only a skill counts as a command (a built-in runs only as the whole message).
+    private bool IsSkillCommand(string name) =>
+        _skillCommands.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
 
     // ── Command palette ────────────────────────────────────────────────────────────
 
-    // Opens/updates the palette while the composer holds a lone slash-command token: a leading "/" (which on
-    // its own lists every command, alphabetically), then the name being typed. Closes once the user adds a
-    // space (they're onto arguments) or the text stops starting with "/". Only meaningful while running.
+    // Opens/updates the palette while the caret sits in a slash token: a "/" (which on its own lists every
+    // command, alphabetically), then the name being typed. At the start of the message that's every built-in and
+    // skill; later in the prompt (after a space) only skills, since a built-in runs only as the whole message.
+    // Closes once the caret leaves the token (a space: they're onto arguments). Only meaningful while running.
     private void UpdatePaletteFromText()
     {
-        var t = (_composer.Text ?? "").TrimStart();
-        bool typingCommand = t.StartsWith('/') && !t.Contains(' ') && !t.Contains('\n');
-        if (!CanCompose || !typingCommand)
+        if (!CanCompose || SlashCommandCatalog.ActiveToken(_composer.Text, _composer.CaretIndex) is not { } tok)
         {
             ClosePalette();
             return;
         }
-        _paletteItems = SlashCommandCatalog.Search(t[1..], _skillCommands);   // "" on a bare "/" → all commands
+        (_paletteStart, _paletteEnd, _paletteLeading) = (tok.Start, tok.End, tok.Leading);
+        _paletteItems = tok.Leading
+            ? SlashCommandCatalog.Search(tok.Query, _skillCommands)   // "" on a bare "/" → all commands
+            : SlashCommandCatalog.SearchSkills(tok.Query, _skillCommands);
         if (_paletteItems.Count == 0) { ClosePalette(); return; }
         _paletteIndex = Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1);
         RenderPalette();
@@ -2663,6 +2724,7 @@ internal sealed partial class SessionWindow : Window
     {
         _palettePopup.IsOpen = false;
         _paletteIndex = 0;
+        _paletteStart = _paletteEnd = -1;
     }
 
     private bool PaletteOpen => _palettePopup.IsOpen;
@@ -2729,25 +2791,44 @@ internal sealed partial class SessionWindow : Window
     // those opens the pill rather than sending text that would fight the echo-guard. Otherwise: a no-arg
     // command with run:true sends immediately; anything with arguments is completed into the composer (with a
     // trailing space) so the user can add them, then Enter sends. Tab always just completes (run:false).
+    // Only the slash token is replaced, so the rest of the draft (text after it, image markers) survives. A
+    // mid-prompt token (a skill) never runs or routes natively — it just completes in place.
     private void AcceptPalette(bool run)
     {
-        if (_paletteItems.Count == 0) { ClosePalette(); return; }
+        if (_paletteItems.Count == 0 || _paletteStart < 0) { ClosePalette(); return; }
         var cmd = _paletteItems[Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1)];
+        var text = _composer.Text ?? "";
+        int start = _paletteStart, end = Math.Min(_paletteEnd, text.Length);
+        bool leading = _paletteLeading;
         ClosePalette();
+        if (start > end) return;
+        var before = text[..start];
+        var after = text[end..];
 
-        // A native command opens its Perch surface (pill, Settings, Claude Desktop) rather than being sent.
-        if (RunNativeCommand(cmd.Name)) { _composer.Text = ""; return; }
-
-        if (run && !cmd.TakesArgs)
+        if (leading)
         {
-            _composer.Text = "/" + cmd.Name;
-            SendPrompt();
-            return;
+            // A native command opens its Perch surface (pill, Settings, Claude Desktop) rather than being sent.
+            if (RunNativeCommand(cmd.Name))
+            {
+                var rest = (before + after.TrimStart()).Trim();
+                _composer.Text = rest;
+                _composer.CaretIndex = rest.Length;
+                return;
+            }
+            if (run && !cmd.TakesArgs && string.IsNullOrWhiteSpace(after))
+            {
+                _composer.Text = before + "/" + cmd.Name;
+                SendPrompt();
+                return;
+            }
         }
 
-        var text = "/" + cmd.Name + (cmd.TakesArgs ? " " : "");
-        _composer.Text = text;
-        _composer.CaretIndex = text.Length;
+        // Complete in place. A trailing space when the user will type arguments (or carry on the sentence, for a
+        // mid-prompt skill), unless one already follows.
+        bool space = (cmd.TakesArgs || !leading) && (after.Length == 0 || !char.IsWhiteSpace(after[0]));
+        var insert = "/" + cmd.Name + (space ? " " : "");
+        _composer.Text = before + insert + after;
+        _composer.CaretIndex = start + insert.Length;
         _composer.Focus();
     }
 
@@ -3586,6 +3667,11 @@ internal sealed partial class SessionWindow : Window
         if (e.Key == Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control))
             _ = TryPasteImageAsync();
 
+        // Backspace/Delete into an "[Image #N]" marker takes the whole marker (and so the image) rather than one
+        // character of it; the box's own key handling then deletes the selected marker.
+        if (e.Key is Key.Back or Key.Delete)
+            _composer.TrySelectImageMarker(backward: e.Key == Key.Back);
+
         // While the command palette is open it owns the arrow/Tab/Enter keys: navigate, complete, or run.
         if (PaletteOpen)
         {
@@ -3833,6 +3919,10 @@ internal sealed partial class SessionWindow : Window
         Dispatcher.UIThread.RunJobs();
         SyncHighlightLayer();
     }
+
+    /// <summary>HeadlessRenderer: enable and focus the composer so simulated keystrokes land in it (and the caret
+    /// shows in the capture).</summary>
+    internal void FocusComposerForRender() { _composeForRender = true; _composer.IsEnabled = true; _composer.Focus(); }
 
     /// <summary>HeadlessRenderer: seed a fixed usage reading and open the /usage overlay for a capture.</summary>
     internal void ShowUsageOverlayForRender(UsageInfo info)

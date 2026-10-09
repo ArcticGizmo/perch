@@ -50,12 +50,12 @@ internal sealed class AttachmentChip : Border
         };
         var name = new TextBlock
         {
-            Text = _a.DisplayName, FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Muted,
+            Text = _a.ChipLabel, FontFamily = _p.Mono, FontSize = 11.5, Foreground = _a.Marker is null ? _p.Muted : _p.Code,
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 160, Margin = new Thickness(9, 0, 11, 0),
+            MaxWidth = 200, Margin = new Thickness(9, 0, 11, 0),
         };
         var row = new StackPanel { Orientation = Orientation.Horizontal, Children = { thumbHost, name } };
-        ToolTip.SetTip(this, "Click to open");
+        ToolTip.SetTip(this, _a.Pasted ? "Pasted image  ·  click to open" : _a.DisplayName + "  ·  click to open");
         LoadThumbnail(thumbHost);
         return row;
     }

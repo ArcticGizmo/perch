@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.18] - 2026-10-09
+
+- Typing `/` no longer makes your draft vanish (it was shy)
+- Skills autocomplete mid-prompt, not just at the start
+- Picking a command keeps the rest of your draft
+- Pasted images leave an `[Image #N]` marker, like the terminal
+- Deleting a marker removes its image, and vice versa
+- Backspace takes a marker whole, not one bracket at a time
+- Caret stays at the end of slash commands
+
+---
+
 ## [v0.5.17] - 2026-10-09
 
 - GitHub dashboard redesigned as cards, with more room to breathe

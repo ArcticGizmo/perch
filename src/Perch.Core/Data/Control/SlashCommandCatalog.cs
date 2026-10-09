@@ -118,22 +118,40 @@ internal static class SlashCommandCatalog
         string query, IReadOnlyList<SlashCommandInfo> skills, int limit = 8)
     {
         var builtIns = Search(query, limit);
-        if (skills.Count == 0) return builtIns;
+        return skills.Count == 0 ? builtIns : builtIns.Concat(SearchSkills(query, skills, limit)).ToList();
+    }
 
+    /// <summary>Just the <paramref name="skills"/> group of <see cref="Search(string,IReadOnlyList{SlashCommandInfo},int)"/>:
+    /// every skill alphabetically on a blank query, else the fuzzy-ranked matches capped to <paramref name="limit"/>.
+    /// The palette offers only these mid-prompt, since a built-in runs only as the whole message.</summary>
+    public static IReadOnlyList<SlashCommandInfo> SearchSkills(
+        string query, IReadOnlyList<SlashCommandInfo> skills, int limit = 8)
+    {
         query = query.Trim();
-        IEnumerable<SlashCommandInfo> skillMatches;
         if (query.Length == 0)
-        {
-            skillMatches = skills.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase);
-        }
-        else
-        {
-            var byName = skills
-                .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-            skillMatches = FuzzyMatch.Rank(query, byName.Keys.ToList(), limit).Select(r => byName[r.Path]);
-        }
-        return builtIns.Concat(skillMatches).ToList();
+            return skills.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var byName = skills
+            .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        return FuzzyMatch.Rank(query, byName.Keys.ToList(), limit).Select(r => byName[r.Path]).ToList();
+    }
+
+    /// <summary>The slash token being typed at <paramref name="caret"/>, or null: a <c>/</c> that opens the text
+    /// or follows whitespace, with no whitespace between it and the caret. <c>Start</c> is the <c>/</c>'s index,
+    /// <c>End</c> the end of the whole token (it may run past the caret), <c>Query</c> what's typed between the
+    /// <c>/</c> and the caret, and <c>Leading</c> whether only whitespace precedes it (so it would be the
+    /// message's command). A second <c>/</c> in the token means a path (<c>/usr/bin</c>), not a command.</summary>
+    public static (int Start, int End, string Query, bool Leading)? ActiveToken(string? text, int caret)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        caret = Math.Clamp(caret, 0, text.Length);
+        int start = caret;
+        while (start > 0 && !char.IsWhiteSpace(text[start - 1])) start--;
+        if (start == caret || text[start] != '/') return null;   // caret not inside a token, or not a slash one
+        int end = caret;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        if (text.IndexOf('/', start + 1, end - start - 1) >= 0) return null;
+        return (start, end, text[(start + 1)..caret], string.IsNullOrWhiteSpace(text[..start]));
     }
 
     /// <summary>Turns discovered <see cref="SkillInfo"/>s into palette rows — <see
