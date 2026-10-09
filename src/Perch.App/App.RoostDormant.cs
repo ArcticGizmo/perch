@@ -26,6 +26,8 @@ public partial class App
     // than dropping: it may be about to come back dormant.
     private bool _roostDormantReady;
     private HashSet<string> _roostLiveIds = new(StringComparer.Ordinal);
+    // Conversations a /clear replaced in a still-running process: kept out of Recent (and so the dormant panes).
+    private readonly ClearedSessions _cleared = new();
 
     // A session that just left the scan may still be writing its exit flush (cost-state): read it a few seconds later,
     // or a clean exit would read as interrupted.
@@ -47,10 +49,12 @@ public partial class App
         var dismissed = new Dictionary<string, DateTime>(_appSettings?.RecentDismissed ?? [], StringComparer.Ordinal);
         var shutdowns = _ledger?.ShutdownsSnapshot() ?? [];
         var parkedIds = _parked.Select(r => r.SessionId).ToList();
+        var cleared = _cleared.Snapshot();
         Task.Run(() =>
         {
             var entries = SessionHistory.ListAll(active);
-            var rows = _recentBuilder.Build(entries, held, dismissed, shutdowns, DateTime.Now);
+            var rows = _recentBuilder.Build(entries, held, dismissed, shutdowns, DateTime.Now)
+                .Where(r => !cleared.Contains(r.Entry.SessionId)).ToList();
             var byId = new Dictionary<string, HistoryEntry>(StringComparer.Ordinal);
             foreach (var e in entries) byId.TryAdd(e.SessionId, e);
             var rowsById = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
@@ -101,9 +105,11 @@ public partial class App
         else PushRecentLines();
     }
 
-    // After each fold: a session that left the scan may now be a Recent row.
+    // After each fold: a session that left the scan may now be a Recent row — unless a /clear replaced it in a process
+    // that's still running.
     private void NoteRoostLiveSet(IReadOnlyList<ClaudeSession> sessions)
     {
+        _cleared.Update(sessions);
         var ids = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
         if (_roostLiveIds.Any(id => !ids.Contains(id))) RefreshRecentAfterEnd();
         _roostLiveIds = ids;
