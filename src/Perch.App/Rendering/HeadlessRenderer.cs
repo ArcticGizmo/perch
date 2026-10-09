@@ -2788,6 +2788,9 @@ internal static class HeadlessRenderer
             showPreview: true);
         Capture("pr_session_existing_worktree_1x.png", mine, new CheckoutMatch(web, [web]), context: ownBranch);
         Capture("pr_session_not_found_1x.png", Item(5), CheckoutMatch.None, template: "free");
+        // A review of a fork's PR: a separate clone is the default, and Diff only is offered (it's a review).
+        var fork = Item(418) with { Pr = Item(418).Pr with { IsCrossRepository = true, HeadBranch = "patch-1" } };
+        Capture("pr_session_fork_review_1x.png", fork, new CheckoutMatch(web, [web]), context: ownBranch);
 
         void Capture(string file, GhPrItem item, CheckoutMatch match, IReadOnlyList<string>? accounts = null,
             bool showPreview = false, string? template = null, PrWorktreeContext? context = null)

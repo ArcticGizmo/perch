@@ -194,6 +194,24 @@ to Claude Code's own `.claude/worktrees/pr-{number}`.
 
 Each is a commit, with tests passing and render probes updated where there's UI.
 
+**Status (2026-10-09):** W1–W5 built and committed on `github-dashboard`. The real app has never run any of them,
+including a real clone or worktree fetch. W6–W10 are still to do.
+
+Decisions made while building W2–W5:
+
+- **W2:** the main checkout is accepted as the repo's root only if its `.git` leads back to the same shared git
+  folder, so a submodule never counts as a worktree of its parent.
+- **W4:**
+  - `.perch-worktrees` worktrees from earlier launches are reused, found by their `perch/pr-<n>` branch.
+  - The worktree option describes its folder relative to the checkout ("acme-api-pr-77 beside your checkout").
+- **W5:**
+  - A *Where* option that needs the user's checkout (new worktree, checkout as it is) is hidden when none was
+    found. A separate clone needs no checkout, so a PR can be started for a repo the user has never cloned.
+  - Diff only is greyed out unless the task is read-only.
+  - For a clone or diff-only, the account rules are checked against the user's checkout of the repo, not Perch's
+    data folder.
+  - The prompt says what the folder holds: `Compose` takes the `PrWorkspace`.
+
 - **W1, PR head info.** Add `headRefName`, `baseRefName`, `headRepository { nameWithOwner }`, `isCrossRepository`
   to the GraphQL fragment. `GhPullRequest` gets `HeadBranch`, `BaseBranch`, `HeadRepo`, `IsCrossRepository`.
   Parser tests. (The query still hasn't been run against live GitHub; these are standard fields.)

@@ -62,8 +62,9 @@ internal sealed class PrSessionWindow : Window
     private readonly DockPanel _folderPath;
     private readonly ComboBox _folderChoices;
     private readonly Button _changeFolder;
-    private readonly RadioButton _inExisting, _inWorktree, _inCheckout;
-    private readonly TextBlock _existingTitle, _existingDesc, _worktreeDesc, _checkoutDesc;
+    private readonly RadioButton _inExisting, _inWorktree, _inClone, _inDiffOnly, _inCheckout;
+    private readonly TextBlock _existingTitle, _existingDesc, _worktreeDesc, _cloneDesc, _diffOnlyDesc, _checkoutDesc;
+    private bool _whereTouched;                   // the user picked a Where; stop moving the default under them
     private PrWorktreeContext? _context;          // the chosen checkout's worktrees + layout, read off the UI thread
     private string? _existingPath;                // a worktree already on the PR's head branch, when there is one
     private readonly Grid _accountRow;
@@ -197,13 +198,19 @@ internal sealed class PrSessionWindow : Window
         _existingTitle = (TextBlock)((StackPanel)((Grid)_inExisting.Content!).Children[0]).Children[0];
         _inExisting.IsVisible = false;
         _inWorktree = OptionRow("where", "New worktree for this PR", "", "Recommended", out _worktreeDesc);
+        _inClone = OptionRow("where", "Separate clone", "", "Recommended", out _cloneDesc);   // badge shown when default
+        _inDiffOnly = OptionRow("where", "Diff only, no code", "", "Reviews", out _diffOnlyDesc);
         _inCheckout = OptionRow("where", "Your checkout as it is", "", null, out _checkoutDesc);
         _inWorktree.IsChecked = true;
-        _inWorktree.IsCheckedChanged += (_, _) => UpdatePreview();
-        _inExisting.IsCheckedChanged += (_, _) => UpdatePreview();
+        foreach (var rb in new[] { _inExisting, _inWorktree, _inClone, _inDiffOnly, _inCheckout })
+        {
+            rb.IsCheckedChanged += (_, _) => { UpdatePreview(); UpdateStartEnabled(); };
+            rb.Click += (_, _) => _whereTouched = true;
+        }
         var whereOptions = new StackPanel
         {
-            Spacing = 2, Margin = new Thickness(0, 8, 0, 0), Children = { _inExisting, _inWorktree, _inCheckout },
+            Spacing = 2, Margin = new Thickness(0, 8, 0, 0),
+            Children = { _inExisting, _inWorktree, _inClone, _inDiffOnly, _inCheckout },
         };
 
         _accountBox = new ComboBox { FontSize = 12, MinWidth = 260 };
@@ -302,7 +309,17 @@ internal sealed class PrSessionWindow : Window
         return new GitRepoRef("github.com", parts[0], parts.Length > 1 ? parts[1] : parts[0]);
     }
 
-    private string? WorktreeBranch => _inWorktree.IsChecked == true ? $"perch/pr-{_item.Pr.Number}" : null;
+    // The checked Where option.
+    private PrWorkspace SelectedWhere =>
+        _inExisting.IsChecked == true ? PrWorkspace.ExistingWorktree
+        : _inClone.IsChecked == true ? PrWorkspace.Clone
+        : _inDiffOnly.IsChecked == true ? PrWorkspace.DiffOnly
+        : _inCheckout.IsChecked == true ? PrWorkspace.Checkout
+        : PrWorkspace.Worktree;
+
+    // The local branch a checkout made for the PR is on (worktree or clone); null for the others.
+    private string? LocalBranch => SelectedWhere is PrWorkspace.Worktree or PrWorkspace.Clone
+        ? PrWorktree.BranchFor(_item.Pr.Number) : null;
 
     private void PickTemplate(PrPromptTemplate t)
     {
@@ -310,23 +327,53 @@ internal sealed class PrSessionWindow : Window
         int i = _templates.ToList().IndexOf(t);
         if (i >= 0 && i < _templateRows.Count && _templateRows[i].IsChecked != true) _templateRows[i].IsChecked = true;
         _task.Text = _taskEdits.TryGetValue(t.Id, out var edited) ? edited : PrSessionPrompts.Fill(t.Task, _item.Pr);
+        UpdateDiffOnly();
         UpdatePreview();
         UpdateStartEnabled();
+    }
+
+    // Diff only has nothing local to change, so it's offered for read-only (review) tasks only.
+    private void UpdateDiffOnly()
+    {
+        bool review = _template.Mode == PrSessionMode.Plan;
+        _inDiffOnly.IsEnabled = review;
+        _inDiffOnly.Opacity = review ? 1 : 0.5;     // the row's text sets its own colours, so dim it explicitly
+        _diffOnlyDesc.Text = review
+            ? "Nothing is fetched; Claude reads the PR's diff and files through gh. Quickest way to review."
+            : "Only for reviews: there's no code here to change.";
+        if (!review && _inDiffOnly.IsChecked == true) PickDefaultWhere(force: true);
     }
 
     private void UpdatePreview()
     {
         _previewToggle.Content = _previewBox.IsVisible ? "Hide the full prompt" : "Show the full prompt Perch will send";
         if (_previewBox.IsVisible)
-            _preview.Text = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, WorktreeBranch);
+            _preview.Text = PrSessionPrompts.Compose(_task.Text ?? "", _template.Mode, _item.Pr, SelectedWhere, LocalBranch);
     }
 
+    // Worktree and checkout need the user's checkout; the existing worktree, a clone and diff-only don't.
+    private bool NeedsFolder => SelectedWhere is PrWorkspace.Worktree or PrWorkspace.Checkout;
+
     private void UpdateStartEnabled() =>
-        _start.IsEnabled = !_busy && _folder is not null && !string.IsNullOrWhiteSpace(_task.Text);
+        _start.IsEnabled = !_busy && (!NeedsFolder || _folder is not null) && !string.IsNullOrWhiteSpace(_task.Text);
+
+    // The default Where (until the user picks one): the PR's own branch if it's checked out; a separate clone for a
+    // fork's PR (its code shares nothing with your repo) or when there's no checkout; else a new worktree.
+    private void PickDefaultWhere(bool force = false)
+    {
+        if (_whereTouched && !force) return;
+        var pick = _existingPath is not null ? _inExisting
+            : _item.Pr.IsCrossRepository || _folder is null || !_inWorktree.IsVisible ? _inClone
+            : _inWorktree;
+        pick.IsChecked = true;
+        // "Recommended" sits on whichever option is the default.
+        foreach (var rb in new[] { _inWorktree, _inClone })
+            if (((Grid)rb.Content!).Children.OfType<Border>().FirstOrDefault() is { } badge) badge.IsVisible = rb == pick;
+    }
 
     // The "where" choices, spelled out for this PR and checkout: the PR's own branch already checked out somewhere
     // (same-repo PRs only — a fork's branch name means nothing locally), a new worktree where the user's worktrees
-    // go, or the checkout as it is (not offered for a bare repo, whose root isn't a working tree).
+    // go, a separate clone, diff only, or the checkout as it is (not for a bare repo, whose root isn't a working tree).
     private void UpdateWhereText(PrWorktreeContext? ctx)
     {
         _context = ctx;
@@ -335,7 +382,6 @@ internal sealed class PrSessionWindow : Window
 
         _existingPath = ctx is not null && !pr.IsCrossRepository && pr.HeadBranch.Length > 0
             ? ctx.Set.PathOfBranch(pr.HeadBranch) : null;
-        bool hadExisting = _inExisting.IsVisible;
         _inExisting.IsVisible = _existingPath is not null;
         if (_existingPath is { } existing && ctx is not null)
         {
@@ -345,12 +391,19 @@ internal sealed class PrSessionWindow : Window
             _existingDesc.Text = isRoot
                 ? "The PR's own branch is checked out there. Changes land in your working copy, ready to push."
                 : $"{Near(existing, ctx.Set.Root)}. The PR's own branch, so changes are ready to push.";
-            if (!hadExisting) _inExisting.IsChecked = true;      // the natural place for your own PR
         }
-        else if (_inExisting.IsChecked == true) _inWorktree.IsChecked = true;
-        // "Recommended" belongs to whichever option is the default: the PR's own worktree beats a new one.
-        if (((Grid)_inWorktree.Content!).Children.OfType<Border>().FirstOrDefault() is { } badge)
-            badge.IsVisible = _existingPath is null;
+
+        _inWorktree.IsVisible = _folder is not null;
+        _inCheckout.IsVisible = _folder is not null && ctx is not { Set.Bare: true };
+        _cloneDesc.Text = $"A fresh copy of {_repo.Slug} in Perch's data folder, on branch {PrWorktree.BranchFor(n)}. "
+            + (pr.IsCrossRepository ? "Shares nothing with your repos: the safe choice for a PR from a fork."
+               : "Shares nothing with your repos.");
+        UpdateDiffOnly();
+        // A hidden option can't stay chosen.
+        if (new[] { _inExisting, _inWorktree, _inCheckout }.Any(rb => !rb.IsVisible && rb.IsChecked == true))
+            PickDefaultWhere(force: true);
+        else
+            PickDefaultWhere();
 
         var plan = ctx is null ? null : PrWorktree.PlanFor(ctx, n);
         string where = ctx is null || plan is null ? $"pr-{n}"
@@ -364,13 +417,12 @@ internal sealed class PrSessionWindow : Window
             };
         _worktreeDesc.Text = $"Checks out the PR on branch {PrWorktree.BranchFor(n)} in {where}. Your own working copy isn't touched.";
 
-        _inCheckout.IsVisible = ctx is not { Set.Bare: true };
-        if (!_inCheckout.IsVisible && _inCheckout.IsChecked == true) _inWorktree.IsChecked = true;
         var branch = ctx?.Set.MainBranch;
         _checkoutDesc.Text = branch is { Length: > 0 }
             ? $"Works in the folder on {branch}, its current branch, not the PR's. Changes land in your working copy."
             : "Works in the folder on whatever is checked out there, not the PR's branch. Changes land in your working copy.";
         UpdatePreview();
+        UpdateStartEnabled();
     }
 
     // A worktree path said relative to the checkout, so it fits a line: ".claude\worktrees\pr-12 inside your checkout",
@@ -429,7 +481,8 @@ internal sealed class PrSessionWindow : Window
         _folderName.Foreground = Muted;
         _folderDir.Text = $"no Claude project folder has a remote for {_repo.Slug}";
         _changeFolder.Content = "Choose…";
-        SetStatus("Choose the folder it's checked out in.", error: false);
+        SetStatus("It'll use a separate clone, or choose the folder it's checked out in.", error: false);
+        UpdateWhereText(null);
     }
 
     private void ShowFolderPath(bool path)
@@ -488,7 +541,11 @@ internal sealed class PrSessionWindow : Window
         SetFolder(found.Root, found.Remote is null
             ? $"No remote there points at {_repo.Slug}, so a worktree can't fetch the PR. Use the checkout as it is, or pick another folder."
             : null);
-        if (found.Remote is null) _inCheckout.IsChecked = true;
+        if (found.Remote is null)
+        {
+            _inCheckout.IsChecked = true;
+            _whereTouched = true;
+        }
     }
 
     // The accounts this folder may use (the same rules and guardrails as the session launcher), off the UI thread.
@@ -509,36 +566,53 @@ internal sealed class PrSessionWindow : Window
 
     private async Task StartAsync()
     {
-        if (_busy || _folder is not { } root || string.IsNullOrWhiteSpace(_task.Text)) return;
-        bool useWorktree = _inWorktree.IsChecked == true;
-        var existing = _inExisting.IsChecked == true ? _existingPath : null;
-        var prompt = PrSessionPrompts.Compose(_task.Text, _template.Mode, _item.Pr, WorktreeBranch);
-        SetBusy(true, useWorktree ? "Preparing the worktree…" : "Starting…");
+        var where = SelectedWhere;
+        if (_busy || string.IsNullOrWhiteSpace(_task.Text) || (NeedsFolder && _folder is null)) return;
+        var root = _folder;
+        var existing = _existingPath;
+        var prompt = PrSessionPrompts.Compose(_task.Text, _template.Mode, _item.Pr, where, LocalBranch);
+        SetBusy(true, where switch
+        {
+            PrWorkspace.Worktree => "Preparing the worktree…",
+            PrWorkspace.Clone => "Cloning… (a big repo can take a few minutes)",
+            _ => "Starting…",
+        });
 
         var repo = _repo;
         int number = _item.Pr.Number;
-        var wt = existing is not null ? new PrWorktreeResult(existing, true, null)
-            : useWorktree ? await Task.Run(() => PrWorktree.Ensure(root, repo, number))
-            : new PrWorktreeResult(root, true, null);
+        var wt = where switch
+        {
+            PrWorkspace.ExistingWorktree when existing is not null => new PrWorktreeResult(existing, true, null),
+            PrWorkspace.Worktree => await Task.Run(() => PrWorktree.Ensure(root!, repo, number)),
+            PrWorkspace.Clone => await Task.Run(() => PrClone.Ensure(repo, number)),
+            PrWorkspace.DiffOnly => await Task.Run(() => PrScratch.Ensure(repo, number)),
+            PrWorkspace.Checkout => new PrWorktreeResult(root, true, null),
+            _ => new PrWorktreeResult(null, false, "Pick where the session should work."),
+        };
         if (!IsVisible) return;
         if (wt.Path is not { } cwd)
         {
             SetBusy(false, wt.Error ?? "Couldn't prepare the folder.");
             return;
         }
-        _remember(repo.Slug, root);
+        if (root is not null) _remember(repo.Slug, root);
 
-        // The account for the folder the session will actually run in (a guardrail can differ for the worktree).
+        // The account: the guardrails for where the session runs — except a clone or scratch folder, which live in
+        // Perch's data folder, take the rules of the user's checkout for that repo (or none).
         string? pickKey = _accountBox.SelectedIndex >= 0 && _accountBox.SelectedIndex < _accountOptions.Count
             ? _accountOptions[_accountBox.SelectedIndex].Key : null;
+        var guardFolder = where is PrWorkspace.Clone or PrWorkspace.DiffOnly ? root : cwd;
+        bool grantScratch = where == PrWorkspace.DiffOnly;
         var rules = _rules();
         var (configDir, trusted, error) = await Task.Run(() =>
         {
-            var set = SessionAccountChoice.Resolve(cwd, SessionWindow.ReadSignIns(), rules);
+            var set = SessionAccountChoice.Resolve(guardFolder, SessionWindow.ReadSignIns(), rules);
             if (set.GuardrailUnsatisfiable)
                 return ((string?)null, false, (string?)"No signed-in account satisfies the account rule for this folder.");
             var choice = set.Options.FirstOrDefault(o => o.Key == pickKey) ?? set.Default;
             var dir = set.InjectRootFor(choice);
+            // The scratch folder is Perch's own and holds no code, so it's trusted without asking.
+            if (grantScratch && !DirectoryTrust.Evaluate(dir, cwd)) DirectoryTrust.Grant(dir, cwd);
             return (dir, DirectoryTrust.Evaluate(dir, cwd), (string?)null);
         });
         if (!IsVisible) return;

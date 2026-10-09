@@ -67,16 +67,23 @@ public static class PrSessionPrompts
     }
 
     /// <summary>
-    /// The prompt the session is sent: which PR this is (and, in a worktree, which branch is checked out), the
-    /// user's <paramref name="task"/> with its placeholders filled, then the rules for the mode — never push or post,
-    /// and in plan mode don't change files — and the untrusted-text guard.
+    /// The prompt the session is sent: which PR this is and what the folder holds (<paramref name="where"/>: a
+    /// checkout made for it on <paramref name="localBranch"/>, the PR's own branch, the user's unrelated checkout, or
+    /// no code at all), the user's <paramref name="task"/> with its placeholders filled, then the rules for the mode —
+    /// never push or post, and in plan mode don't change files — and the untrusted-text guard.
     /// </summary>
-    public static string Compose(string task, PrSessionMode mode, GhPullRequest pr, string? worktreeBranch)
+    public static string Compose(string task, PrSessionMode mode, GhPullRequest pr, PrWorkspace where, string? localBranch)
     {
-        var intro = $"This is about pull request {{pr}} ({{url}}); `gh pr view {{number}} --repo {{repo}}` shows it."
-            + (worktreeBranch is { Length: > 0 }
-                ? $" You're in a worktree made for it, with the PR's head checked out on local branch `{worktreeBranch}`."
-                : "");
+        var intro = $"This is about pull request {{pr}} ({{url}}); `gh pr view {{number}} --repo {{repo}}` shows it. " + where switch
+        {
+            PrWorkspace.Worktree or PrWorkspace.Clone when localBranch is { Length: > 0 } =>
+                $"You're in a checkout made for it, with the PR's head on local branch `{localBranch}`.",
+            PrWorkspace.ExistingWorktree => "You're in a checkout with the PR's own branch checked out.",
+            PrWorkspace.DiffOnly =>
+                "There's no checkout of the code here: read the change with `gh pr diff {number} --repo {repo}` and any "
+                + "other file with `gh api repos/{repo}/contents/<path>?ref=refs/pull/{number}/head`.",
+            _ => "The PR's branch isn't checked out here; `gh pr diff {number} --repo {repo}` shows its change.",
+        };
         var rules = mode == PrSessionMode.Plan
             ? "Don't change any files and don't post anything to GitHub."
             : "Commit locally; don't push and don't post anything to GitHub.";
