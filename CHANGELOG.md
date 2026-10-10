@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.21] - 2026-10-10
+
+- `/clear` no longer leaves the old conversation lurking beside the new one
+- Session account chip shows the session's own account, asleep or awake
+- `/usage` shows the session's account, not whichever was default
+
+---
+
 ## [v0.5.20] - 2026-10-09
 
 - `/reload-skills` and `/reload-plugins` in session windows
