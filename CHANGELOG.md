@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.22] - 2026-10-10
+
+- Session ⋯ menu opens the project folder in Explorer (or Finder)
+- …or in a terminal, for when the GUI has had its turn
+
+---
+
 ## [v0.5.21] - 2026-10-10
 
 - `/clear` no longer leaves the old conversation lurking beside the new one

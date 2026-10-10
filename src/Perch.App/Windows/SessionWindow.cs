@@ -312,6 +312,10 @@ internal sealed partial class SessionWindow : Window
     /// reflects the current rules. Null/absent = no guardrails.</summary>
     public Func<IReadOnlyList<AccountRule>?>? AccountRulesProvider { get; set; }
 
+    /// <summary>The user's preferred terminal (<see cref="AppSettings.ReopenTerminal"/>) for "Open in terminal",
+    /// read live from the app. Null/absent = Auto.</summary>
+    public Func<TerminalApp>? TerminalProvider { get; set; }
+
     /// <summary>The user wants a launcher for another session (the app opens a fresh window).</summary>
     public event Action? NewSessionRequested;
 
@@ -3681,10 +3685,24 @@ internal sealed partial class SessionWindow : Window
             try { if (SessionId is { } id && Clipboard is { } clip) await clip.SetTextAsync($"claude --resume {id}"); }
             catch { }
         };
+        var folder = new MenuItem
+        {
+            Header = OperatingSystem.IsMacOS() ? "Open project folder in Finder" : "Open project folder in Explorer",
+            IsEnabled = Directory.Exists(_cwd),
+        };
+        folder.Click += (_, _) => PlatformServices.FileRevealer.RevealInFileManager(_cwd);
+        var terminal = new MenuItem { Header = "Open project folder in a terminal", IsEnabled = folder.IsEnabled };
+        terminal.Click += (_, _) =>
+        {
+            if (!PlatformServices.SessionLauncher.OpenTerminal(_cwd, TerminalProvider?.Invoke() ?? TerminalApp.Auto))
+                Conv.AddNote("couldn't open a terminal", NoteKind.Error);
+        };
         var fresh = new MenuItem { Header = "New session in another folder…" };
         fresh.Click += (_, _) => NewSessionRequested?.Invoke();
         flyout.Items.Add(handBack);
         flyout.Items.Add(copy);
+        flyout.Items.Add(folder);
+        flyout.Items.Add(terminal);
         flyout.Items.Add(new Separator());
         flyout.Items.Add(fresh);
         flyout.ShowAt(_moreButton);

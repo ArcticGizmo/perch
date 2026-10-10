@@ -5,7 +5,7 @@ namespace Perch.Platform.Mac;
 
 /// <summary>
 /// macOS <see cref="IFileRevealer"/>. <see cref="RevealInFileManager"/> reveals the file in Finder
-/// (<c>open -R</c>); <see cref="OpenInEditor"/> launches VS Code via the <c>code</c> CLI, falling back to
+/// (<c>open -R</c>; a directory is opened directly); <see cref="OpenInEditor"/> launches VS Code via the <c>code</c> CLI, falling back to
 /// <c>open</c> (the default handler) when VS Code isn't installed. Best-effort; never throws.
 /// </summary>
 public sealed class FileRevealer : IFileRevealer
@@ -19,7 +19,8 @@ public sealed class FileRevealer : IFileRevealer
         try
         {
             var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
-            psi.ArgumentList.Add("-R");
+            // A directory opens directly (`open <dir>` shows it in Finder); `-R` would select it in its parent.
+            if (!Directory.Exists(path)) psi.ArgumentList.Add("-R");
             psi.ArgumentList.Add(path);
             Process.Start(psi);
         }

@@ -70,6 +70,26 @@ public sealed class SessionLauncher : ISessionLauncher
 
     private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
 
+    public bool OpenTerminal(string cwd, TerminalApp terminal)
+    {
+        if (string.IsNullOrWhiteSpace(cwd) || !Directory.Exists(cwd)) return false;
+        if (TryStart(ShellStartInfo(terminal, cwd))) return true;
+        return terminal != TerminalApp.CommandPrompt && TryStart(ShellStartInfo(TerminalApp.CommandPrompt, cwd));
+    }
+
+    // A bare shell in cwd — the hosts are absolute paths for the same reason as StartInfo's.
+    private static ProcessStartInfo ShellStartInfo(TerminalApp terminal, string cwd) => terminal switch
+    {
+        TerminalApp.PowerShell =>
+            new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"))
+                { UseShellExecute = true, WorkingDirectory = cwd },
+        TerminalApp.CommandPrompt =>
+            new ProcessStartInfo(ExecutableResolver.SystemTool("cmd.exe")) { UseShellExecute = true, WorkingDirectory = cwd },
+        _ => // WindowsTerminal, and Auto → Windows Terminal's default profile (falling back to Command Prompt)
+            new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"), $"-d {ClaudeCli.WindowsTerminalStartDir(cwd)}")
+                { UseShellExecute = true },
+    };
+
     // Claude Desktop ships as an MSIX-packaged (Store) app, so its exe lives under the ACL-protected,
     // version-stamped C:\Program Files\WindowsApps\... — you can't launch it by path. The supported way is
     // to activate it by AppUserModelID, which is stable across version bumps (the family name's publisher
