@@ -352,6 +352,13 @@ internal sealed partial class SessionWindow : Window
     /// overlay falls back to <see cref="UsageInfo.Empty"/> when unset.</summary>
     public Func<UsageInfo>? UsageProvider { get; set; }
 
+    /// <summary>The config dir of the account the viewed session runs under, or for a dormant one the account its wake
+    /// will resume under (null = the primary). What the account chip shows and <c>/usage</c> reads.</summary>
+    public string? AccountConfigDir => _session is { IsDormant: false } s ? s.ConfigDir : _dormantAccountDir;
+
+    // A dormant session's resume account, as the account chip last resolved it.
+    private string? _dormantAccountDir;
+
     /// <summary>Forces a fresh usage fetch (the tray's <see cref="UsageMonitorHost.RefreshAsync"/>), so the
     /// <c>/usage</c> overlay can show current numbers on open and on the Refresh button — independent of the
     /// 5-minute poll and of whether the overlay's usage strip is even enabled.</summary>
@@ -1618,6 +1625,7 @@ internal sealed partial class SessionWindow : Window
         if (!ReferenceEquals(session, _session)) return;
         ApplyRunState();
         RefreshBar();
+        RefreshAccountChipAsync();   // it now runs under the account it woke with
     }
 
     private void OnSessionEnded(PerchSession session)
@@ -3570,29 +3578,36 @@ internal sealed partial class SessionWindow : Window
         return set.InjectRootFor(SelectedChoice(set, _accountPicked, _accountPickKey));
     }
 
-    // Reads the running session's account off the UI thread and paints the footer chip. Only shown on
+    // Reads the session's account off the UI thread and paints the footer chip: the running session's, or for a dormant
+    // one the account its wake will resume under (it has no process, so no account of its own yet). Only shown on
     // multi-account machines (otherwise it's redundant); a generation guard drops a stale load.
     private void RefreshAccountChipAsync()
     {
         int gen = ++_accountChipGen;
+        _dormantAccountDir = null;
         if (!ClaudeConfigSet.Instance.IsMulti) { _accountChip.IsVisible = false; return; }
         var root = _session?.ConfigDir;   // null = inherited → primary account
+        var dormantId = _session is { IsDormant: true } d ? d.SessionId : null;
+        var cwd = _cwd;
         Task.Run(() =>
         {
+            if (dormantId is not null) root = TranscriptLocator.ResumeConfigRoot(dormantId, cwd);   // as LaunchConfigDir
             var dir = (root is { Length: > 0 } r ? ClaudeConfigSet.Instance.ForRoot(r) : null)
                       ?? ClaudeConfigSet.Instance.Primary;
             var signIn = ClaudeJsonReader.ReadSignIn(dir);
-            return new AccountChoice(dir, signIn.Org, signIn.Email);
+            return (Root: root, Choice: new AccountChoice(dir, signIn.Org, signIn.Email));
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (_closed || gen != _accountChipGen) return;
             if (!t.IsCompletedSuccessfully) { _accountChip.IsVisible = false; return; }
-            var choice = t.Result;
+            var (resolvedRoot, choice) = t.Result;
+            if (dormantId is not null) _dormantAccountDir = resolvedRoot;
             _accountChipText.Text = choice.Label;
             var email = choice.Org?.AccountEmail ?? choice.Email;
+            var verb = dormantId is not null ? "Resumes under account" : "Running under account";
             _accountChip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(email)
-                ? $"Running under account: {choice.Label}"
-                : $"Running under account: {choice.Label} · {email}";
+                ? $"{verb}: {choice.Label}"
+                : $"{verb}: {choice.Label} · {email}";
             _accountChip.IsVisible = true;
         }));
     }
