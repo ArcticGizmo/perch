@@ -33,6 +33,14 @@ public interface ISessionLauncher
     bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null);
 
     /// <summary>
+    /// Opens a plain interactive terminal in <paramref name="cwd"/> (no command run) with the user's preferred
+    /// <paramref name="terminal"/>, falling back to a plain console like <see cref="Reopen"/>. Returns true if a
+    /// terminal was launched; false when none could be (a missing folder, or the platform doesn't implement this
+    /// yet). Best-effort; never throws.
+    /// </summary>
+    bool OpenTerminal(string cwd, TerminalApp terminal);
+
+    /// <summary>
     /// Launches (or re-activates) the Claude Desktop app — the host of a <c>claude-desktop</c> session that
     /// isn't showing a window. Activating an already-running instance simply brings its window forward, so
     /// this doubles as "un-hide the app closed to the tray". Returns true when the launch was issued, false

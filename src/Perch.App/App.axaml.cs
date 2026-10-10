@@ -2241,6 +2241,7 @@ public partial class App : Application
             DormantRequested = OpenDormantPerchSession,
             // Live account guardrails so the launcher's account selector reflects the current rules.
             AccountRulesProvider = () => _appSettings?.AccountRules,
+            TerminalProvider = () => _appSettings?.ReopenTerminal ?? TerminalApp.Auto,
         };
         // The context readout mirrors the floating overlay's context-pressure thresholds so the two read alike
         // (same thermometer glyph, same colour at the same fill).
