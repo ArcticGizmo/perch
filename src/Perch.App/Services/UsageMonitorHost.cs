@@ -53,18 +53,23 @@ internal sealed class UsageMonitorHost : IDisposable
     public UsageInfo LastPrimaryUsage => Last.Count > 0 ? Last[0].Usage : UsageInfo.Empty;
 
     /// <summary>The reading for the account <paramref name="configRoot"/> is signed into (null = the primary): its own
-    /// dir's row, else the row of a dir signed into the same org (dirs sharing an account are polled once), else the
-    /// primary's. For a session window, which shows the account its session runs under.</summary>
+    /// dir's row, else the row of a dir signed into the same account (dirs sharing one are polled once, keyed as
+    /// <see cref="UsageDirSelection.AccountKey"/>). Empty when there's no reading for that account. Never another
+    /// account's: the <c>/usage</c> card doesn't name the account, so a fallback would pass one off as the other. For
+    /// a session window, which shows the account its session runs under.</summary>
     public UsageInfo UsageFor(string? configRoot)
     {
-        if (string.IsNullOrEmpty(configRoot) || ClaudeConfigSet.Instance.ForRoot(configRoot) is not { } dir)
-            return LastPrimaryUsage;
+        if (string.IsNullOrEmpty(configRoot)) return LastPrimaryUsage;
+        if (ClaudeConfigSet.Instance.ForRoot(configRoot) is not { } dir) return UsageInfo.Empty;
         foreach (var row in Last)
             if (ClaudeConfigDir.PathComparer.Equals(row.Dir.RealRoot, dir.RealRoot)) return row.Usage;
-        if (_orgs.GetLive(dir)?.Uuid is { Length: > 0 } org)
+        if (_orgs.GetLive(dir) is { } org)
+        {
+            var key = UsageDirSelection.AccountKey(org);
             foreach (var row in Last)
-                if (row.Org?.Uuid == org) return row.Usage;
-        return LastPrimaryUsage;
+                if (row.Org is { } o && UsageDirSelection.AccountKey(o) == key) return row.Usage;
+        }
+        return UsageInfo.Empty;
     }
 
     /// <summary>Raised on the UI thread after every poll, so additional listeners (the Settings usage bars)

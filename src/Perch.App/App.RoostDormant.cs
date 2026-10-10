@@ -106,12 +106,13 @@ public partial class App
     }
 
     // After each fold: a session that left the scan may now be a Recent row — unless a /clear replaced it in a process
-    // that's still running.
+    // that's still running. A mark can lift a scan or two after the process left (it's only forgotten once it's gone),
+    // so a change to the cleared set rebuilds too.
     private void NoteRoostLiveSet(IReadOnlyList<ClaudeSession> sessions)
     {
-        _cleared.Update(sessions);
+        bool clearedChanged = _cleared.Update(sessions, Clock.Now);
         var ids = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
-        if (_roostLiveIds.Any(id => !ids.Contains(id))) RefreshRecentAfterEnd();
+        if (clearedChanged || _roostLiveIds.Any(id => !ids.Contains(id))) RefreshRecentAfterEnd();
         _roostLiveIds = ids;
     }
 
