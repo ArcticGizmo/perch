@@ -24,25 +24,26 @@ internal sealed class UsageMonitor
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
-    // Reads the OAuth access token to authenticate the poll. A source rather than a fixed credential store,
-    // so one org's usage is polled with that org's token: the primary dir goes through IClaudeCredentials
-    // (file on Windows/Linux, Keychain on macOS), a non-primary dir reads its own .credentials.json file.
-    private readonly Func<string?> _readToken;
+    // Reads the raw credentials blob: the access token authenticates the poll, and its expiry clocks ride along on
+    // the reading (UsageInfo.Auth). A source rather than a fixed credential store, so one org's usage is polled
+    // with that org's token: the primary dir goes through IClaudeCredentials (file on Windows/Linux, Keychain on
+    // macOS), a non-primary dir reads its own .credentials.json file.
+    private readonly Func<string?> _readCredentials;
 
     // The most recent successful reading, so a failed fetch can still surface last-known values.
     private UsageInfo _last = UsageInfo.Empty;
 
-    public UsageMonitor(Func<string?> readToken) => _readToken = readToken;
+    public UsageMonitor(Func<string?> readCredentials) => _readCredentials = readCredentials;
 
-    /// <summary>The primary-account monitor: token from the OS credential store behind
+    /// <summary>The primary-account monitor: credentials from the OS credential store behind
     /// <see cref="IClaudeCredentials"/>.</summary>
     public static UsageMonitor ForPrimary(IClaudeCredentials credentials) =>
-        new(() => TokenFromJson(credentials.ReadCredentialsJson()));
+        new(credentials.ReadCredentialsJson);
 
-    /// <summary>A per-dir monitor: token from that config dir's own <c>.credentials.json</c> file. On macOS the
-    /// token lives in the per-user Keychain rather than this file, so a non-primary dir may resolve none.</summary>
+    /// <summary>A per-dir monitor: credentials from that config dir's own <c>.credentials.json</c> file. On macOS
+    /// the token lives in the per-user Keychain rather than this file, so a non-primary dir may resolve none.</summary>
     public static UsageMonitor ForConfigDir(ClaudeConfigDir dir) =>
-        new(() => TokenFromJson(ReadFile(dir.CredentialsFile)));
+        new(() => ReadFile(dir.CredentialsFile));
 
     /// <summary>Extracts <c>claudeAiOauth.accessToken</c> from a credentials blob; null if absent/unparseable.</summary>
     internal static string? TokenFromJson(string? json)
@@ -59,7 +60,7 @@ internal sealed class UsageMonitor
         }
     }
 
-    private static string? ReadFile(string path)
+    internal static string? ReadFile(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
@@ -81,11 +82,16 @@ internal sealed class UsageMonitor
     /// </summary>
     public async Task<UsageInfo> FetchAsync()
     {
+        // The sign-in clocks come from the blob, not the endpoint, so every outcome below carries the fresh pair.
+        var auth = AuthExpiry.None;
+        UsageInfo Fail(string reason) => FailWithLast(reason) with { Auth = auth };
         try
         {
             // The credential and CLI-version reads are file IO (and on macOS a keychain call), and the host
             // awaits this from the UI thread, so they run on the pool rather than before the first await (CP23).
-            var (token, cliVersion) = await Task.Run(() => (_readToken(), ReadCliVersion())).ConfigureAwait(false);
+            var (json, cliVersion) = await Task.Run(() => (_readCredentials(), ReadCliVersion())).ConfigureAwait(false);
+            auth = AuthExpiry.FromJson(json);
+            var token = TokenFromJson(json);
             if (string.IsNullOrEmpty(token))
                 return Fail("Couldn't read Claude credentials — sign in to Claude Code");
 
@@ -106,7 +112,7 @@ internal sealed class UsageMonitor
             if (root is null)
                 return Fail("Couldn't parse usage response");
 
-            _last = Parse(root);
+            _last = Parse(root) with { Auth = auth };
             return _last;
         }
         catch (Exception ex)
@@ -117,7 +123,7 @@ internal sealed class UsageMonitor
 
     // Re-tags the last good reading as failed (keeping its percentages for a dimmed display),
     // or returns an empty failed reading if we never succeeded.
-    private UsageInfo Fail(string reason) => _last.Ok
+    private UsageInfo FailWithLast(string reason) => _last.Ok
         ? _last with { Ok = false, Error = reason }
         : UsageInfo.Empty with { Error = reason };
 

@@ -94,6 +94,13 @@ internal sealed record UsageInfo(
     /// </summary>
     public ExtraUsageInfo? ExtraUsage { get; init; }
 
+    /// <summary>
+    /// The account's sign-in clocks (access-token and refresh-token expiry), read from the same credentials blob
+    /// the poll authenticates with — so they're current even when the usage fetch itself failed. <see
+    /// cref="AuthExpiry.None"/> before the first poll or when the blob carries neither.
+    /// </summary>
+    public AuthExpiry Auth { get; init; } = AuthExpiry.None;
+
     // Past this age a successful reading is considered stale (we poll every 5 minutes,
     // so anything older than 6 means at least one poll was missed or failed).
     private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(6);

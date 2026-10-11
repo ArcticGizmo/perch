@@ -16,7 +16,13 @@ internal sealed class OverlayTooltip : Window
 {
     /// <param name="Emoji">Optional colour-emoji glyph drawn before <paramref name="Text"/> using the platform
     /// emoji face (so it renders in colour, not a monochrome outline). Null for a plain text line.</param>
-    public readonly record struct Line(string Text, Color Color, bool Bold, string? Emoji = null);
+    public readonly record struct Line(string Text, Color Color, bool Bold, string? Emoji = null, bool IsDivider = false)
+    {
+        /// <summary>A hairline rule across the panel, splitting the lines above from those below.</summary>
+        public static Line Divider { get; } = new("", BorderColor, false, IsDivider: true);
+    }
+
+    private const double DividerH = 7;   // a divider line's slot: the rule, centred, with breathing room either side
 
     private static readonly Color BgColor     = Color.FromRgb(20, 20, 28);
     private static readonly Color BorderColor = Color.FromRgb(60, 60, 80);
@@ -48,9 +54,11 @@ internal sealed class OverlayTooltip : Window
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
-        // No Alt+Tab entry and never take activation (a hint must not steal focus from the terminal).
+        // No Alt+Tab entry, never take activation (a hint must not steal focus from the terminal), and click-through:
+        // when there's no room beside the overlay the hint opens over it, under the cursor, and a window that took the
+        // pointer would fire the overlay's PointerExited — hiding the hint, which re-arms on the next move, forever.
         if (TryGetPlatformHandle() is { } handle)
-            PlatformServices.WindowChrome.MakeToolWindowNoActivate(handle.Handle);
+            PlatformServices.WindowChrome.MakeClickThroughNoActivate(handle.Handle);
     }
 
     /// <summary>Shows a single line anchored with its top-left at <paramref name="anchor"/> (screen px).</summary>
@@ -59,8 +67,10 @@ internal sealed class OverlayTooltip : Window
 
     /// <summary>Shows the given styled lines, clamped onto the anchor point's screen working area. With
     /// <paramref name="placeLeft"/>, the panel's right edge sits at the anchor (used for the usage panel
-    /// so it opens to the left of the overlay rather than covering it).</summary>
-    public void ShowLines(IReadOnlyList<Line> lines, PixelPoint anchor, bool placeLeft = false)
+    /// so it opens to the left of the overlay rather than covering it); when that side of the screen is too
+    /// narrow it opens past <paramref name="rightEdge"/> (the overlay's right edge, screen px) instead, and only
+    /// when neither side fits does the clamp let it overlap the overlay.</summary>
+    public void ShowLines(IReadOnlyList<Line> lines, PixelPoint anchor, bool placeLeft = false, int? rightEdge = null)
     {
         _body.Lines = lines;
         _body.InvalidateMeasure();
@@ -68,19 +78,23 @@ internal sealed class OverlayTooltip : Window
         _body.Measure(Size.Infinity);
         var size = _body.DesiredSize;
 
-        double scale = (this.Screens?.ScreenFromPoint(anchor)?.Scaling) ?? 1.0;
+        var screen = this.Screens?.ScreenFromPoint(anchor);
+        double scale = screen?.Scaling ?? 1.0;
         int w = (int)Math.Ceiling(size.Width * scale);
         int h = (int)Math.Ceiling(size.Height * scale);
+        var area = screen?.WorkingArea;
 
-        int x = placeLeft ? anchor.X - w - 6 : anchor.X;
+        const int Gap = 6, Margin = 2;
+        int x = placeLeft ? anchor.X - w - Gap : anchor.X;
         int y = anchor.Y;
-        if (placeLeft && x < 0) x = anchor.X + 6; // no room on the left — fall back to the right
+        if (placeLeft && area is { } work && x < work.X + Margin
+            && rightEdge is { } re && re + Gap + w <= work.Right - Margin)
+            x = re + Gap;   // no room on the left — open past the overlay's right edge instead
 
-        var area = this.Screens?.ScreenFromPoint(anchor)?.WorkingArea;
         if (area is { } wa)
         {
-            x = Math.Clamp(x, wa.X + 2, wa.X + wa.Width  - w - 2);
-            y = Math.Clamp(y, wa.Y + 2, wa.Y + wa.Height - h - 2);
+            x = Math.Clamp(x, wa.X + Margin, wa.X + wa.Width  - w - Margin);
+            y = Math.Clamp(y, wa.Y + Margin, wa.Y + wa.Height - h - Margin);
         }
         Position = new PixelPoint(x, y);
         Show();
@@ -120,6 +134,7 @@ internal sealed class OverlayTooltip : Window
             double w = 0, h = VertPad * 2;
             foreach (var l in _lines)
             {
+                if (l.IsDivider) { h += DividerH + LineGap; continue; }
                 var ft = Ft(l);
                 w = Math.Max(w, EmojiLead(l) + ft.Width);
                 h += ft.Height + LineGap;
@@ -137,18 +152,25 @@ internal sealed class OverlayTooltip : Window
             // Vertically centre the whole text block within our arranged height (rather than anchoring to
             // the top), so the lines stay centred even if the borderless window is rounded up a pixel or
             // two taller than the content by DPI scaling.
-            var fts = new FormattedText[_lines.Count];
+            var fts = new FormattedText?[_lines.Count];
             double contentH = 0;
             for (int i = 0; i < _lines.Count; i++)
             {
-                fts[i] = Ft(_lines[i]);
-                contentH += fts[i].Height + (i > 0 ? LineGap : 0);
+                fts[i] = _lines[i].IsDivider ? null : Ft(_lines[i]);
+                contentH += (fts[i]?.Height ?? DividerH) + (i > 0 ? LineGap : 0);
             }
 
             double y = Math.Max(VertPad, (Bounds.Height - contentH) / 2);
             for (int i = 0; i < _lines.Count; i++)
             {
-                var ft = fts[i];
+                if (fts[i] is not { } ft)
+                {
+                    double ry = Math.Round(y + DividerH / 2) + 0.5;   // pixel-snapped so the hairline stays crisp
+                    ctx.DrawLine(new Pen(new SolidColorBrush(_lines[i].Color), 1), new Point(HorizPad, ry),
+                        new Point(Bounds.Width - HorizPad, ry));
+                    y += DividerH + LineGap;
+                    continue;
+                }
                 double tx = HorizPad;
                 // A colour-emoji prefix, drawn through OverlayDraw.Emoji so it lands in colour (not a
                 // monochrome outline), vertically centred on the text line.
