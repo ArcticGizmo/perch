@@ -171,7 +171,14 @@ else
 fi
 
 sync
-hdiutil detach "$dev" >/dev/null 2>&1 || hdiutil detach "$vol" >/dev/null 2>&1 || true
+# Finder/Spotlight can still hold the volume just after the window closes, so a single detach fails with
+# "resource busy" - and converting a still-attached image dies with "Resource temporarily unavailable".
+# Retry, force on the last attempt, and never convert while it's mounted.
+for i in 1 2 3 4 5; do
+    hdiutil detach "$dev" >/dev/null 2>&1 && break
+    if [ "$i" -eq 5 ]; then hdiutil detach "$dev" -force && break; exit 1; fi
+    sleep 2
+done
 hdiutil convert "$rw" -format UDZO -imagekey zlib-level=9 -ov -o "$dmg" >/dev/null
 
 echo
