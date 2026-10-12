@@ -1,13 +1,13 @@
 ---
 name: release-next-version
-description: Ship the current branch as the next Perch release. Opens (or reuses) a PR for the current branch, waits for the PR checks, stops and reports a FAIL if any check fails, otherwise squash-merges it, then tags the new main head with the csproj version (vX.Y.Z) and pushes the tag, which kicks off the Release workflow. Use when the user says "release next version", "release this", "/release-next-version", or wants to merge the current branch and cut the tagged release.
+description: Ship the current branch as the next Perch release. Opens (or reuses) a PR for the current branch, waits for the PR checks, stops and reports a FAIL if any check fails, otherwise squash-merges it, then tags the new main head with the csproj version (vX.Y.Z) and pushes the tag, which kicks off the Release workflow — and watches that workflow until the GitHub Release is published or the build fails. Use when the user says "release next version", "release this", "/release-next-version", or wants to merge the current branch and cut the tagged release.
 ---
 
 # Release Next Version
 
-Takes the current branch from "done" to "tagged release": PR → green checks → squash-merge → tag the
-new `main` head → push the tag. Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds
-and publishes the GitHub Release.
+Takes the current branch from "done" to "published release": PR → green checks → squash-merge → tag the
+new `main` head → push the tag → watch the Release workflow to completion. Pushing a `v*` tag triggers
+`.github/workflows/release.yml`, which builds and publishes the GitHub Release.
 
 Invoking this skill is the user's go-ahead for the outward-facing steps (pushing the branch, opening the
 PR, merging, pushing the tag). Anything *not* listed here (force-pushes, bypassing checks, deleting
@@ -21,6 +21,11 @@ branches, re-tagging) is out of scope — stop and ask.
   `src/Perch.App/Perch.App.csproj` (the release build takes its version from the tag).
 - CI (`ci.yml`) runs on pull requests only, and is skipped by `paths-ignore` when a PR only touches
   root `*.md`, `docs/**`, `captures/**` or `backend/**` — so a PR can legitimately have **no checks**.
+- The Release workflow (`release.yml`) has three jobs: `build-windows` and `build-macos` run in parallel,
+  then `release` (`needs` both) is the **only** job that creates the GitHub Release. A failed build means
+  no Release is published at all — never a half-populated one. A tag-triggered run's `headBranch` is the
+  tag name (e.g. `v0.5.23`). The jobs set no `timeout-minutes`, so GitHub's 6-hour default applies; a
+  healthy run takes roughly 10–20 minutes.
 - Use the Bash tool (Git Bash) for the snippets below.
 
 ## Steps
@@ -141,24 +146,78 @@ git tag "v$VERSION" "$MAIN_HEAD"
 git push origin "v$VERSION"
 ```
 
-(Lightweight tag, matching the existing ones.) Then grab the Release run it triggered — it can take a
-few seconds to appear:
+(Lightweight tag, matching the existing ones.) Then find the Release run the tag triggered, filtering on
+the tag so a stale or concurrent run can't be picked up. It can take a few seconds to register:
 
 ```bash
-gh run list --workflow release.yml --limit 1 --json status,url,headBranch
+RUN=""
+for i in $(seq 1 24); do
+  RUN=$(gh run list --workflow release.yml --branch "v$VERSION" --event push --limit 1 --json databaseId -q '.[0].databaseId')
+  [ -n "$RUN" ] && break
+  sleep 5
+done
+echo "RUN=$RUN"
+[ -n "$RUN" ] && gh run view "$RUN" --json url -q .url
 ```
 
-Don't wait for the release build to finish unless the user asks.
+If `RUN` is still empty after ~2 minutes, stop and report: the tag is pushed but no Release run started
+(check the Actions tab — the workflow may be disabled). Don't re-push or re-tag.
 
-### 6. Report back
+### 6. Watch the Release workflow
+
+A healthy run takes 10–20 minutes, so run the watch with the Bash tool's `run_in_background: true` and a
+timeout of 60 minutes (`3600000` ms), then wait for the completion notification — don't poll. The watch
+output is redirected because `gh run watch` redraws the whole job table every interval; the summary after
+it is what you read:
+
+```bash
+RUN=<id>
+gh run watch "$RUN" --exit-status --interval 30 > /dev/null 2>&1
+echo "RESULT=EXIT_$?"
+gh run view "$RUN" --json status,conclusion,url,jobs \
+  -q '"run: " + .status + " " + (.conclusion // "-") + "  " + .url, (.jobs[] | "  " + .name + ": " + .status + " " + (.conclusion // "-"))'
+```
+
+Then branch on the result:
+
+- **`EXIT_0`** — the run succeeded. Confirm the Release really exists with the assets the install path
+  depends on:
+
+  ```bash
+  gh release view "v$VERSION" --json url,isDraft,assets \
+    -q '.url, ("draft: " + (.isDraft|tostring)), (.assets[] | "  " + .name)'
+  ```
+
+  `Perch-win-Setup.exe` and `SHA256SUMS.txt` must both be listed (`install.ps1` resolves the first and
+  verifies it against the second). If either is missing, or the Release is a draft, report it as a
+  problem — the run went green but the one-liner installer can't use this release.
+- **Any other exit** — a job failed or was cancelled. **Stop: this is a RELEASE BUILD FAILURE.** The tag is
+  pushed but, because `release` needs both builds, **no GitHub Release was published**. Gather the evidence:
+
+  ```bash
+  gh run view "$RUN" --log-failed | tail -80
+  ```
+
+  Report back headed **`RELEASE BUILD FAILED — v$VERSION tagged, no Release published`**, with the run URL,
+  which job/step failed, and the relevant tail of the failed log. Don't re-run, re-tag, delete the tag or
+  push a fix on your own — say that the usual recovery once the cause is understood is
+  `gh run rerun "$RUN" --failed` (a flaky runner) or a fix plus a new patch version (a real break), and
+  let the user choose.
+- **The background task timed out** (no `RESULT` line after 60 minutes) — the run is still going or stuck.
+  Report the run URL and the current job statuses (the `gh run view` line above), and don't wait further
+  unless asked.
+
+### 7. Report back
 
 Print, plainly:
 
 - **`Released v$VERSION`**
 - The PR URL (merged) and the squash commit SHA that was tagged.
-- The Release workflow run URL (and that it's in progress).
+- The Release workflow run URL and its outcome (all three jobs green).
+- The GitHub Release URL and confirmation that `Perch-win-Setup.exe` and `SHA256SUMS.txt` are attached.
 - That local `main` is checked out and up to date, and the local branch `$BRANCH` still exists (the
   remote one was auto-deleted).
 
-On any stop in steps 1–5, report exactly which step stopped, why, and what state things were left in
-(e.g. "PR #57 open, not merged, no tag").
+On any stop in steps 1–6, report exactly which step stopped, why, and what state things were left in
+(e.g. "PR #57 open, not merged, no tag", or "PR #57 merged, v0.5.18 tagged, Release build failed on
+build-macos — no Release published").
