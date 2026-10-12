@@ -2366,6 +2366,7 @@ internal static class HeadlessRenderer
 
         RenderStreaming(outDir, cwd);
         RenderLongThread(outDir, cwd);
+        RenderStickyHeaders(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
             string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null,
@@ -2641,6 +2642,67 @@ internal static class HeadlessRenderer
         }
 
         static string Built(SessionThreadView t) => $"{t.BuiltItems.Built}/{t.BuiltItems.Total} items";
+    }
+
+    // Sticky card headers (docs/sticky-card-headers-plan.md): the thread scrolled into the middle of a long Write diff
+    // (one pinned row, dark and light), and into a Read card inside an opened fold (the fold's row with the card's under
+    // it).
+    private static void RenderStickyHeaders(string outDir, string cwd)
+    {
+        var content = string.Join("\\n", Enumerable.Range(1, 120).Select(i => $"    public static int Step{i}(int x) => x * {i};"));
+        var read = string.Join("\n", Enumerable.Range(1, 40).Select(i => $"{i,6}\t    var line{i} = Compute(screen, {i});"));
+        foreach (var (dark, suffix) in new[] { (true, ""), (false, "_light") })
+        {
+            var p = SessionPalette.For(dark);
+            var conv = new Perch.Data.Control.SessionConversation();
+            conv.AddUserPrompt("Generate the step table and check the placement maths.");
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("g1", "Grep", "Searching PlacementMath", "{\"pattern\":\"PlacementMath\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("g1", "6 files", false));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("r1", "Read", "Reading PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("r1", read, false));
+            conv.Apply(new Perch.Data.Control.AssistantTextEvent("The table is mechanical, so I'll write it in one go."));
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("w1", "Write", "Writing src/Perch.Core/Data/StepTable.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/StepTable.cs\",\"content\":\"" + content + "\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("w1", "File created successfully.", false));
+            conv.Apply(new Perch.Data.Control.AssistantTextEvent("Done: 120 steps, one per line."));
+            conv.Apply(new Perch.Data.Control.TurnResultEvent(false, "success", 0.02, InputTokens: 1000, OutputTokens: 400, DurationMs: 9000));
+
+            var thread = new SessionThreadView(p) { Cwd = cwd };
+            var w = new Window { Width = 880, Height = 760, Background = p.Surface, Content = thread };
+            thread.Bind(conv);
+            w.Show();
+            Settle(w);
+
+            if (thread.ScrollIntoToolForRender("Write", 900)) Capture(w, $"session_thread_sticky{suffix}_1x.png");
+            if (dark)
+            {
+                thread.ExpandAllForRender();
+                Settle(w);
+                if (thread.ScrollIntoToolForRender("Read", 160)) Capture(w, "session_thread_sticky_nested_1x.png");
+            }
+            thread.Unbind();
+            w.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        void Capture(Window win, string file)
+        {
+            Settle(win);
+            if (win.CaptureRenderedFrame() is not { } frame) return;
+            using var fs = File.Create(Path.Combine(outDir, file));
+            frame.Save(fs);
+        }
+
+        static void Settle(Window win)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                win.UpdateLayout();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+        }
     }
 
     // A long agentic session: each turn a prompt, a thought, a folded Grep+Read, prose, an edit with its diff, a

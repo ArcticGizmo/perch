@@ -29,10 +29,11 @@ namespace Perch.Avalonia.Views;
 /// it finalises; a tool card flips its status in place). Sticks to the bottom while the user hasn't
 /// scrolled away. Visual tokens all come from <see cref="SessionPalette"/>.
 /// </summary>
-internal sealed class SessionThreadView : ScrollViewer
+internal sealed partial class SessionThreadView : ScrollViewer
 {
     private readonly SessionPalette _p;
     private readonly StackPanel _stack;
+    private readonly Panel _content;           // the scrolled content: the column plus the layers drawn over it
     private readonly Canvas _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
     private readonly BlockSelection _selection; // drag-select across blocks (a heading and its paragraph, list items, messages)
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
@@ -187,6 +188,8 @@ internal sealed class SessionThreadView : ScrollViewer
         // to its group so a status flip can refresh the summary.
         public ToolGroup? OpenGroup;
         public readonly Dictionary<ToolCallPart, ToolGroup> Groups = new();
+        // Every collapsible card in the item (cards, folds, thoughts), for the sticky header strip.
+        public readonly List<Sticky> Stickies = new();
     }
 
     /// <summary>The Roost pane density: a tighter column that fills the pane (no reading-width cap), and every
@@ -219,7 +222,8 @@ internal sealed class SessionThreadView : ScrollViewer
         // cross-block selection lets a drag run across blocks and messages. It only starts on text, so presses on
         // cards, buttons and empty space behave as before.
         _selection = new BlockSelection(this, _p.Selection, startInGaps: false) { Root = _stack };
-        Content = new Panel { Children = { _stack, _highlightLayer, _selection.Layer } };
+        // The sticky card headers float topmost, over the selection wash too (see SessionThreadView.Sticky.cs).
+        Content = _content = new Panel { Children = { _stack, _highlightLayer, _selection.Layer, _stickyLayer } };
 
         // Follow the tail only while the user is at (or near) the bottom; scrolling up pins the view. Only a
         // change the *user* made (offset moved, extent unchanged) re-evaluates — content growing pushes the
@@ -228,13 +232,18 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             RecomputeScrollState();   // keep the floating jump buttons in sync with every scroll/growth
             QueueRealize();           // build what scrolled near, drop what scrolled far
+            UpdateSticky();           // pin (or move, or drop) the header of the tall card the viewport is inside
             // A reflow (extent changed — expand/collapse, streaming) moves match rectangles; repaint them.
             if (e.ExtentDelta.Y != 0) { if (_matches.Count > 0) RefreshHighlightLayer(); return; }
             if (e.OffsetDelta.Y == 0) return;
             _stickToBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
         };
         // A width change reflows text (wraps differently) → recompute match rectangles.
-        SizeChanged += (_, _) => { if (_matches.Count > 0) RefreshHighlightLayer(); };
+        SizeChanged += (_, _) =>
+        {
+            if (_matches.Count > 0) RefreshHighlightLayer();
+            UpdateSticky();
+        };
 
         // The working indicator (built once, added/removed from the column as turns come and go).
         _activityLabel = new TextBlock
@@ -313,6 +322,7 @@ internal sealed class SessionThreadView : ScrollViewer
         _highlightLayer.Children.Clear();
         _compactions.Clear();
         _selection.Reset();
+        ClearSticky();
     }
 
     // History landed in front of the live items: rebuild the whole column (cheap — a few hundred controls).
@@ -355,6 +365,7 @@ internal sealed class SessionThreadView : ScrollViewer
         _pendingSync.Clear();
         foreach (var item in items) UpdateItem(item);
         UpdateActivity();   // a tool flipping status (or a new part) changes what the indicator says
+        UpdateSticky(relabel: true);   // ...and what a pinned card's header says
         if (_stickToBottom) ScrollToEndSoon();
     }
 
@@ -1048,8 +1059,11 @@ internal sealed class SessionThreadView : ScrollViewer
                 {
                     group = new ToolGroup(_p, new GroupKey(tp), _expandState);
                     view.OpenGroup = group;
+                    view.Stickies.Add(group.Sticky);
                     body.Children.Add(group.Root);
                 }
+                card.Sticky.Parent = group.Sticky;
+                view.Stickies.Add(card.Sticky);
                 group.Add(tp, card);
                 view.Groups[tp] = group;
                 view.Parts[part] = card.Root;   // marks the part seen; the card lives inside the group's body
@@ -1064,13 +1078,15 @@ internal sealed class SessionThreadView : ScrollViewer
                     c = t.IsStreaming ? StreamingText(t) : Prose(t.Text);
                     break;
                 case ThinkingPart th:
-                    c = BuildThinking(th);
+                    c = BuildThinking(th, out var thought);
+                    view.Stickies.Add(thought);
                     break;
                 case ToolCallPart tool:
                     var card = new ToolCard(_p, tool, Cwd,
                         path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), _expandState, Compact,
                         BgHooks);
                     view.Tools[tool] = card;
+                    view.Stickies.Add(card.Sticky);
                     c = card.Root;
                     break;
                 default:
@@ -1317,7 +1333,7 @@ internal sealed class SessionThreadView : ScrollViewer
     }
 
     // Collapsible thinking disclosure: a one-line summary, the full thought on click.
-    private Control BuildThinking(ThinkingPart th)
+    private Control BuildThinking(ThinkingPart th, out Sticky sticky)
     {
         bool open = _expandState.TryGetValue(th, out var o) && o;   // survives a rebuild
         var chevron = new TextBlock { Text = open ? "▾" : "▸", Foreground = _p.Faint, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
@@ -1347,19 +1363,29 @@ internal sealed class SessionThreadView : ScrollViewer
                 FontFamily = _p.Body, TextWrapping = TextWrapping.Wrap, LineHeight = 13.5 * 1.6,
             },
         };
+        void SetOpen(bool show)
+        {
+            bodyText.IsVisible = show;
+            _expandState[th] = show;
+            chevron.Text = show ? "▾" : "▸";
+        }
         header.PointerReleased += (_, e) =>
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
-            bodyText.IsVisible = !bodyText.IsVisible;
-            _expandState[th] = bodyText.IsVisible;
-            chevron.Text = bodyText.IsVisible ? "▾" : "▸";
+            SetOpen(!bodyText.IsVisible);
         };
-        return new Border
+        var card = new Border
         {
             BorderBrush = _p.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11),
             Background = _p.Surface, Margin = new Thickness(0, 0, 0, 14),
             Child = new StackPanel { Children = { header, bodyText } },
         };
+        sticky = new Sticky
+        {
+            Card = card, IsOpen = () => bodyText.IsVisible, Collapse = () => SetOpen(false), Glyph = "",
+            Label = () => new StickyLabel("", "Thought · " + Gist(th.Text), ObjectMono: false),
+        };
+        return card;
     }
 
     // ── Tool card ────────────────────────────────────────────────────────────────
@@ -1409,6 +1435,9 @@ internal sealed class SessionThreadView : ScrollViewer
 
         public Border Root { get; }
 
+        /// <summary>The card as the sticky header strip pins it: open while its detail shows.</summary>
+        public Sticky Sticky { get; }
+
         public ToolCard(SessionPalette p, ToolCallPart part, string cwd,
             Action<string> openFile, Action<string> viewDiff, Dictionary<object, bool> expandState, bool compact = false,
             BackgroundHooks? bg = null)
@@ -1439,7 +1468,8 @@ internal sealed class SessionThreadView : ScrollViewer
             // opens a Markdown file in the viewer; right-click offers view/diff/reveal/editor) instead of a plain
             // inline run. Everything else keeps the two-run inline summary.
             Control summary;
-            if (FilePathOf(part, cwd) is { } filePath)
+            var filePath = FilePathOf(part, cwd);
+            if (filePath is not null)
             {
                 var name = new TextBlock
                 {
@@ -1517,6 +1547,13 @@ internal sealed class SessionThreadView : ScrollViewer
                 Background = p.Surface, ClipToBounds = true, Margin = new Thickness(0, 0, 0, 12),
                 Child = new StackPanel { Children = { _headerBorder, _out } },
             };
+            string stickyObj = filePath is not null && obj.Length == 0 ? PathLeaf.Of(filePath) : obj;
+            Sticky = new Sticky
+            {
+                Card = Root, IsOpen = () => _expanded && _expandable, Collapse = Collapse, Glyph = Glyph(part.ToolName),
+                Label = () => new StickyLabel(verb, stickyObj, ObjectIsPath: filePath is not null,
+                    Status: _status.Text, StatusBrush: _status.Foreground),
+            };
             if (_bg is not null)
             {
                 Root.AttachedToVisualTree += (_, _) => SyncBackgroundTimer();
@@ -1531,6 +1568,15 @@ internal sealed class SessionThreadView : ScrollViewer
             if (_expanded) return;
             _expanded = true;
             _expandState[_part] = true;
+            Update(_part);
+        }
+
+        /// <summary>Closes the card's detail, remembering it like a click would.</summary>
+        public void Collapse()
+        {
+            if (!_expanded) return;
+            _expanded = false;
+            _expandState[_part] = false;
             Update(_part);
         }
 
@@ -1942,6 +1988,8 @@ internal sealed class SessionThreadView : ScrollViewer
         private readonly TextBlock _label;
         private readonly StackPanel _body;   // the folded tool cards, hidden until expanded
         private readonly List<ToolCallPart> _parts = new();
+        private readonly GroupKey _key;
+        private readonly Dictionary<object, bool> _expandState;
         private bool _expanded;
 
         public Border Root { get; }
@@ -1969,19 +2017,34 @@ internal sealed class SessionThreadView : ScrollViewer
                 },
             };
             _body = new StackPanel { IsVisible = _expanded, Margin = new Thickness(0, 4, 0, 0) };
+            _key = key;
+            _expandState = expandState;
             header.PointerReleased += (_, e) =>
             {
                 if (e.InitialPressMouseButton != MouseButton.Left) return;
-                _expanded = !_expanded;
-                expandState[key] = _expanded;
-                _body.IsVisible = _expanded;
-                _chevron.Text = _expanded ? "▾" : "▸";
+                SetExpanded(!_expanded);
             };
             Root = new Border
             {
                 Margin = new Thickness(0, 0, 0, 12),
                 Child = new StackPanel { Children = { header, _body } },
             };
+            Sticky = new Sticky
+            {
+                Card = Root, IsOpen = () => _expanded, Collapse = () => SetExpanded(false), Glyph = "",
+                Label = () => new StickyLabel("", _label.Text ?? ""),
+            };
+        }
+
+        /// <summary>The fold as the sticky header strip pins it: open while its cards show.</summary>
+        public Sticky Sticky { get; }
+
+        public void SetExpanded(bool expanded)
+        {
+            _expanded = expanded;
+            _expandState[_key] = expanded;
+            _body.IsVisible = expanded;
+            _chevron.Text = expanded ? "▾" : "▸";
         }
 
         // Fold another read-only call in: its card joins the (hidden) body and the summary re-derives.

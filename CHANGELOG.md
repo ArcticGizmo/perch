@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.25] - 2026-10-12
+
+- Long open cards pin their header to the top as you scroll
+- Click the pinned header to fold the card back up (and land on it)
+- ↑ / ↓ on the pinned header jump to the card's start or past its end
+- Cards inside an open fold pin under the fold's header (it's headers all the way down)
+
+---
+
 ## [v0.5.24] - 2026-10-12
 
 - Copying a line out of a code block no longer drags the ```` ``` ```` fences along with it
