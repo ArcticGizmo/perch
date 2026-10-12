@@ -38,7 +38,6 @@ internal sealed class HistoryWindow : Window
     // ── Toolbar: session header (selected session) + a Search button ──────────────
     private readonly TextBlock _projectText;  // project/title name of the open session
     private readonly TextBlock _pathText;     // its cwd (tail kept)
-    private readonly Border _searchButton;
     private HistoryEntry? _selected;
 
     // ── Header session-id line (click to copy the full id for debugging) ──────────
@@ -50,6 +49,11 @@ internal sealed class HistoryWindow : Window
 
     private readonly Border _bodyHost;
     private readonly SessionThreadView _thread;
+    private readonly ThreadFindBar _findBar;
+
+    // A transcript-search hit to land on once its session loads: the session, the query to light up, and the
+    // record (uuid) the hit is in. Cleared when another session is picked.
+    private (string SessionId, string Query, string? Uuid)? _pendingReveal;
 
     private HashSet<string> _activeIds = new();
     private List<HistoryEntry> _entries = new();
@@ -73,6 +77,9 @@ internal sealed class HistoryWindow : Window
 
     /// <summary>A file reference's "View diff" was picked: (cwd, isActive, absolute path). Opens the git tree.</summary>
     public event Action<string, bool, string>? ViewFileDiffRequested;
+
+    /// <summary>The toolbar's "Search text" button: open the transcript search (the app owns that window).</summary>
+    public event Action? SearchTranscriptsRequested;
 
     public HistoryWindow()
     {
@@ -125,37 +132,17 @@ internal sealed class HistoryWindow : Window
             },
         };
 
-        // ── Search button: opens the command-palette modal ──
-        var searchGlyph = new global::Avalonia.Controls.Shapes.Path
-        {
-            Stroke = _p.Muted, StrokeThickness = 1.5, Width = 14, Height = 14,
-            Data = Geometry.Parse("M2,6 a4,4 0 1 0 8,0 a4,4 0 1 0 -8,0 M9.2,9.2 L13,13"),
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
-        };
-        _searchButton = new Border
-        {
-            Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
-            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(13, 0), Height = 36,
-            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
-            [DockPanel.DockProperty] = Dock.Right,
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
-                Children =
-                {
-                    searchGlyph,
-                    new TextBlock { Text = "Search sessions", FontFamily = _p.Body, FontSize = 13.5, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center },
-                },
-            },
-        };
-        _searchButton.PointerEntered += (_, _) => _searchButton.Background = _p.Raised;
-        _searchButton.PointerExited += (_, _) => _searchButton.Background = _p.Raised2;
-        _searchButton.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) OpenSearch(); };
+        // ── Search buttons: pick a session by name (the command-palette modal), or search inside every transcript ──
+        var searchButton = ToolbarButton("M2,6 a4,4 0 1 0 8,0 a4,4 0 1 0 -8,0 M9.2,9.2 L13,13", "Search sessions",
+            "Find a session by name, folder or id", OpenSearch);
+        var searchTextButton = ToolbarButton("M1,2 L13,2 M1,6 L9,6 M1,10 L6,10 M9,10 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0",
+            "Search text", "Search what was said, across every transcript", () => SearchTranscriptsRequested?.Invoke());
+        searchTextButton.Margin = new Thickness(8, 0, 0, 0);
 
         var toolbarContent = new DockPanel
         {
             LastChildFill = true, Margin = new Thickness(14, 0), VerticalAlignment = VerticalAlignment.Center,
-            Children = { _searchButton, crumb },   // search docks right, header fills
+            Children = { searchTextButton, searchButton, crumb },   // searches dock right, header fills
         };
         var toolbar = new Border
         {
@@ -171,7 +158,9 @@ internal sealed class HistoryWindow : Window
             ViewFileDiffRequested?.Invoke(_loaded?.Cwd ?? "", _loaded?.IsActive ?? false, path);
 
         _bodyHost = new Border();
-        var mainDock = new DockPanel { Children = { toolbar, _bodyHost } };
+        // Ctrl+F find over the thread — the live session window's bar, also opened pre-filled on a search hit.
+        _findBar = new ThreadFindBar(_p, _thread);
+        var mainDock = new DockPanel { Children = { toolbar, new Panel { Children = { _bodyHost, _findBar } } } };
 
         // Floating navigation over the thread, bottom-right — top / previous prompt / next prompt / bottom,
         // each shown only when it would do something (mirrors the live session's jump buttons + top/bottom).
@@ -208,7 +197,19 @@ internal sealed class HistoryWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            if (_findBar.IsVisible) _findBar.Close();
+            else if (ReferenceEquals(_bodyHost.Child, _thread)) _findBar.Open();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            // An open find bar closes first; only then does Esc close the window.
+            if (_findBar.IsVisible) _findBar.Close();
+            else Close();
+            e.Handled = true;
+        }
         base.OnKeyDown(e);
     }
 
@@ -227,6 +228,14 @@ internal sealed class HistoryWindow : Window
         if (_listed) ApplyPendingSelect();
     }
 
+    /// <summary>Opens <paramref name="sessionId"/> on a transcript-search hit: the find bar opens on
+    /// <paramref name="query"/> with the first match in the hit's record (<paramref name="uuid"/>) current.</summary>
+    public void ShowSearchHit(string sessionId, string query, string? uuid)
+    {
+        _pendingReveal = (sessionId, query, uuid);
+        ShowSession(sessionId);
+    }
+
     // ── Selector: the command-palette search modal ────────────────────────────────
     // Opens the search palette over a snapshot of the current session list; the chosen row loads here.
     private void OpenSearch()
@@ -239,6 +248,8 @@ internal sealed class HistoryWindow : Window
     // A session was chosen (palette pick / ShowSession): reflect it in the header and load its transcript.
     private void SelectEntry(HistoryEntry e)
     {
+        if (_pendingReveal is { } r && r.SessionId != e.SessionId) _pendingReveal = null;   // picked something else
+        _findBar.Close();
         _selected = e;
         _pendingSelect = null;
         _pendingSelectSet = false;
@@ -360,30 +371,57 @@ internal sealed class HistoryWindow : Window
         var path = entry.Path;
         var tail = new TranscriptLineTail();
         _tail = tail;
+        var reveal = _pendingReveal?.SessionId == entry.SessionId ? _pendingReveal : null;
         // The read and the decode both run off the UI thread; an unreadable file just stays on "Loading…".
         System.Threading.Tasks.Task.Run(() =>
-            DecodeConversation(entry, tail.Read(path)?.Lines ?? throw new IOException("Transcript unreadable.")))
+            DecodeConversation(entry, tail.Read(path)?.Lines ?? throw new IOException("Transcript unreadable."), reveal?.Uuid))
             .ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || _loaded?.SessionId != entry.SessionId || !ReferenceEquals(_tail, tail)) return;
-                ShowConversation(entry, t.Result);
+                var (conv, hitItem) = t.Result;
+                ShowConversation(entry, conv);
+                if (reveal is { } hit && _pendingReveal == hit)
+                {
+                    _pendingReveal = null;
+                    // Below ShowConversation's own scroll-to-top post, so the landing wins.
+                    Dispatcher.UIThread.Post(() => RevealHit(hit.Query, hitItem), DispatcherPriority.Background);
+                }
             });
         });
+    }
+
+    // Lands on a transcript-search hit: the find bar opens on the query with the first match in (or after) the
+    // hit's item current. The thread's find reads rendered text, which can differ from the transcript (Markdown
+    // syntax, say); with no match at all, the hit's item is still brought into view.
+    private void RevealHit(string query, ConversationItem? item)
+    {
+        if (!IsVisible || !ReferenceEquals(_bodyHost.Child, _thread)) return;
+        if (_findBar.ShowQuery(query, item) == 0 && item is not null) _thread.RevealItem(item);
     }
 
     // Decodes the transcript lines into a read-only conversation. Runs off the UI thread: the conversation isn't
     // bound to a view yet, and the per-line JSON parse and any base64 image recovery are the costly part. A
     // completed (inactive) session is finalised so nothing reads as mid-turn; an active one is left open for tailing.
-    private static SessionConversation DecodeConversation(HistoryEntry entry, List<string> lines)
+    // With a <paramref name="hitUuid"/> (a search hit's record), also returns the item that record landed in.
+    private static (SessionConversation Conv, ConversationItem? HitItem) DecodeConversation(HistoryEntry entry,
+        List<string> lines, string? hitUuid = null)
     {
         var conv = new SessionConversation();
         conv.UseHistorySession(entry.SessionId);
-        foreach (var line in lines) conv.AppendTranscriptLine(line);
+        // The record's own "uuid" key, written compactly by the CLI — a child's "parentUuid" never matches it.
+        string? marker = string.IsNullOrEmpty(hitUuid) ? null : $"\"uuid\":\"{hitUuid}\"";
+        ConversationItem? hitItem = null;
+        foreach (var line in lines)
+        {
+            conv.AppendTranscriptLine(line);
+            if (marker is not null && hitItem is null && line.Contains(marker, StringComparison.Ordinal))
+                hitItem = conv.Items.Count > 0 ? conv.Items[^1] : null;
+        }
         if (!entry.IsActive) conv.FinalizeHistory();
-        return conv;
+        return (conv, hitItem);
     }
 
     // Binds the rich thread to a decoded conversation (on the UI thread).
@@ -464,7 +502,7 @@ internal sealed class HistoryWindow : Window
         System.Threading.Tasks.Task.Run(() =>
         {
             if (tail.Read(path) is not { } read) return new TailResult(null, []);
-            if (read.Reset) return new TailResult(DecodeConversation(entry, read.Lines), []);
+            if (read.Reset) return new TailResult(DecodeConversation(entry, read.Lines).Conv, []);
             var parsed = new List<SessionConversation.ParsedTranscriptLine>(read.Lines.Count);
             foreach (var line in read.Lines)
                 if (SessionConversation.ParseTranscriptLine(line, entry.SessionId) is { } p) parsed.Add(p);
@@ -505,6 +543,37 @@ internal sealed class HistoryWindow : Window
     {
         _bodyHost.Child = new TextBlock { Margin = new Thickness(20), Foreground = _p.Muted, Text = text };
         UpdateJumpButtons();   // off the thread — hide the floating nav
+    }
+
+    // A toolbar button: a stroked glyph + label in a raised pill, docked right.
+    private Border ToolbarButton(string glyphPath, string label, string tip, Action onClick)
+    {
+        var glyph = new global::Avalonia.Controls.Shapes.Path
+        {
+            Stroke = _p.Muted, StrokeThickness = 1.5, Width = 14, Height = 14,
+            Data = Geometry.Parse(glyphPath),
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
+        };
+        var b = new Border
+        {
+            Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(13, 0), Height = 36,
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right, [ToolTip.TipProperty] = tip,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    glyph,
+                    new TextBlock { Text = label, FontFamily = _p.Body, FontSize = 13.5, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+        };
+        b.PointerEntered += (_, _) => b.Background = _p.Raised;
+        b.PointerExited += (_, _) => b.Background = _p.Raised2;
+        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) onClick(); };
+        return b;
     }
 
     // ── Floating navigation ───────────────────────────────────────────────────────
@@ -549,6 +618,9 @@ internal sealed class HistoryWindow : Window
         b.Opacity = enabled ? 1 : 0.32;
         b.Background = _p.Raised2;   // clear any lingering hover fill when it goes inert
     }
+
+    /// <summary>HeadlessRenderer hook: open the find bar on a query (as landing on a search hit does).</summary>
+    internal void ShowFindForRender(string query) => _findBar.ShowQuery(query, near: null);
 
     /// <summary>HeadlessRenderer hook: binds the read-only thread to a synthetic conversation (no transcript on
     /// disk, no session-list scan) so the rich history render can be captured. Call before <c>Show()</c>.</summary>

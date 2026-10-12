@@ -70,6 +70,7 @@ public partial class App : Application
     private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
     private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
+    private TranscriptSearchWindow? _transcriptSearchWindow;
     // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so the rail and the closed
     // panes survive closing the window; the window (and its per-pane feeds) exists only while it's open.
     private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
@@ -735,6 +736,7 @@ public partial class App : Application
         _settings?.Close();
         _onboardingWindow?.Close();
         _historyWindow?.Close();
+        _transcriptSearchWindow?.Close();
         _roostWindow?.Close();
         FlushRoostTabs();
         _treeWindow?.Close();
@@ -1649,7 +1651,10 @@ public partial class App : Application
     // ── Tray / overlay window openers (single reused instances via WindowHost) ─
     // "Session history…" (tray) or "View history" (overlay row) — opens/focuses the one viewer and, when
     // a session id is given, jumps to it. The list + transcript pane land in 5.7; the wiring is here now.
-    private void OpenHistory(string? sessionId)
+    private void OpenHistory(string? sessionId) => OpenHistory(sessionId, null);
+
+    // With a transcript-search hit, the viewer lands on it (the query lit, the hit's record current).
+    private void OpenHistory(string? sessionId, (string Query, string? Uuid)? hit)
     {
         _historyWindow = WindowHost.ShowOrFocus(_historyWindow,
             () =>
@@ -1659,14 +1664,31 @@ public partial class App : Application
                 // live session UI uses, keyed to the selected transcript's own cwd/session (not a live session).
                 h.OpenFileInViewerRequested += (cwd, sid, active, path) => OpenFileInViewer(cwd, sid, active, path);
                 h.ViewFileDiffRequested += (cwd, active, path) => ViewFileDiff(cwd, active, path);
+                h.SearchTranscriptsRequested += () => OpenTranscriptSearch();
                 return h;
             },
             () => _historyWindow = null,
             w =>
             {
                 if (_monitorHost is not null) w.SetActiveSessions(_lastSessions);
-                w.ShowSession(sessionId);
+                if (hit is { } at) w.ShowSearchHit(sessionId!, at.Query, at.Uuid);
+                else w.ShowSession(sessionId);
             });
+    }
+
+    // "Search transcripts…" (tray) or the history viewer's "Search text" — full-text search across every
+    // transcript. A picked hit opens the history viewer on it, find bar lit on the query.
+    private void OpenTranscriptSearch()
+    {
+        _transcriptSearchWindow = WindowHost.ShowOrFocus(_transcriptSearchWindow,
+            () =>
+            {
+                var w = new TranscriptSearchWindow();
+                w.HitChosen += (entry, query, hit) => OpenHistory(entry.SessionId, (query, hit.Uuid));
+                return w;
+            },
+            () => _transcriptSearchWindow = null,
+            w => w.SetActiveSessions(_lastSessions.Select(s => s.SessionId)));
     }
 
     // ── Roost ─────────────────────────────────────────────────────────────────
@@ -3134,6 +3156,9 @@ public partial class App : Application
         var historyItem = new NativeMenuItem("Session history…");
         historyItem.Click += (_, _) => OpenHistory(null);
 
+        var searchItem = new NativeMenuItem("Search transcripts…");
+        searchItem.Click += (_, _) => OpenTranscriptSearch();
+
         var statsItem = new NativeMenuItem("Session stats…");
         statsItem.Click += (_, _) => OpenStats();
 
@@ -3180,6 +3205,7 @@ public partial class App : Application
                 new NativeMenuItemSeparator(),
                 settingsItem,
                 historyItem,
+                searchItem,
                 statsItem,
                 statuslineItem,
                 flightItem,

@@ -1984,6 +1984,66 @@ internal static class HeadlessRenderer
             pickerFrame.Save(fs);
         }
         picker.Close();
+
+        RenderTranscriptSearch(outDir);
+    }
+
+    // Full-text transcript search: canned results (no disk scan) — sessions grouped with their hit excerpts, the
+    // match lit, a live dot, a capped count — then the history viewer landed on a hit with the find bar lit.
+    private static void RenderTranscriptSearch(string outDir)
+    {
+        var now = DateTime.Now;
+        static TranscriptSnippet Snip(string text, string match) =>
+            new(text, text.IndexOf(match, StringComparison.OrdinalIgnoreCase), match.Length);
+        var results = new List<(HistoryEntry, TranscriptMatches)>
+        {
+            (new HistoryEntry("s2", "acme-api", @"C:\src\acme-api", "", now.AddMinutes(-3), true, 12 * 1024),
+                new TranscriptMatches(2, false,
+                [
+                    new("u1", TranscriptHitKind.Prompt, now.AddMinutes(-20), Snip("why does the rate limiter drop requests after a deploy?", "rate limiter")),
+                    new("a1", TranscriptHitKind.Reply, now.AddMinutes(-19), Snip("…the rate limiter keeps its buckets in memory, so a deploy resets every client's allowance at once. Moving the buckets to Redis keeps…", "rate limiter")),
+                ])),
+            (new HistoryEntry("s1", "perch", @"C:\Users\someone\Documents\git\personal\perch", "", now.AddDays(-2), false, 840 * 1024, "git-tree refactor"),
+                new TranscriptMatches(14, false,
+                [
+                    new("a2", TranscriptHitKind.Reply, now.AddDays(-2), Snip("…a token bucket is the simplest rate limiter that still allows short bursts, which is what the poller…", "rate limiter")),
+                    new("t1", TranscriptHitKind.Tool, now.AddDays(-2), Snip("Grep · RateLimiter · src", "RateLimiter")),
+                    new("th1", TranscriptHitKind.Thinking, now.AddDays(-2), Snip("…the rate limiter here is per-host, so two sessions polling the same repo share one…", "rate limiter")),
+                ])),
+            (new HistoryEntry("s3", "landing-site", @"C:\src\personal\landing-site", "", now.AddDays(-40), false, 1400 * 1024, "copy tweaks"),
+                new TranscriptMatches(TranscriptSearch.CountCap, true,
+                [
+                    new("u9", TranscriptHitKind.Prompt, now.AddDays(-40), Snip("add a rate limiter to the contact form endpoint", "rate limiter")),
+                ])),
+        };
+        var w = new Windows.TranscriptSearchWindow { Width = 760, Height = 560 };
+        w.Show();
+        w.ShowSampleForRender("rate limiter", results);
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var frame = w.CaptureRenderedFrame();
+        if (frame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "transcript_search_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
+
+        // The history viewer landed on a hit: the shared find bar open over the thread, the match lit.
+        var h = new Windows.HistoryWindow { Width = 780, Height = 900 };
+        h.ShowSampleForRender(@"C:\src\perch", HistorySamplePrompt, HistorySampleEvents());
+        h.Show();
+        Dispatcher.UIThread.RunJobs();
+        h.ShowFindForRender("rounding");
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var hitFrame = h.CaptureRenderedFrame();
+        if (hitFrame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "history_find_1x.png"));
+            hitFrame.Save(fs);
+        }
+        h.Close();
     }
 
     // The rich session window over synthetic events (no process): the same scene as the design mockup —

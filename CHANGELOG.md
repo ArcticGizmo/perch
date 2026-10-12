@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Search transcripts: find what was said, across every session you've ever had
+- From the tray, or "Search text" in Session history
+- Results grouped by session, newest first, with the match lit up
+- Pick one and the history opens right on it, find bar ready to step through the rest
+- Prompts and replies by default; "Tools & thinking" digs through the rest
+- Ctrl+F works in Session history too, same as in a live session
+
 ---
 
 ## [v0.5.25] - 2026-10-12
