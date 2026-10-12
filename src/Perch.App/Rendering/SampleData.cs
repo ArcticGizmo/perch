@@ -147,6 +147,7 @@ internal static class SampleData
             // something to show when a preview or render turns it on.
             ExtraUsage = new ExtraUsageInfo(
                 Enabled: true, Used: 24.80m, Limit: 100m, Currency: "AUD", DecimalPlaces: 2, LimitReached: false),
+            Auth = new AuthExpiry(now.AddHours(6.4), now.AddDays(27.2)),
         };
     }
 
@@ -163,6 +164,7 @@ internal static class SampleData
         {
             Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
             ExtraUsage = new ExtraUsageInfo(true, 24.80m, 100m, "AUD", 2, false),
+            Auth = new AuthExpiry(now.AddHours(6.4), now.AddDays(27.2)),          // both resting (dimmed)
         };
         var beta = new UsageInfo(
             FiveHourPercent: 88, SevenDayPercent: 63,
@@ -170,6 +172,7 @@ internal static class SampleData
             LastUpdated: now, Ok: true, Error: null)
         {
             Scoped = [new ScopedUsage("Fable", 72, now.AddDays(2))],
+            Auth = new AuthExpiry(now.AddMinutes(3.5), now.AddHours(30.5)),     // both close (warning hue)
         };
         return
         [
@@ -204,10 +207,19 @@ internal static class SampleData
             ("initech",   U(74, 91, 83, 70m, 75m,  2.5, 5.6)),
             ("umbrella",  U(9,  14, 5,  null, 30m, 2.0, 2.1)),
         ];
+        // Sign-in clocks: mostly resting, with a close login on "acme", a lapsed access token on "globex" and a lapsed
+        // login on "umbrella", so the chips' close-only clocks (and the error hue) show.
+        AuthExpiry Auth(string name) => name switch
+        {
+            "acme"     => new(now.AddHours(3), now.AddHours(20)),
+            "globex"   => new(now.AddHours(-2), now.AddDays(12)),
+            "umbrella" => new(now.AddDays(-1), now.AddHours(-3)),
+            _          => new(now.AddHours(5.5), now.AddDays(24)),
+        };
         return orgs
             .Select((o, i) => new OrgUsage(
                 new ClaudeConfigDir($@"C:\envs\{o.name}\.claude", slug: o.name),
-                new Org($"org-{i}") { Name = o.name }, o.u, Active: i < 2))   // first two active, rest idle
+                new Org($"org-{i}") { Name = o.name }, o.u with { Auth = Auth(o.name) }, Active: i < 2))   // first two active, rest idle
             .ToList();
     }
 

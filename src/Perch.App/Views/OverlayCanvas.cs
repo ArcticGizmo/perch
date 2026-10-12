@@ -2338,10 +2338,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             bool stale = u.IsStale(now);
             double setTop = rowTop;
 
+            // Any sign-in alert takes the heading row's right; the name gives way to it.
+            double chipsLeft = DrawAuthChips(ctx, u.Auth, width - HorizPad, rowTop + UsageHeaderHeight / 2, now);
+            double nameMaxW = Math.Max(12, chipsLeft - HorizPad - (chipsLeft < width - HorizPad ? AuthChipGap : 0));
+
             // The org's name heads its set of bars. It — and only it — is the collapse target: a pill-sized
             // hit box around the name, so clicking the bars never collapses the account and the hover wash
             // stays on the name rather than washing the whole band.
-            var nameFt = OverlayDraw.Text(set.Header, 10.5, FgBrush, FontWeight.SemiBold);
+            var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(set.Header, 10.5, nameMaxW, FontWeight.SemiBold),
+                10.5, FgBrush, FontWeight.SemiBold);
             var nameRect = new Rect(HorizPad - 4, setTop,
                 Math.Min(width - 2 * (HorizPad - 4), nameFt.Width + 8), UsageHeaderHeight);
             if (ReferenceEquals(_hoveredUsageSet, set))
@@ -2427,9 +2432,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double innerL = chip.X + ChipPadH, innerR = chip.Right - ChipPadH;
         double barW = Math.Max(6, innerR - innerL);
 
-        // Org name (truncated to the chip), dimmed when the reading is stale.
+        // Org name (truncated to the chip), dimmed when the reading is stale; any sign-in alert sits at the right of
+        // the name row.
+        double nameMidY = chip.Y + ChipPadV + ChipNameH / 2;
+        double chipsLeft = DrawAuthChips(ctx, u.Auth, innerR, nameMidY, now);
+        double nameW = chipsLeft < innerR ? Math.Max(6, chipsLeft - AuthChipGap - innerL) : barW;
         var nameBrush = stale ? MutedBrush : FgBrush;
-        var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(set.Header, 10, barW, FontWeight.SemiBold),
+        var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(set.Header, 10, nameW, FontWeight.SemiBold),
             10, nameBrush, FontWeight.SemiBold);
         OverlayDraw.TextLeftMid(ctx, nameFt, innerL, chip.Y + ChipPadV + ChipNameH / 2);
 
@@ -6118,7 +6127,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (SpendBarFor(set))
                 lines.Add(new($"Monthly spend  {u.ExtraUsage!.Detailed}", OverlayTooltip.FgColor, false));
 
-            if (u.IsStale(now))
+            // Why the reading is stale — unless it's the lapsed access token, which the sign-in line below already
+            // says (with what it means for usage), so the two never repeat each other.
+            if (u.IsStale(now) && !AuthLinesExplainStale(u.Auth, now))
             {
                 var reason = u.Error;
                 if (string.IsNullOrEmpty(reason))
@@ -6127,9 +6138,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                         : $"Updated {Ago(now - u.LastUpdated)} ago — couldn't refresh";
                 lines.Add(new(reason, OverlayTooltip.MutedColor, false));
             }
+            AddAuthTooltipLines(lines, u.Auth, now);
         }
-        // Open to the left of the overlay's left edge so it never covers the strip.
-        Tooltip().ShowLines(lines, ToScreen(0, UsageStripTop), placeLeft: true);
+        // Open to the left of the overlay's left edge so it never covers the strip — or, against the screen's left
+        // edge, past its right edge.
+        Tooltip().ShowLines(lines, ToScreen(0, UsageStripTop), placeLeft: true, rightEdge: ToScreen(Bounds.Width, 0).X);
     }
 
     private static string UsageLine(string label, double? percent, DateTime? resetsAt, DateTime now)

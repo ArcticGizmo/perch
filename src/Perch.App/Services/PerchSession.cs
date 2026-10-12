@@ -61,6 +61,19 @@ internal sealed class PerchSession : IDisposable
     /// <see cref="RemoteControlEvent.SessionUrl"/> is set on enable (the claude.ai / QR target).</summary>
     public event Action<RemoteControlEvent>? RemoteControlChanged;
 
+    /// <summary>
+    /// The sign-in clocks this session's <em>process</em> holds: the credentials as they stood when it started. A
+    /// headless (stream-json) CLI doesn't refresh its access token and never re-reads the credentials file, so a
+    /// later refresh by a terminal session doesn't reach it — once this access token lapses its prompts fail until
+    /// the process restarts. <see cref="AuthExpiry.None"/> while dormant, before the first read lands, or when the
+    /// credentials can't be read. Drives the session window's sign-in banner.
+    /// </summary>
+    public AuthExpiry ProcessAuth { get; private set; } = AuthExpiry.None;
+
+    /// <summary><see cref="ProcessAuth"/> changed (UI thread).</summary>
+    public event Action? ProcessAuthChanged;
+    private int _processAuthGen;
+
     /// <summary>Whether Remote Control is currently on for this session, and its claude.ai session URL.</summary>
     public bool RemoteControlEnabled { get; private set; }
     public string? RemoteControlUrl { get; private set; }
@@ -162,7 +175,38 @@ internal sealed class PerchSession : IDisposable
         // fires at turn/permission boundaries — exactly the transitions that move the status.
         Conversation.StateChanged += PublishActivity;
         PublishActivity();   // seed the real status from the starting state
+        CaptureProcessAuth(o.ConfigDir);
     }
+
+    // Reads the credentials the new process will have loaded, off the UI thread: once now, and once a minute later
+    // in case the CLI refreshed a lapsed token while starting up. The later expiry of each clock wins.
+    private void CaptureProcessAuth(string? configRoot)
+    {
+        int gen = ++_processAuthGen;
+        ProcessAuth = AuthExpiry.None;
+        var dir = configRoot is { Length: > 0 } root
+            ? ClaudeConfigSet.Instance.ForRoot(root) ?? new ClaudeConfigDir(root)
+            : ClaudeConfigSet.Instance.Primary;
+        Read(TimeSpan.Zero);
+        Read(TimeSpan.FromMinutes(1));
+
+        void Read(TimeSpan delay) => Task.Run(async () =>
+        {
+            if (delay > TimeSpan.Zero) await Task.Delay(delay).ConfigureAwait(false);
+            return AuthExpiry.ReadFor(dir, PlatformServices.ClaudeCredentials);
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (gen != _processAuthGen || HasEnded || !t.IsCompletedSuccessfully) return;
+            var read = t.Result;
+            var merged = new AuthExpiry(Later(ProcessAuth.AccessExpiresAt, read.AccessExpiresAt),
+                                        Later(ProcessAuth.RefreshExpiresAt, read.RefreshExpiresAt));
+            if (merged == ProcessAuth) return;
+            ProcessAuth = merged;
+            ProcessAuthChanged?.Invoke();
+        }));
+    }
+
+    private static DateTime? Later(DateTime? a, DateTime? b) => a is null ? b : b is null ? a : a > b ? a : b;
 
     // Transcripts past this many lines show only their tail — a multi-MB history is neither readable nor
     // cheap to lay out, and the CLI itself has the full context regardless.
@@ -212,6 +256,13 @@ internal sealed class PerchSession : IDisposable
 
     /// <summary>A process-less session for the headless renderer: the conversation is fed synthetic events.</summary>
     internal static PerchSession ForRender(string cwd) => new(null, new SessionLaunchOptions(cwd));
+
+    /// <summary>The headless renderer poses the process's sign-in clocks (a render session has no process to read them for).</summary>
+    internal void SetProcessAuthForRender(AuthExpiry auth)
+    {
+        ProcessAuth = auth;
+        ProcessAuthChanged?.Invoke();
+    }
 
     /// <summary>A dormant stand-in for the headless renderer: no transcript is read, the caller feeds the history.</summary>
     internal static PerchSession DormantForRender(string cwd, string sessionId)

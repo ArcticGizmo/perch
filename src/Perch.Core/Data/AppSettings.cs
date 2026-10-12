@@ -95,6 +95,10 @@ internal sealed class AppSettings
     // account itself has extra usage switched on. Independent of ShowUsage — the strip appears for either.
     public bool ShowMonthlySpend { get; set; } = false;
 
+    // Whether each account heading in the usage strip shows its sign-in clocks: when the access token expires and
+    // when the refresh token does (i.e. when the account must /login again). Dimmed until one is close.
+    public bool ShowAuthExpiry { get; set; } = true;
+
     // Whether to surface per-session context-window pressure — the thermometer glyph that appears on
     // a session row once its context fill crosses the warning threshold. Off hides the glyph entirely
     // (the fill is still computed; it just isn't drawn). Defaults to true; a missing key keeps it on.

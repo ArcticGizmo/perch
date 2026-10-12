@@ -609,7 +609,7 @@ internal sealed partial class SessionWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 0, 8),
             Text = "Claude starts when you send",
         };
-        var composerStack = new StackPanel { Children = { composerHeader, _dormantNote, _attachTray, textScroll, cbar } };
+        var composerStack = new StackPanel { Children = { composerHeader, BuildAuthBanner(), _dormantNote, _attachTray, textScroll, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -895,6 +895,8 @@ internal sealed partial class SessionWindow : Window
         session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         session.Woke += OnSessionWoke;
+        session.ProcessAuthChanged += RefreshAuthBanner;
+        StartAuthBannerTimer();
         // A dormant session resumes its own id on the first send, whichever window it's viewed in.
         if (session.IsDormant) _resumeId = session.SessionId;
         _thread.Bind(session.Conversation);
@@ -919,6 +921,9 @@ internal sealed partial class SessionWindow : Window
         s.Conversation.Changed -= OnConversationChangedForChanges;
         s.Conversation.BackgroundTaskChanged -= OnBackgroundTaskChanged;
         s.Woke -= OnSessionWoke;
+        s.ProcessAuthChanged -= RefreshAuthBanner;
+        StopAuthBannerTimer();
+        _authBanner.IsVisible = false;
         _sendAfterWake = false;
         // The session outlives this window by design: without this its conversation keeps the whole chat tree
         // subscribed (and rendering deltas) after the window closes.
@@ -947,6 +952,7 @@ internal sealed partial class SessionWindow : Window
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
         _thread.CanStopTasks = running || _renderLive;   // a background task's Stop needs the live process
         HideToast();
+        RefreshAuthBanner();   // running, dormant and ended each read a different clock (or none)
     }
 
     // ── Public entry points ───────────────────────────────────────────────────────

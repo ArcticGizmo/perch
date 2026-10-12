@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.23] - 2026-10-12
+
+- Red chip on an account whose sign-in is about to expire
+- Two days' warning before you'll need to `/login` again
+- Perch sessions warn before their sign-in lapses (they can't refresh it themselves)
+- Usage tooltip lists both sign-in clocks
+- Usage tooltip opens beside the overlay, not on top of it
+- "Sign-in expiry" setting, for those who prefer surprises
+
+---
+
 ## [v0.5.22] - 2026-10-10
 
 - Session ⋯ menu opens the project folder in Explorer (or Finder)

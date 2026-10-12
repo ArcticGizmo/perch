@@ -183,6 +183,13 @@ internal static class SettingsRegistry
             PreviewTarget.UsageBars, nameof(AppSettings.ShowMonthlySpend),
             s => s.ShowMonthlySpend, (s, v) => s.ShowMonthlySpend = v),
 
+        Toggle("auth-expiry", "Sign-in expiry",
+            "Countdowns beside each account for when its access token expires and when you'll need to log in again.",
+            SettingSurface.UsageBars,
+            ["sign-in", "signin", "login", "log in", "token", "expiry", "expire", "expires", "auth", "oauth", "refresh", "session"],
+            PreviewTarget.UsageBars, nameof(AppSettings.ShowAuthExpiry),
+            s => s.ShowAuthExpiry, (s, v) => s.ShowAuthExpiry = v),
+
         // ── System & metrics ─────────────────────────────────────────────────
         Toggle("system-metrics", "System metrics",
             "Whole-machine CPU + RAM strip at the top of the panel.",

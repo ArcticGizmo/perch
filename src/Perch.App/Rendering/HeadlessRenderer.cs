@@ -775,6 +775,13 @@ internal static class HeadlessRenderer
                 new Views.OverlayTooltip.Line("Session  62%  ·  resets 3:40pm", Views.OverlayTooltip.FgColor, false),
                 new Views.OverlayTooltip.Line("Weekly   28%  ·  resets Thu", Views.OverlayTooltip.FgColor, false),
                 new Views.OverlayTooltip.Line("Fable    41%  ·  resets Thu", Views.OverlayTooltip.FgColor, false),
+                // The sign-in lines, under a divider (mirrors OverlayCanvas.AddAuthTooltipLines): an idle account's
+                // lapsed access token (which stands in for the usage section's "Token expired" reason, never beside
+                // it), then a close login in the alert red.
+                Views.OverlayTooltip.Line.Divider,
+                new Views.OverlayTooltip.Line("Access token  expired 5 h 39 min ago — usage paused until Claude Code runs", Color.FromRgb(239, 68, 68), false),
+                new Views.OverlayTooltip.Line("Login  expires in 30 h 12 min (Mon 12 Oct 3:12 PM)", Color.FromRgb(239, 68, 68), false),
+                new Views.OverlayTooltip.Line("Run /login in Claude Code before then to avoid interruption", Views.OverlayTooltip.MutedColor, false),
             ],
         };
         RenderOnBackdrop(tipUsage, Path.Combine(outDir, "tooltip_usage_1x.png"), Color.FromRgb(40, 40, 52));
@@ -2272,6 +2279,18 @@ internal static class HeadlessRenderer
         CaptureUsage(Theming.SessionPalette.For(dark: true), "session_usage_1x.png", usage);
         CaptureUsage(Theming.SessionPalette.For(dark: false), "session_usage_light_1x.png", usage);
 
+        // The sign-in banner above the composer: amber while the process's access token and the account's login are
+        // close, red once the access token has lapsed.
+        {
+            var at = DateTime.Now;
+            CaptureAuthBanner(Theming.SessionPalette.For(dark: true), "session_auth_soon_1x.png",
+                new Perch.Data.AuthExpiry(at.AddMinutes(18), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
+            CaptureAuthBanner(Theming.SessionPalette.For(dark: true), "session_auth_expired_1x.png",
+                new Perch.Data.AuthExpiry(at.AddMinutes(-40), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddDays(20)));
+            CaptureAuthBanner(Theming.SessionPalette.For(dark: false), "session_auth_soon_light_1x.png",
+                new Perch.Data.AuthExpiry(at.AddMinutes(18), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
+        }
+
         // The Ctrl+F find bar: a query washing the matching messages/tool cards, the current one outlined.
         CaptureFind(Theming.SessionPalette.For(dark: true), "session_find_1x.png", "session");
         CaptureFind(Theming.SessionPalette.For(dark: false), "session_find_light_1x.png", "session");
@@ -2373,6 +2392,25 @@ internal static class HeadlessRenderer
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, prompt, events);
             w.ShowUsageOverlayForRender(info);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureAuthBanner(Theming.SessionPalette palette, string file, Perch.Data.AuthExpiry process,
+                               Perch.Data.AuthExpiry account)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.UsageProvider = () => Perch.Data.UsageInfo.Empty with { Auth = account };
+            w.ShowAuthBannerForRender(process, account);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
