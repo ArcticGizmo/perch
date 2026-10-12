@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.26] - 2026-10-12
+
+- Search transcripts: find what was said, in every session ever
+- Open it from the tray, or "Search text" in Session history
+- Results grouped by session, newest first, match lit up
+- Pick a hit and the history opens right on it
+- Prompts and replies by default; "Tools & thinking" digs deeper
+- Ctrl+F in Session history too
+- Jump-to-top/bottom buttons are proper double arrows (the old ones were squinting)
+
+---
+
 ## [v0.5.25] - 2026-10-12
 
 - Long open cards pin their header to the top as you scroll

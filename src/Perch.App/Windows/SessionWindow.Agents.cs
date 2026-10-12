@@ -484,7 +484,7 @@ internal sealed partial class SessionWindow
         bool agent = AgentViewOpen;
         if (agent)
         {
-            if (_findBar.IsVisible) CloseFind();   // find searches the session's thread
+            _findBar.Close();   // find searches the session's thread
             ClosePalette();
             CloseMention();
         }

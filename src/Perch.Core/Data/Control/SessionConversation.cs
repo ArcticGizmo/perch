@@ -650,8 +650,9 @@ internal sealed class SessionConversation
     }
 
     // A typed prompt: string content, or an array with text blocks and no tool_result — minus slash-command
-    // echoes (<command-name>…) and their captured stdout, which the TUI shows but a reader shouldn't.
-    private static string? GenuineUserPrompt(System.Text.Json.Nodes.JsonNode root)
+    // echoes (<command-name>…) and their captured stdout, which the TUI shows but a reader shouldn't. Shared with
+    // TranscriptSearch, so a search finds exactly the prompts the viewer shows.
+    internal static string? GenuineUserPrompt(System.Text.Json.Nodes.JsonNode root)
     {
         if (root["isMeta"]?.GetValue<bool>() == true) return null;
         var content = root["message"]?["content"];

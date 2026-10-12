@@ -278,11 +278,9 @@ internal sealed partial class SessionWindow : Window
     private TextBlock _usageStatus = null!;
     private bool _usageRefreshing;
 
-    // Ctrl+F find bar over the thread: a search box + match counter + prev/next + close, driving the thread
-    // view's item-level search (wash + outline + scroll-to). Hidden until Ctrl+F; Esc / ✕ close it.
-    private Border _findBar = null!;
-    private TextBox _findBox = null!;
-    private TextBlock _findCount = null!;
+    // Ctrl+F find bar over the thread (Views/ThreadFindBar), driving the thread view's search. Hidden until
+    // Ctrl+F; Esc / ✕ close it.
+    private ThreadFindBar _findBar = null!;
 
     // In-window /resume quick-open: a searchable, keyboard-navigable overlay of this project's sessions.
     private Panel _resumeOverlay = null!;
@@ -828,10 +826,10 @@ internal sealed partial class SessionWindow : Window
 
         // Floating scroll column, bottom-right over the thread (above the composer). The four buttons hold a
         // fixed column so they never jump around; each is disabled when it wouldn't move the view.
-        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => ActiveThread.JumpToTop());
+        _jumpTopBtn = JumpButton(JumpGlyphs.DoubleArrow(up: true, _p.Muted), "Jump to the start", () => ActiveThread.JumpToTop());
         _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => ActiveThread.JumpToPreviousPrompt());
         _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => ActiveThread.JumpToNextPrompt());
-        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => ActiveThread.JumpToBottom());
+        _jumpBottomBtn = JumpButton(JumpGlyphs.DoubleArrow(up: false, _p.Muted), "Jump to the latest", () => ActiveThread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
@@ -2373,112 +2371,17 @@ internal sealed partial class SessionWindow : Window
 
     // ── Find bar (Ctrl+F) ──────────────────────────────────────────────────────────
 
-    // A compact find bar pinned top-right over the thread: a query box, an "n/m" counter, prev/next and close.
-    // It drives SessionThreadView's item-level search (each matching message/tool card is washed; the current
-    // one is outlined and scrolled into view). Enter / Shift+Enter step; Esc or ✕ close.
     private void BuildFindBar()
     {
-        _findBox = new TextBox
-        {
-            FontFamily = _p.Body, FontSize = 13, Foreground = _p.Text, Width = 220,
-            PlaceholderText = "Find in conversation", Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Center,
-        };
-        _findBox.TextChanged += (_, _) => RunFind(jumpToFirst: true);
-        _findBox.AddHandler(KeyDownEvent, OnFindBoxKeyDown, RoutingStrategies.Tunnel);
-
-        _findCount = new TextBlock
-        {
-            FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, MinWidth = 46,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-
-        var prev = new SessionButton(_p, "↑", SessionButtonKind.Quiet, compact: true);
-        prev.Click += () => StepFind(-1);
-        var next = new SessionButton(_p, "↓", SessionButtonKind.Quiet, compact: true);
-        next.Click += () => StepFind(1);
-        var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true);
-        close.Click += CloseFind;
-
-        _findBar = new Border
-        {
-            IsVisible = false,
-            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
-            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 7),
-            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 12, 20, 0), BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
-                Children = { _findBox, _findCount, prev, next, close },
-            },
-        };
+        _findBar = new ThreadFindBar(_p, _thread);
+        _findBar.Closed += () => { if (CanCompose) _composer.Focus(); };
     }
 
     // Ctrl+F: open the find bar (over a live thread only), or close it if already open.
     private void ToggleFind()
     {
-        if (_findBar.IsVisible) CloseFind();
-        else OpenFind();
-    }
-
-    private void OpenFind()
-    {
-        if (!_thread.IsVisible) return;   // nothing to search on the launcher
-        _findBar.IsVisible = true;
-        _findBox.Focus();
-        _findBox.SelectAll();
-        RunFind(jumpToFirst: true);
-    }
-
-    private void CloseFind()
-    {
-        _findBar.IsVisible = false;
-        _thread.ClearSearch();
-        if (CanCompose) _composer.Focus();
-    }
-
-    // Re-run the query, wash the matches, update the counter, and optionally jump to the first hit.
-    private void RunFind(bool jumpToFirst)
-    {
-        int n = _thread.Search(_findBox.Text ?? "");
-        if (n > 0 && jumpToFirst) _thread.ShowMatch(0);
-        UpdateFindCount();
-    }
-
-    // Step to the next (+1) / previous (-1) match, wrapping around.
-    private void StepFind(int delta)
-    {
-        if (_thread.MatchCount > 0)
-        {
-            int cur = _thread.CurrentMatch;
-            _thread.ShowMatch(cur < 0 ? 0 : cur + delta);
-        }
-        UpdateFindCount();
-    }
-
-    private void UpdateFindCount()
-    {
-        int n = _thread.MatchCount;
-        _findCount.Text = string.IsNullOrWhiteSpace(_findBox.Text) ? ""
-            : n == 0 ? "0/0"
-            : $"{_thread.CurrentMatch + 1}/{n}";
-    }
-
-    // Enter / Shift+Enter step through matches; Esc closes — kept off the composer by handling here.
-    private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case Key.Enter:
-                StepFind(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
-                e.Handled = true;
-                break;
-            case Key.Escape:
-                CloseFind();
-                e.Handled = true;
-                break;
-        }
+        if (_findBar.IsVisible) _findBar.Close();
+        else if (_thread.IsVisible) _findBar.Open();   // nothing to search on the launcher
     }
 
     // ── Resume overlay (/resume) ───────────────────────────────────────────────────
@@ -3120,7 +3023,14 @@ internal sealed partial class SessionWindow : Window
     // ── Jump buttons (docs/session-composer-enhancements-plan.md §4) ──────────────
 
     // A round, translucent scroll button that floats over the thread.
-    private Border JumpButton(string glyph, string tip, Action onClick)
+    private Border JumpButton(string glyph, string tip, Action onClick) =>
+        JumpButton(new TextBlock
+        {
+            Text = glyph, FontSize = 16, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        }, tip, onClick);
+
+    private Border JumpButton(Control glyph, string tip, Action onClick)
     {
         var b = new Border
         {
@@ -3128,11 +3038,7 @@ internal sealed partial class SessionWindow : Window
             Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
             Cursor = new Cursor(StandardCursorType.Hand), IsVisible = false,
             BoxShadow = BoxShadows.Parse("0 6 18 0 #40000000"), [ToolTip.TipProperty] = tip,
-            Child = new TextBlock
-            {
-                Text = glyph, FontSize = 16, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            },
+            Child = glyph,
         };
         b.PointerEntered += (_, _) => b.Background = _p.Border;
         b.PointerExited += (_, _) => b.Background = _p.Raised2;
@@ -3798,7 +3704,7 @@ internal sealed partial class SessionWindow : Window
         if (e.Key != Key.Escape) return;
         // A link popup closes first: Escape meant for it must never interrupt the turn or deny a permission.
         if (LinkText.DismissPopup()) { e.Handled = true; return; }
-        if (_findBar.IsVisible) { CloseFind(); e.Handled = true; return; }
+        if (_findBar.IsVisible) { _findBar.Close(); e.Handled = true; return; }
         if (_usageOverlay.IsVisible) { CloseUsageOverlay(); e.Handled = true; return; }
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
@@ -3991,8 +3897,7 @@ internal sealed partial class SessionWindow : Window
     /// <summary>HeadlessRenderer: open the Ctrl+F find bar with a query and light up its matches for a capture.</summary>
     internal void ShowFindForRender(string query)
     {
-        _findBar.IsVisible = true;
-        _findBox.Text = query;   // TextChanged → RunFind → search + jump to the first match
+        _findBar.ShowQuery(query, near: null);   // search + jump to the first match
     }
 
     /// <summary>HeadlessRenderer: the launcher with a sample recents list.</summary>

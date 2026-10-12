@@ -65,6 +65,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
     private sealed class FindMatch
     {
         public required Control Anchor;
+        public required int ItemIndex;   // the conversation item it's in (FirstMatchFrom)
         public TextBlock? Text;
         public int Start;
         public int Length;
@@ -749,9 +750,9 @@ internal sealed partial class SessionThreadView : ScrollViewer
         FlushBacklog();
         HydrateAll();   // the walk reads rendered text; nothing is dropped again while matches are up
 
-        foreach (var item in _conv.Items)
+        for (int itemIndex = 0; itemIndex < _conv.Items.Count; itemIndex++)
         {
-            if (!_wraps.TryGetValue(item, out var wrap)) continue;
+            if (!_wraps.TryGetValue(_conv.Items[itemIndex], out var wrap)) continue;
             var collapsedSeen = new HashSet<Control>();   // dedup: one hit per collapsed section within this item
             foreach (var tb in wrap.Child?.GetVisualDescendants().OfType<TextBlock>() ?? [])
             {
@@ -764,18 +765,44 @@ internal sealed partial class SessionThreadView : ScrollViewer
                     // Collapsed: one hit for the whole hidden section, lighting/scrolling its visible card.
                     var anchor = NearestVisibleAncestor(tb) ?? wrap;
                     if (collapsedSeen.Add(anchor))
-                        _matches.Add(new FindMatch { Anchor = anchor, CardOnly = true });
+                        _matches.Add(new FindMatch { Anchor = anchor, ItemIndex = itemIndex, CardOnly = true });
                     continue;
                 }
 
                 // A visible occurrence: one hit per position, lit by its exact glyph rectangles.
                 for (int i = text.IndexOf(query, StringComparison.OrdinalIgnoreCase); i >= 0;
                      i = text.IndexOf(query, i + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase))
-                    _matches.Add(new FindMatch { Anchor = tb, Text = tb, Start = i, Length = query.Length });
+                    _matches.Add(new FindMatch { Anchor = tb, ItemIndex = itemIndex, Text = tb, Start = i, Length = query.Length });
             }
         }
         RefreshHighlightLayer();
         return _matches.Count;
+    }
+
+    /// <summary>The index of the first match from the last <see cref="Search"/> that sits in <paramref name="item"/>
+    /// or after it — where a transcript-search hit in that item lands. 0 when <paramref name="item"/> is null or
+    /// nothing follows it (the rendered text can differ from the transcript's, e.g. Markdown syntax).</summary>
+    public int FirstMatchFrom(ConversationItem? item)
+    {
+        if (item is null || _conv is null) return 0;
+        int target = -1;
+        for (int i = 0; i < _conv.Items.Count; i++)
+            if (ReferenceEquals(_conv.Items[i], item)) { target = i; break; }
+        if (target < 0) return 0;
+        for (int m = 0; m < _matches.Count; m++)
+            if (_matches[m].ItemIndex >= target) return m;
+        return 0;
+    }
+
+    /// <summary>Scrolls <paramref name="item"/> into view, near the top (a transcript-search hit whose text the
+    /// thread's find couldn't light up). No-op when it isn't in this thread.</summary>
+    public void RevealItem(ConversationItem item)
+    {
+        FlushBacklog();
+        if (!_wraps.TryGetValue(item, out var wrap)) return;
+        if (wrap.Child is null) Hydrate(item, wrap);
+        _stickToBottom = false;
+        Dispatcher.UIThread.Post(() => wrap.BringIntoView(), DispatcherPriority.Loaded);
     }
 
     /// <summary>Make the match at <paramref name="index"/> (wrapped into range) current — repaint the overlay
