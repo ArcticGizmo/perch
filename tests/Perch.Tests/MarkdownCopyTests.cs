@@ -5,7 +5,8 @@ namespace Perch.Tests;
 
 // A drag across the rendered Markdown (session thread, doc preview) copies the Markdown that produced the selection.
 // The headline guarantee: selecting a whole message copies exactly what the message's copy button does (its raw
-// Markdown), and a partial selection keeps the syntax around the parts it covers.
+// Markdown), and a partial selection keeps the syntax around the parts it covers. Block structure (fences, hashes,
+// list markers, quote bars) only comes along once the selection crosses a block boundary.
 public class MarkdownCopyTests
 {
     // A raw string literal takes the line endings of this file as checked out — CRLF on a Windows runner with
@@ -101,8 +102,8 @@ public class MarkdownCopyTests
     [InlineData("1. one\n2. two\n   - nested\n3. three")]
     [InlineData("> quoted **bold**\n> second line\n\nafter")]
     [InlineData("Line with hard break  \nnext line")]
-    [InlineData("```\nno language\n```")]
-    [InlineData("    indented code\n    block")]
+    [InlineData("```\nno language\n```\n\nafter")]
+    [InlineData("    indented code\n    block\n\nafter")]
     [InlineData("| a | b |\n|---|---|\n| 1 | 2 |")]
     [InlineData("---\ntitle: x\n---\n\n# After frontmatter")]
     [InlineData("<div>raw html</div>\n\ntext")]
@@ -135,8 +136,9 @@ public class MarkdownCopyTests
     }
 
     [Theory]
-    [InlineData("Selection test", "heading one", "# Selection test: heading one")]           // a whole heading takes its hashes
+    [InlineData("Selection test", "heading one", "Selection test: heading one")]             // a heading alone: no hashes
     [InlineData("heading one", "This first", "heading one\n\nThis first")]                   // heading into body, mid-line
+    [InlineData("Second paragraph", "Heading two", "Second paragraph, short.\n\n## Heading two")]   // crossing takes them
     [InlineData("bold text", "bold text", "**bold text**")]                                  // emphasis keeps its delimiters
     [InlineData("italic text", "italic text", "*italic text*")]
     [InlineData("strikethrough", "strikethrough", "~~strikethrough~~")]
@@ -147,8 +149,10 @@ public class MarkdownCopyTests
         "- First bullet item\n- Second bullet item with `inline code` in it\n  - Nested bullet one\n  - Nested bullet two\n    - Doubly nested bullet")]
     [InlineData("Ordered item one", "Ordered item three", "1. Ordered item one\n2. Ordered item two\n3. Ordered item three")]
     [InlineData("￼ An unchecked task", "A checked task", "- [ ] An unchecked task\n- [x] A checked task")]
+    [InlineData("First bullet item", "First bullet item", "First bullet item")]              // one item alone: no marker
     [InlineData("A block quote", "checked together.",
-        "> A block quote that spans enough words to wrap onto a second line, so the quote bar and the selection wash can be checked together.")]
+        "A block quote that spans enough words to wrap onto a second line, so the quote bar and the selection wash can be checked together.")]
+    [InlineData("Alpha", "Alpha", "Alpha")]                                                  // one cell alone: no pipes
     [InlineData("Alpha", "1", "| Alpha | heading | 1 |")]                                    // a table row keeps its pipes
     [InlineData("Beta", "22", "| Beta | paragraph | 22 |")]
     [InlineData("Gamma", "table cell", "| Gamma | table cell")]                               // a row cut mid-way
@@ -159,9 +163,24 @@ public class MarkdownCopyTests
     }
 
     [Fact]
-    public void A_whole_code_block_keeps_its_fences()
+    public void A_whole_code_block_alone_copies_without_its_fences()
     {
         string expected = """
+            public static int Add(int a, int b)
+            {
+                // A comment, then a long line: 0123456789012345678901234567890123456789012345678901234567890123456789
+                return a + b;
+            }
+            """.ReplaceLineEndings("\n");
+        Assert.Equal(expected, Select(Sample, "public static", "return a + b;\n}"));
+    }
+
+    [Fact]
+    public void Crossing_into_a_code_block_keeps_its_fences()
+    {
+        string expected = """
+            ### Code
+
             ```csharp
             public static int Add(int a, int b)
             {
@@ -170,7 +189,17 @@ public class MarkdownCopyTests
             }
             ```
             """.ReplaceLineEndings("\n");
-        Assert.Equal(expected, Select(Sample, "public static", "return a + b;\n}"));
+        Assert.Equal(expected, Select(Sample, "Code", "return a + b;\n}"));
+    }
+
+    [Theory]
+    [InlineData("```powershell\nGet-ChildItem -Recurse\n```", "Get-ChildItem", "Recurse", "Get-ChildItem -Recurse")]   // the whole line
+    [InlineData("```powershell\nGet-ChildItem -Recurse\n```", "Get", "Get", "Get")]                                     // from its first char
+    [InlineData("- item\n\n  ```\n  one\n  two\n  ```", "one", "two", "one\ntwo")]                                       // nested: no indent
+    [InlineData("> quoted **bold**\n> second line", "quoted", "line", "quoted **bold**\nsecond line")]                   // wrapped: no bar
+    public void A_selection_inside_one_block_copies_just_its_content(string md, string from, string to, string expected)
+    {
+        Assert.Equal(expected, Select(md, from, to));
     }
 
     [Fact]

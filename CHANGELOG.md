@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.24] - 2026-10-12
+
+- Copying a line out of a code block no longer drags the ```` ``` ```` fences along with it
+- Fences, hashes, list markers and quote bars only come along once a selection leaves its block
+
+---
+
 ## [v0.5.23] - 2026-10-12
 
 - Red chip on an account whose sign-in is about to expire
