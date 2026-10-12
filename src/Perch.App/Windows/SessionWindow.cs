@@ -826,10 +826,10 @@ internal sealed partial class SessionWindow : Window
 
         // Floating scroll column, bottom-right over the thread (above the composer). The four buttons hold a
         // fixed column so they never jump around; each is disabled when it wouldn't move the view.
-        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => ActiveThread.JumpToTop());
+        _jumpTopBtn = JumpButton(JumpGlyphs.DoubleArrow(up: true, _p.Muted), "Jump to the start", () => ActiveThread.JumpToTop());
         _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => ActiveThread.JumpToPreviousPrompt());
         _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => ActiveThread.JumpToNextPrompt());
-        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => ActiveThread.JumpToBottom());
+        _jumpBottomBtn = JumpButton(JumpGlyphs.DoubleArrow(up: false, _p.Muted), "Jump to the latest", () => ActiveThread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
@@ -3023,7 +3023,14 @@ internal sealed partial class SessionWindow : Window
     // ── Jump buttons (docs/session-composer-enhancements-plan.md §4) ──────────────
 
     // A round, translucent scroll button that floats over the thread.
-    private Border JumpButton(string glyph, string tip, Action onClick)
+    private Border JumpButton(string glyph, string tip, Action onClick) =>
+        JumpButton(new TextBlock
+        {
+            Text = glyph, FontSize = 16, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        }, tip, onClick);
+
+    private Border JumpButton(Control glyph, string tip, Action onClick)
     {
         var b = new Border
         {
@@ -3031,11 +3038,7 @@ internal sealed partial class SessionWindow : Window
             Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
             Cursor = new Cursor(StandardCursorType.Hand), IsVisible = false,
             BoxShadow = BoxShadows.Parse("0 6 18 0 #40000000"), [ToolTip.TipProperty] = tip,
-            Child = new TextBlock
-            {
-                Text = glyph, FontSize = 16, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            },
+            Child = glyph,
         };
         b.PointerEntered += (_, _) => b.Background = _p.Border;
         b.PointerExited += (_, _) => b.Background = _p.Raised2;

@@ -164,10 +164,10 @@ internal sealed class HistoryWindow : Window
 
         // Floating navigation over the thread, bottom-right — top / previous prompt / next prompt / bottom,
         // each shown only when it would do something (mirrors the live session's jump buttons + top/bottom).
-        _jumpTopBtn = JumpButton("⤒", "Jump to the top", () => _thread.JumpToTop());
+        _jumpTopBtn = JumpButton(JumpGlyphs.DoubleArrow(up: true, _p.Muted), "Jump to the top", () => _thread.JumpToTop());
         _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
         _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => _thread.JumpToNextPrompt());
-        _jumpBottomBtn = JumpButton("⤓", "Jump to the bottom", () => _thread.JumpToBottom());
+        _jumpBottomBtn = JumpButton(JumpGlyphs.DoubleArrow(up: false, _p.Muted), "Jump to the bottom", () => _thread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
@@ -577,7 +577,14 @@ internal sealed class HistoryWindow : Window
     }
 
     // ── Floating navigation ───────────────────────────────────────────────────────
-    private Border JumpButton(string glyph, string tip, Action onClick)
+    private Border JumpButton(string glyph, string tip, Action onClick) =>
+        JumpButton(new TextBlock
+        {
+            Text = glyph, FontSize = 15, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        }, tip, onClick);
+
+    private Border JumpButton(Control glyph, string tip, Action onClick)
     {
         var b = new Border
         {
@@ -585,11 +592,7 @@ internal sealed class HistoryWindow : Window
             Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
             Cursor = new Cursor(StandardCursorType.Hand), IsVisible = false,
             BoxShadow = BoxShadows.Parse("0 6 18 0 #40000000"), [ToolTip.TipProperty] = tip,
-            Child = new TextBlock
-            {
-                Text = glyph, FontSize = 15, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            },
+            Child = glyph,
         };
         // Hover only reacts when the button is live — a disabled button (IsEnabled=false) gets no pointer events.
         b.PointerEntered += (_, _) => b.Background = _p.Border;
