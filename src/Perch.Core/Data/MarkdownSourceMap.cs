@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Extensions.TaskLists;
@@ -68,6 +69,10 @@ internal sealed class MarkdownSourceMap
     /// <summary>Source offset (exclusive) the block's rendered end maps to (-1 when unknown).</summary>
     public int Tail { get; private set; } = -1;
 
+    /// <summary>The rendered text is the block's content verbatim (code, raw HTML, frontmatter) — a selection
+    /// inside it copies as rendered.</summary>
+    public bool Verbatim { get; private init; }
+
     private MarkdownSourceMap(MarkdownCopyDoc doc) => Doc = doc;
 
     // ── Building ─────────────────────────────────────────────────────────────────────────────────────
@@ -91,7 +96,7 @@ internal sealed class MarkdownSourceMap
     /// fences with them.</summary>
     public static MarkdownSourceMap ForLines(MarkdownCopyDoc doc, LeafBlock block, out string text)
     {
-        var map = new MarkdownSourceMap(doc);
+        var map = new MarkdownSourceMap(doc) { Verbatim = true };
         map.SetBounds(block.Span, extendLead: true);
         var sb = new StringBuilder();
         var lines = block.Lines;
@@ -116,7 +121,7 @@ internal sealed class MarkdownSourceMap
     /// only its whole extent maps, which is all a copy of it needs.</summary>
     public static MarkdownSourceMap ForWhole(MarkdownCopyDoc doc, Block block, int renderedLength)
     {
-        var map = new MarkdownSourceMap(doc) { Length = renderedLength };
+        var map = new MarkdownSourceMap(doc) { Length = renderedLength, Verbatim = true };
         map.SetBounds(block.Span, extendLead: true);
         return map;
     }
@@ -230,10 +235,12 @@ internal sealed class MarkdownSourceMap
     // ── Mapping ──────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The source offset a selection starting at rendered offset <paramref name="o"/> begins at. On a
-    /// span's opening edge it takes the outermost span's delimiters (<c>**</c>, <c>[</c>, a backtick).</summary>
-    public int MapStart(int o)
+    /// span's opening edge it takes the outermost span's delimiters (<c>**</c>, <c>[</c>, a backtick).
+    /// <paramref name="inner"/> keeps a start at 0 on the content, rather than taking the block's lead (a list
+    /// marker, heading hashes, an opening fence) along.</summary>
+    public int MapStart(int o, bool inner = false)
     {
-        if (o <= 0 && Lead >= 0) return Lead;
+        if (o <= 0 && Lead >= 0 && !inner) return Lead;
         int best = int.MaxValue;
         foreach (var sp in _spans)
             if (sp.R0 == o) best = Math.Min(best, sp.S0);
@@ -248,10 +255,12 @@ internal sealed class MarkdownSourceMap
     }
 
     /// <summary>The source offset (exclusive) a selection ending at rendered offset <paramref name="o"/> ends at.
-    /// On a span's closing edge it takes the outermost span's delimiters (<c>**</c>, <c>](url)</c>).</summary>
-    public int MapEnd(int o)
+    /// On a span's closing edge it takes the outermost span's delimiters (<c>**</c>, <c>](url)</c>).
+    /// <paramref name="inner"/> keeps an end at the block's end on the content, rather than taking its tail (a
+    /// closing fence, a row's trailing pipe) along.</summary>
+    public int MapEnd(int o, bool inner = false)
     {
-        if (o >= Length && Tail >= 0) return Tail;
+        if (o >= Length && Tail >= 0 && !inner) return Tail;
         if (o <= 0) return Math.Max(0, Lead);
         int best = -1;
         foreach (var sp in _spans)
@@ -278,17 +287,23 @@ internal static class MarkdownCopy
     /// pieces from the same document become the one contiguous source slice from the first's start to the last's
     /// end — so everything between them (blank lines, list markers, fences, table rules) comes along verbatim, and
     /// a whole message copies exactly as written. As plain text, each piece is its rendered characters. Separate
-    /// documents and non-Markdown pieces join with a blank line.</summary>
+    /// documents and non-Markdown pieces join with a blank line.
+    ///
+    /// <para>Block structure only comes along once a selection crosses a block boundary: one inside a single block
+    /// copies just what it covers — a code block's lines without their fences, a heading without its hashes, a
+    /// list item without its marker — keeping only the inline Markdown (emphasis, links, code spans).</para></summary>
     public static string Compose(IReadOnlyList<Piece> pieces, bool markdown = true)
     {
+        if (markdown && pieces.Count == 1 && pieces[0].Map is { } only)
+            return Within(only, pieces[0]);
+
         var parts = new List<string>();
         for (int i = 0; i < pieces.Count; i++)
         {
             var p = pieces[i];
             if (!markdown || p.Map is not { } map)
             {
-                int s0 = Math.Clamp(p.Start, 0, p.Rendered.Length), e0 = Math.Clamp(p.End, s0, p.Rendered.Length);
-                parts.Add(p.Rendered[s0..e0].Replace("￼", ""));
+                parts.Add(Rendered(p));
                 continue;
             }
             int j = i;
@@ -300,6 +315,28 @@ internal static class MarkdownCopy
         }
         return string.Join("\n\n", parts.Where(t => t.Length > 0));
     }
+
+    private static string Rendered(Piece p)
+    {
+        int s = Math.Clamp(p.Start, 0, p.Rendered.Length), e = Math.Clamp(p.End, s, p.Rendered.Length);
+        return p.Rendered[s..e].Replace("￼", "");
+    }
+
+    // A selection inside one block. Verbatim text is already what the source says; prose maps to its source
+    // content, dropping the container prefix (quote bars, list indentation) a wrapped paragraph's later lines carry.
+    private static string Within(MarkdownSourceMap map, Piece p)
+    {
+        if (map.Verbatim)
+            return Rendered(p);
+        int s = map.MapStart(p.Start, inner: true), e = map.MapEnd(p.End, inner: true);
+        // At the block's own edges, whitespace is padding (a table cell's literal spans the spaces around it).
+        string src = map.Source;
+        if (p.Start <= 0) while (s < e && src[s] is ' ' or '\t') s++;
+        if (p.End >= map.Length) while (e > s && src[e - 1] is ' ' or '\t') e--;
+        return e > s ? ContinuationPrefix.Replace(map.Source[s..e], "\n") : Rendered(p);
+    }
+
+    private static readonly Regex ContinuationPrefix = new(@"\n[ \t>]*", RegexOptions.Compiled);
 
     /// <summary>The frontmatter's YAML body as the viewer shows it: the block's lines without the <c>---</c> fences
     /// or trailing blank lines.</summary>
