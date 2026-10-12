@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pick one and the history opens right on it, find bar ready to step through the rest
 - Prompts and replies by default; "Tools & thinking" digs through the rest
 - Ctrl+F works in Session history too, same as in a live session
+- Jump-to-top and jump-to-bottom buttons are a proper double arrow now (the old ones were squinting)
 
 ---
 
