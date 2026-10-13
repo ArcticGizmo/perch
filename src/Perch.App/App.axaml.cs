@@ -3075,25 +3075,21 @@ public partial class App : Application
     /// <summary>
     /// Opens Hypertree's map from the strip header's location chip. Off the UI thread for the same reason
     /// as a jump. Failures are silent like a jump's, with one exception: a Hypertree too old to know
-    /// <c>htree map</c> (BadUsage) expands the branch list instead, so the click still gives a way to move.
+    /// <c>htree map</c> (BadUsage) gets a toast saying so — otherwise the click would just do nothing, and a
+    /// stale install would look like a Perch bug.
     /// </summary>
     private void OnHypertreeMapRequested()
     {
-        var cli = _hypertreeHost?.Last?.Cli;
+        var status = _hypertreeHost?.Last;
+        var cli = status?.Cli;
+        var version = string.IsNullOrWhiteSpace(status?.Version) ? "This version" : $"Hypertree {status!.Version}";
         System.Threading.Tasks.Task.Run(() =>
         {
             if (HypertreeBridge.OpenMap(cli) != HypertreeJump.BadUsage) return;
             Dispatcher.UIThread.Post(() =>
-            {
-                try
-                {
-                    if (_overlay is null || _appSettings is not { } s || s.HypertreeExpanded) return;
-                    s.HypertreeExpanded = true;
-                    s.Save();
-                    _overlay.Canvas.SetHypertreeExpanded(true);
-                }
-                catch { /* the overlay went away mid-flight */ }
-            });
+                _notifier?.Show("Hypertree is too old",
+                    $"{version} can't open its map from Perch. Update Hypertree to use this.",
+                    ToastLevel.Info, null, null));
         });
     }
 
