@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.30] - 2026-10-13
+
+- Hypertree is one row: logo, branch, desktop
+- Clicking the Hypertree row opens Hypertree's map (the branch list has retired)
+- Toast when Hypertree is too old to open its map
+
+---
+
 ## [v0.5.29] - 2026-10-13
 
 - Selections in replies start where you click (not at the paragraph's top)
