@@ -30,8 +30,8 @@ internal sealed record HypertreeInstall(string? Path, string? Version, bool Runn
 }
 
 /// <summary>
-/// The one thing Perch asks Hypertree to <em>do</em>: jump to a branch. Everything Perch reads comes from
-/// the status file (see <see cref="HypertreeStatusReader"/>); only this mutating action needs the CLI.
+/// The things Perch asks Hypertree to <em>do</em>: jump to a branch, or open its map. Everything Perch reads
+/// comes from the status file (see <see cref="HypertreeStatusReader"/>); only these actions need the CLI.
 /// </summary>
 /// <remarks>
 /// <para>The jump can't be performed in-process. Virtual-desktop control is per-session COM plus the
@@ -87,24 +87,39 @@ internal static class HypertreeBridge
     /// point.</param>
     /// <remarks>See <see cref="Address"/> for how a desktop is spelled on the command line.</remarks>
     public static HypertreeJump GoTo(string target, string? cliPath, int desktopIndex = -1)
+        // Passed as separate arguments rather than a joined string so a branch name can never be re-split by
+        // the shell — though in practice we always send a GUID or "main".
+        => Run(cliPath, "goto", Address(target, desktopIndex));
+
+    /// <summary>
+    /// Ask the tray to open its map, framed on the current desktop. Picking a desktop there jumps and closes
+    /// it, so this is the whole "go somewhere" flow handed to Hypertree's own UI.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="HypertreeJump.BadUsage"/> here means a Hypertree that predates <c>htree map</c> (it answers
+    /// an unknown command with exit 3) — the caller's cue to fall back to the branch list. The tray takes the
+    /// foreground itself when the map opens, so nothing needs handing over from our side.
+    /// </remarks>
+    public static HypertreeJump OpenMap(string? cliPath) => Run(cliPath, "map");
+
+    // Runs one htree command and maps its exit code. The exit code is the whole contract; output is ignored.
+    private static HypertreeJump Run(string? cliPath, params string[] args)
     {
         var exe = cliPath is not null && File.Exists(cliPath) ? cliPath : FallbackPath();
         if (exe is null) return HypertreeJump.Unavailable;
 
-        var addressed = Address(target, desktopIndex);
-
         try
         {
-            using var p = Process.Start(new ProcessStartInfo(exe)
+            var psi = new ProcessStartInfo(exe)
             {
-                // Passed as a separate argument rather than a joined string so a branch name can never be
-                // re-split by the shell — though in practice we always send a GUID or "main".
-                ArgumentList = { "goto", addressed },
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-            });
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+
+            using var p = Process.Start(psi);
             if (p is null) return HypertreeJump.Unavailable;
 
             // Drain both pipes while we wait. We don't use the text — the exit code is the contract — but

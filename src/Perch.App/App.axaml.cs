@@ -312,13 +312,8 @@ public partial class App : Application
                 if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
-            // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
+            // Hypertree's published status file → the overlay's Hypertree strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
-            _overlay.Canvas.SetHypertreeExpanded(settings.HypertreeExpanded);
-            _overlay.Canvas.HypertreeExpandChanged += expanded =>
-            {
-                if (_appSettings is { } s) { s.HypertreeExpanded = expanded; s.Save(); }
-            };
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
             // headless sessions have no window to focus, so they get their own rows with an options menu.
             // The full-list window (opened from the strip's overflow line) follows the roster live too.
@@ -469,8 +464,8 @@ public partial class App : Application
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
 
-            // Hypertree branch strip: a click hands the jump to Hypertree's tray via its CLI.
-            _overlay.Canvas.HypertreeRowActivated += OnHypertreeRowActivated;
+            // Hypertree strip: a click asks Hypertree's tray (via its CLI) to open its map.
+            _overlay.Canvas.HypertreeMapRequested += OnHypertreeMapRequested;
 
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
@@ -3053,22 +3048,27 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Jumps to a Hypertree branch — to its resume desktop, or to the specific desktop picked from the
-    /// row's trailing chip (<paramref name="desktopIndex"/>, 0-based; -1 for the resume point). The work is
-    /// a process launch that waits on Hypertree's tray, so it runs off the UI thread; the strip's own poll
-    /// then picks the new position up.
+    /// Opens Hypertree's map from the overlay's Hypertree strip. The work is a process launch that waits on
+    /// Hypertree's tray, so it runs off the UI thread; the strip's own poll picks up wherever you jump to.
     /// </summary>
     /// <remarks>
-    /// A failed jump is silent, like a failed quick-link launch — and here it is also self-correcting:
-    /// the two realistic failures are Hypertree having exited (the strip clears on the next poll) and the
-    /// branch having been removed (it disappears on the next poll). Reporting either would be telling the
-    /// user something the overlay is about to show them anyway.
+    /// Failures are silent, like a failed quick-link launch — Hypertree having exited clears the strip on
+    /// the next poll anyway. The one exception is a Hypertree too old to know <c>htree map</c> (BadUsage):
+    /// that gets a toast, since otherwise the click would just do nothing and look like a Perch bug.
     /// </remarks>
-    private void OnHypertreeRowActivated(HypertreeRow row, int desktopIndex)
+    private void OnHypertreeMapRequested()
     {
-        var target = row.Target;
-        var cli = _hypertreeHost?.Last?.Cli;
-        System.Threading.Tasks.Task.Run(() => HypertreeBridge.GoTo(target, cli, desktopIndex));
+        var status = _hypertreeHost?.Last;
+        var cli = status?.Cli;
+        var version = string.IsNullOrWhiteSpace(status?.Version) ? "This version" : $"Hypertree {status!.Version}";
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (HypertreeBridge.OpenMap(cli) != HypertreeJump.BadUsage) return;
+            Dispatcher.UIThread.Post(() =>
+                _notifier?.Show("Hypertree is too old",
+                    $"{version} can't open its map from Perch. Update Hypertree to use this.",
+                    ToastLevel.Info, null, null));
+        });
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

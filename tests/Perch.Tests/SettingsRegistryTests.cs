@@ -24,10 +24,9 @@ public class SettingsRegistryTests
         // How long a friend's status stays visible before going stale is set from the Friends window's own
         // "Status visibility" dropdown, not a Settings-window control.
         nameof(AppSettings.SocialStatusFreshnessHours),
-        // The Todo and Hypertree sections' expand/collapse are UI state toggled by each section's own
-        // chevron on the overlay, not Settings-window controls.
+        // The Todo section's expand/collapse is UI state toggled by the section's own chevron on the
+        // overlay, not a Settings-window control.
         nameof(AppSettings.TodosExpanded),
-        nameof(AppSettings.HypertreeExpanded),
         // The feeds story player's size, set by dragging the window's own edges.
         nameof(AppSettings.FeedStoryWidthDip),
         nameof(AppSettings.FeedStoryHeightDip),

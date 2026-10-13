@@ -257,9 +257,8 @@ internal static class HeadlessRenderer
         RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1x.png"), 96);
         RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1.5x.png"), 144);
 
-        // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
-        // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
-        // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
+        // Hypertree strip: one line like the GitHub strip — the Hypertree mark, the current branch, and the
+        // desktop on it at the right. The whole band opens Hypertree's map.
         var hyperProbe = new OverlayCanvas();
         hyperProbe.Update(SampleData.Sessions());
         hyperProbe.SetQuickLinks(links, icons);

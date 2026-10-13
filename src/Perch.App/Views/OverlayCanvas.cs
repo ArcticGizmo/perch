@@ -964,41 +964,28 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private double QuickLinksTop => _sectionTop.GetValueOrDefault(OverlaySection.QuickLinks);
 
     // ── Hypertree strip ───────────────────────────────────────────────────────
-    // The optional integration with Hypertree (the virtual-desktop branch manager): one narrow line per
-    // branch in its vertical stack, main included, with the branch you're on marked and a click jumping
-    // to it. Null status means no Hypertree tray is running — the whole section then disappears, since a
-    // list of branches you can't jump to would be noise.
+    // The optional integration with Hypertree (the virtual-desktop branch manager), as one line shaped like
+    // the GitHub alerts strip: the Hypertree mark, the branch you're on, and the desktop on it at the right.
+    // The whole band is one control — clicking it opens Hypertree's own map, where picking a desktop jumps
+    // and closes the map. Null status means no Hypertree tray is running, and the section disappears.
     private HypertreeStatus? _hypertree;
-    private int _hoveredHypertreeRow = -1;
+    private bool _hoveredHypertree;
+    private Rect _hypertreeRect;
 
-    // The trailing desktop chip on a row that has more than one desktop: its hit-rect (captured at paint
-    // time, keyed by Hypertree row index) and hover state. Clicking it opens the desktop picker instead of
-    // jumping to the row's resume point — see ShowHypertreeDesktopPicker.
-    private readonly Dictionary<int, Rect> _hyperDesktopRects = new();
-    private int _hoveredHyperDesktop = -1;
+    /// <summary>Raised when the strip is clicked. The app asks Hypertree to open its map
+    /// (<c>HypertreeBridge.OpenMap</c>) off the UI thread.</summary>
+    internal event Action? HypertreeMapRequested;
 
-    // The chip's "there's a list behind this" hint. Same glyph the sub-agent tree uses for an expandable
-    // node, so the affordance reads the same across the overlay.
-    private const string DesktopChevron = "▾";
+    private bool HypertreeStripVisible => _hypertree is not null;
 
-    /// <summary>Raised when a Hypertree branch line is clicked, with the row to jump to and the 0-based
-    /// desktop on it — or <c>-1</c> for the row's resume desktop, which is what clicking the line means.
-    /// The app routes this to <c>HypertreeBridge.GoTo</c> off the UI thread.</summary>
-    internal event Action<HypertreeRow, int>? HypertreeRowActivated;
-
-    // Shown only when a tray is running AND it has at least one branch beyond main: a lone "main" line
-    // says nothing the user doesn't already know, and costs a section header to say it.
-    private bool HypertreeStripVisible
-        => _hypertree is { Rows.Count: > 1 };
-
-    // Measured, never assumed: the caption and each branch line are sized from their own line height per
-    // the owner-drawn text rule, so the strip can't clip its glyphs on a DPI change.
+    // Measured, never assumed: the line is sized from its own line height per the owner-drawn text rule, so
+    // the strip can't clip its glyphs on a DPI change.
     //
-    // Measured ONCE and cached, though. Building a FormattedText shapes the text, and these feed RowsTop,
-    // which every paint and — via HitTestRow — every pointer move reads. Recomputing them there made
-    // hovering the overlay reshape text several times per mouse move. The inputs are compile-time font
-    // sizes and FormattedText.Height is in DIPs (render scale doesn't enter into it), so the measurement
-    // is a constant and caching it costs no correctness on a DPI change.
+    // Measured ONCE and cached, though. Building a FormattedText shapes the text, and this feeds RowsTop,
+    // which every paint and — via HitTestRow — every pointer move reads. Recomputing it there made hovering
+    // the overlay reshape text several times per mouse move. The inputs are compile-time font sizes and
+    // FormattedText.Height is in DIPs (render scale doesn't enter into it), so the measurement is a constant
+    // and caching it costs no correctness on a DPI change. (The Todo, daemon and GitHub strips share it.)
     private static double? _hyperLineH, _hyperCaptionH;
 
     private static double HypertreeLineHeight
@@ -1007,80 +994,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static double HypertreeCaptionHeight
         => _hyperCaptionH ??= OverlayDraw.Text("Xg", HyperLabelSize, MutedBrush).Height + 4;
 
-    // Collapsed → only the header (caption + chevron) shows. Seeded from AppSettings.HypertreeExpanded and
-    // toggled by the header chevron (the standard collapsible-section pattern — see CLAUDE.md).
-    private bool _hypertreeExpanded = true;
-    private bool _hoveredHyperHeader;
-    private Rect _hyperHeaderRect;
-
-    private double HypertreeStripHeight
-        => !HypertreeStripVisible
-            ? 0
-            : HypertreeCaptionHeight + (_hypertreeExpanded ? _hypertree!.Rows.Count * HypertreeLineHeight + 6 : 0);
-
-    /// <summary>Raised when the Hypertree header's chevron is clicked to expand or collapse — the app persists it.</summary>
-    public event Action<bool>? HypertreeExpandChanged;
+    // The same band height as the GitHub strip, so the two one-line strips read alike.
+    private double HypertreeStripHeight => HypertreeStripVisible ? HypertreeLineHeight + 12 : 0;
 
     private double HypertreeTop => _sectionTop.GetValueOrDefault(OverlaySection.Hypertree);
 
-    /// <summary>Sets the section's initial expand/collapse state (from AppSettings) without raising the change
-    /// event. Call once at wire-up.</summary>
-    public void SetHypertreeExpanded(bool expanded)
-    {
-        if (_hypertreeExpanded == expanded) return;
-        _hypertreeExpanded = expanded;
-        if (HypertreeStripVisible) RemeasurePanel();
-    }
-
-    // Routed from RouteClick: the header toggles expand/collapse.
-    private void OnHypertreeHeaderClicked()
-    {
-        _hypertreeExpanded = !_hypertreeExpanded;
-        HypertreeExpandChanged?.Invoke(_hypertreeExpanded);
-        RemeasurePanel();
-    }
-
     /// <summary>Replaces the Hypertree strip's contents; null clears it. Called on the UI thread by
-    /// <c>HypertreeMonitorHost</c>. Changes the panel height, so relayout.</summary>
+    /// <c>HypertreeMonitorHost</c>. Showing or hiding the strip changes the panel height, so relayout.</summary>
     internal void SetHypertree(HypertreeStatus? status)
     {
+        bool wasVisible = HypertreeStripVisible;
         _hypertree = status;
-        _hoveredHypertreeRow = -1;
-        _hoveredHyperDesktop = -1;
-        _hyperDesktopRects.Clear();
-        RemeasurePanel();
+        if (HypertreeStripVisible != wasVisible) RemeasurePanel();
+        else InvalidateVisual();
     }
 
-    /// <summary>
-    /// Moves the "you are here" marker to <paramref name="index"/> straight away, before Hypertree has
-    /// confirmed the jump.
-    /// </summary>
-    /// <param name="index">The Hypertree row jumped to.</param>
-    /// <param name="desktop">The 0-based desktop on it, or <c>-1</c> for the row's resume point.</param>
-    /// <remarks>
-    /// The jump itself takes ~85ms, but the confirming read arrives whenever the status file next changes
-    /// — so without this the marker visibly trails the click and the whole thing feels slow for something
-    /// that already happened. The next real snapshot overwrites this wholesale, so a jump that fails
-    /// simply corrects itself rather than leaving the marker lying.
-    /// <para>Layout is unaffected (the rows don't change), so this repaints without a remeasure.</para>
-    /// </remarks>
-    internal void MarkHypertreeRow(int index, int desktop = -1)
-    {
-        if (_hypertree is not { } status || index < 0 || index >= status.Rows.Count) return;
-
-        var row = status.Rows[index];
-        // A bare jump lands on the row's resume point, so that's what the marker follows when no desktop
-        // was chosen.
-        if (desktop < 0 || desktop >= row.Desktops.Count) desktop = row.Cursor;
-        if (status.Current.Row == index && status.Current.Desktop == desktop) return;
-
-        status.Current.Row = index;
-        status.Current.Desktop = desktop;
-        // Hypertree moves a row's resume point to the desktop you last used on it, so the trailing chip's
-        // label follows the jump too — otherwise it would sit on the old desktop until the next snapshot.
-        row.Cursor = desktop;
-        InvalidateVisual();
-    }
+    private bool HitTestHypertree(Point p) => ShowFullPanel && HypertreeStripVisible && _hypertreeRect.Contains(p);
 
     // Top of the first session row: below the header, whichever strips are showing (the Todo section sits
     // between Hypertree and the rows), and the "+ New session" launcher row that heads the Sessions section.
@@ -2026,7 +1955,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // Drop stale hit-rects for any section that wasn't painted this pass (its glyphs are gone, so a
             // click must not still land on where it used to be).
             if (!showBody || !SectionVisible(OverlaySection.QuickLinks)) _noteButtonRect = default;
-            if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hyperDesktopRects.Clear();
+            if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hypertreeRect = default;
             if (!showBody || !MicStripVisible) ClearMicHitRects();
             if (!showBody || !MediaStripVisible) ClearMediaHitRects();
             if (!showBody || !FeedStripVisible) ClearSocialRegionHitRects();
@@ -2606,129 +2535,66 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     /// <summary>
-    /// Paints the Hypertree section: a caption, then one narrow line per row of Hypertree's vertical
-    /// stack (main included, at its slot — Hypertree publishes the stack already flattened, so this is
-    /// just array order). The row the cursor is on takes an accent bar and a brighter name; the rest sit
-    /// muted. Each line trails the desktop a jump would land on — the row's resume point — so the result
-    /// of a click is legible before you make it.
-    /// <para>
-    /// On a row with more than one desktop that trailing label is a chip: it takes a chevron and its own
-    /// hover background, and clicking it picks a desktop rather than taking the resume point. A row with a
-    /// single desktop offers no choice, so it stays a plain label.
-    /// </para>
+    /// Paints the Hypertree strip, laid out like the GitHub alerts strip: the Hypertree mark, the branch you're
+    /// on, and the desktop on it right-aligned. The band is one control (hover wash, hand cursor, click opens the
+    /// map). The desktop label gives up width first, then the branch name — the branch is the headline.
     /// </summary>
     private void DrawHypertreeStrip(DrawingContext ctx, double width)
     {
-        _hyperDesktopRects.Clear(); // rebuilt below for whichever rows actually draw a chip
-
         var status = _hypertree;
         if (status is null) return;
 
-        double y = HypertreeTop;
-        double captionH = HypertreeCaptionHeight;
+        double top = HypertreeTop;
+        double h = HypertreeStripHeight;
+        double midY = top + h / 2;
+        var band = new Rect(HorizPad - 4, top + 3, Math.Max(0, width - 2 * (HorizPad - 4)), h - 6);
+        _hypertreeRect = new Rect(0, top, width, h);
+        if (_hoveredHypertree) OverlayDraw.Panel(ctx, band, FeedHoverBrush, null, 6);
 
-        // Collapsible header: a chevron, then the "Hypertree" caption. Clicking it collapses the branch lines.
-        double capMid = y + captionH / 2;
-        if (_hoveredHyperHeader)
-            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, y + 1, width - 2 * (HorizPad - 4), captionH - 2),
-                FeedHoverBrush, null, 5);
-        DrawChevron(ctx, HorizPad + 4, capMid, _hypertreeExpanded);
-        var caption = OverlayDraw.Text("Hypertree", HyperLabelSize, MutedBrush, FontWeight.SemiBold);
-        OverlayDraw.TextLeftMid(ctx, caption, HorizPad + 14, capMid);
-        _hyperHeaderRect = new Rect(0, y, width, captionH);
-        y += captionH;
+        DrawHypertreeMark(ctx, HorizPad + 7, midY, 14);
 
-        if (!_hypertreeExpanded) return;
+        double textX = HorizPad + 22;
+        double right = width - HorizPad;
 
-        double lineH = HypertreeLineHeight;
-        const double MarkerW = 2, MarkerGap = 6, MetaMaxW = 96;
-        double nameX = HorizPad + MarkerW + MarkerGap;
+        var row = status.Current.Row >= 0 && status.Current.Row < status.Rows.Count ? status.Rows[status.Current.Row] : null;
+        string branch = row?.Name is { Length: > 0 } name ? name : "Hypertree";
+        int desk = status.Current.Desktop;
+        string desktop = row is not null && desk >= 0 && desk < row.Desktops.Count ? row.Desktops[desk].Label : "";
 
-        for (int i = 0; i < status.Rows.Count; i++)
-        {
-            var row = status.Rows[i];
-            bool here = status.IsCurrentRow(i);
-            double midY = y + lineH / 2;
+        // The desktop label is capped so a long one can't squeeze the branch name out of the line.
+        double avail = right - textX;
+        if (desktop.Length > 0) desktop = OverlayDraw.Truncate(desktop, HyperMetaSize, Math.Max(0, avail * 0.45));
+        var deskFt = desktop.Length > 0
+            ? OverlayDraw.Text(desktop, HyperMetaSize, _hoveredHypertree ? FgBrush : MutedBrush)
+            : null;
+        double deskW = deskFt is null ? 0 : deskFt.Width + 12;
 
-            if (_hoveredHypertreeRow == i)
-                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
-                    new Rect(4, y, Math.Max(0, width - 8), lineH));
+        var branchFt = OverlayDraw.Text(OverlayDraw.Truncate(branch, HyperRowSize, Math.Max(20, avail - deskW), FontWeight.SemiBold),
+            HyperRowSize, FgBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, branchFt, textX, midY);
 
-            // "You are here" is a bar in the gutter rather than a glyph: at this line height a glyph
-            // would cost width the branch names need, and the bar reads at a glance.
-            if (here)
-                OverlayDraw.Pill(ctx, OverlayDraw.Brush(CycleColor),
-                    new Rect(HorizPad, y + 3, MarkerW, Math.Max(2, lineH - 6)));
-
-            // The trailing desktop label gives up width first — the branch name is what's being chosen.
-            // A row with a desktop to choose from also spends a few pixels on the picker chevron.
-            var meta = row.ResumeLabel;
-            bool pickable = row.Desktops.Count > 1;
-            double chevW = pickable ? OverlayDraw.MeasureWidth(DesktopChevron, HyperMetaSize) + 3 : 0;
-            double metaReserve = 0;
-            if (meta.Length > 0)
-            {
-                meta = OverlayDraw.Truncate(meta, HyperMetaSize, MetaMaxW);
-                metaReserve = OverlayDraw.MeasureWidth(meta, HyperMetaSize) + chevW + 8;
-            }
-
-            var weight = here ? FontWeight.SemiBold : FontWeight.Normal;
-            double nameMax = Math.Max(20, width - HorizPad - nameX - metaReserve);
-            var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(row.Name, HyperRowSize, nameMax, weight),
-                HyperRowSize, here ? FgBrush : BotBrush, weight);
-            OverlayDraw.TextLeftMid(ctx, nameFt, nameX, midY);
-
-            if (meta.Length > 0)
-            {
-                // The chip's lit background washes out a muted label, so hovering it brightens the text
-                // too — otherwise the thing you're about to click is the hardest part of the line to read.
-                bool chipHot = pickable && _hoveredHyperDesktop == i;
-                var metaBrush = chipHot ? FgBrush : MutedBrush;
-                var metaFt = OverlayDraw.Text(meta, HyperMetaSize, metaBrush);
-                double metaX = width - HorizPad - metaFt.Width - chevW;
-
-                if (pickable)
-                {
-                    // Captured before the text so the chip's background paints under it. The rect is the
-                    // click target: everywhere else on the line still jumps to the resume point.
-                    var chip = new Rect(metaX - 5, y + 2, metaFt.Width + chevW + 10, Math.Max(2, lineH - 4));
-                    _hyperDesktopRects[i] = chip;
-                    if (chipHot)
-                        // Deliberately stronger than the line's own hover wash (alpha 28), which is drawn
-                        // underneath it — the chip has to read as its own target, not just a lit row.
-                        OverlayDraw.Panel(ctx, chip, OverlayDraw.Brush(Color.FromArgb(58, 255, 255, 255)),
-                            null, 4);
-                }
-
-                OverlayDraw.TextLeftMid(ctx, metaFt, metaX, midY);
-
-                if (pickable)
-                    OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(DesktopChevron, HyperMetaSize, metaBrush),
-                        metaX + metaFt.Width + 3, midY);
-            }
-
-            y += lineH;
-        }
+        if (deskFt is not null && avail - branchFt.Width > deskW)
+            OverlayDraw.TextLeftMid(ctx, deskFt, right - deskFt.Width, midY);
     }
 
-    // Returns the index into the Hypertree rows under p, or -1 if none (or the strip isn't shown).
-    private int HitTestHypertreeRow(Point p)
+    // Hypertree's own mark (its hypertree.svg path, verbatim), parsed once. The source is a 256-unit square;
+    // the drawing scales it into whatever box the caller asks for.
+    private static Geometry? _hypertreeMark;
+    private const string HypertreeMarkPath =
+        "m 118.58883,234.05605 c -1.16497,-0.28462 -2.18841,-1.12468 -2.75472,-2.26111 l -0.53079,-1.06515 v -16.55416 c 0,-10.91919 -0.069,-16.55416 -0.20269,-16.55416 -0.11148,0 -3.32149,1.59957 -7.13335,3.55459 -9.732287,4.9915 -9.460217,4.65059 -9.460217,11.85357 0,3.91111 -0.0456,4.53026 -0.40424,5.48881 -0.50397,1.347 -0.75968,1.58867 -5.971661,5.64408 -2.33809,1.81925 -5.68791,4.44603 -7.44406,5.83728 -4.07149,3.22553 -4.49982,3.47399 -6.18824,3.58968 -2.06369,0.1414 -2.86774,-0.3966 -5.81854,-3.89322 -1.31497,-1.55821 -3.28503,-3.85555 -4.37791,-5.10519 -1.09289,-1.24965 -2.16365,-2.66115 -2.37947,-3.13666 -0.86828,-1.91299 -0.21319,-4.61345 1.40468,-5.79044 0.40671,-0.29588 2.97958,-2.29706 5.71747,-4.44707 4.14673,-3.25633 4.99866,-4.01244 5.10175,-4.52791 0.0681,-0.34034 0.12465,-2.72466 0.12574,-5.29848 0.002,-4.47635 0.0225,-4.72365 0.47416,-5.69151 0.62987,-1.34974 1.86782,-2.42302 3.85492,-3.34215 2.80223,-1.29616 19.712208,-9.48038 22.482248,-10.88113 2.43413,-1.23088 2.78273,-1.4826 4.66449,-3.36819 1.80003,-1.80369 2.15445,-2.28208 3.08403,-4.16272 1.65574,-3.34974 1.69664,-3.72486 1.61238,-14.78825 -0.0691,-9.07619 -0.0871,-9.44553 -0.53035,-10.90651 -1.01327,-3.3397 -2.92039,-6.13602 -5.70347,-8.36276 -0.90297,-0.72247 -5.20874,-3.44881 -9.568367,-6.05855 -4.359621,-2.60973 -13.071711,-7.8406 -19.360191,-11.62416 -18.17994,-10.93824 -17.60972,-10.61522 -20.00914,-11.33486 -0.99518,-0.29849 -2.72484,-0.35557 -13.78575,-0.45494 l -12.64779,-0.11363 -1.113,-0.62856 c -0.77392,-0.43707 -1.29796,-0.92535 -1.7201,-1.60272 l -0.60709,-0.97416 -0.0622,-8.211962 c -0.0426,-5.62261 0.009,-8.455224 0.16366,-8.983422 0.28089,-0.959517 1.42912,-2.25371 2.51544,-2.835178 0.8097,-0.433408 0.99075,-0.441643 10.99208,-0.500021 l 10.16882,-0.05936 v -5.820293 -5.820293 l -5.3915,-5.351586 c -3.53898,-3.512773 -5.51914,-5.629718 -5.76295,-6.161045 -0.4813,-1.048861 -0.48265,-2.790668 -0.003,-3.846514 0.54706,-1.204212 10.93722,-11.799952 12.15023,-12.390641 1.18073,-0.574973 2.8247,-0.599277 4.01417,-0.05935 0.52674,0.239103 2.0932,1.586323 4.0537,3.486345 1.75737,1.703161 4.96808,4.770895 7.13492,6.817187 4.53618,4.283834 4.92624,4.692771 5.52319,5.790605 0.43428,0.798649 0.44169,0.972938 0.55549,13.052516 0.12667,13.446833 0.0967,13.111994 1.43392,16.02099 0.76943,1.67383 1.07749,1.963 4.21813,3.95941 1.39126,0.88437 4.25978,2.7303 6.37449,4.102062 10.331911,6.70201 23.133288,14.8731 24.825698,15.84616 1.25416,0.72109 1.53758,0.68987 1.94734,-0.21457 0.30421,-0.67145 0.34373,-1.64462 0.34302,-8.44872 -8.5e-4,-8.331282 -0.0834,-9.121412 -1.20944,-11.582432 -0.71308,-1.55843 -1.33999,-2.28821 -3.82973,-4.458184 -1.23484,-1.07624 -4.06644,-3.73149 -6.29245,-5.900556 -2.22601,-2.169066 -5.413247,-5.275338 -7.082757,-6.902827 -3.229851,-3.148556 -10.420741,-10.006389 -14.800961,-14.115439 -2.33304,-2.188597 -2.7326,-2.661407 -3.33479,-3.946109 l -0.68416,-1.459585 -0.0594,-13.254881 c -0.0425,-9.490368 0.006,-13.493035 0.17206,-14.093423 0.29713,-1.076571 1.21822,-2.189005 2.28469,-2.759302 0.82815,-0.442855 0.95921,-0.449448 8.93506,-0.449448 7.900361,0 8.114001,0.01045 8.904041,0.435627 1.04008,0.559739 1.59424,1.163456 2.10782,2.296295 0.395057,0.871412 0.413037,1.290492 0.417287,9.728196 l 0.004,8.817555 1.77069,1.694873 c 0.97388,0.93218 3.593,3.475361 5.82028,5.651513 2.22727,2.176152 4.66749,4.548557 5.42269,5.27201 l 1.37311,1.31537 -0.0308,-21.956558 c -0.0237,-16.890113 0.0261,-22.080084 0.21576,-22.491887 0.31421,-0.68211 1.13294,-1.287619 2.14173,-1.583964 0.55878,-0.164149 3.46551,-0.213945 9.89752,-0.169559 8.95228,0.06178 9.1184,0.07031 9.81468,0.504184 0.38956,0.242739 0.87604,0.726332 1.08109,1.074652 0.35643,0.605484 0.37169,1.599666 0.34738,22.62822 l -0.0254,21.994912 3.09282,-3.035104 c 1.70105,-1.669307 4.89133,-4.810164 7.08952,-6.979681 l 3.9967,-3.944577 0.001,-8.602392 c 6.7e-4,-5.138436 0.083,-8.897182 0.20448,-9.334473 0.29251,-1.053077 0.98678,-1.995307 1.98988,-2.700598 l 0.87414,-0.614614 7.72336,-0.06085 c 5.18296,-0.04083 8.0229,0.01312 8.63401,0.164034 1.31333,0.324327 2.28947,1.077896 2.95729,2.283003 l 0.58409,1.05401 v 13.254882 13.254881 l -0.62386,1.31537 c -0.65318,1.377221 -1.71844,2.470031 -16.37068,16.794222 -10.76444,10.523431 -15.62489,15.394152 -16.71506,16.750392 -1.56523,1.94723 -2.48911,3.643 -3.05798,5.61294 -0.45156,1.563692 -0.46751,1.879322 -0.46751,9.252492 0,7.62099 7.5e-4,7.63432 0.45025,8.08389 0.65874,0.65883 -1.0193,1.63069 16.75074,-9.70142 14.28705,-9.110992 16.23362,-10.419222 17.80206,-11.964252 1.80498,-1.77806 2.58949,-2.94427 3.31377,-4.926116 l 0.53719,-1.469923 0.10747,-11.838329 c 0.0996,-10.966986 0.13565,-11.912802 0.49026,-12.850151 0.30853,-0.815572 0.85564,-1.463201 2.82074,-3.339016 1.34089,-1.279956 4.86568,-4.671628 7.83288,-7.537049 5.69991,-5.504388 6.37791,-6.008715 8.08901,-6.016934 2.11855,-0.01018 2.35122,0.165951 8.3292,6.305239 3.03503,3.116922 5.69717,6.000228 5.91587,6.407346 0.566,1.053623 0.54524,3.088809 -0.0429,4.207141 -0.26486,0.50361 -2.57586,2.915793 -5.81049,6.064889 l -5.37073,5.228704 v 5.82403 5.824031 l 9.66291,0.0022 c 5.3146,0.0012 10.00605,0.05894 10.42545,0.128255 1.36627,0.225812 2.81003,1.261482 3.48712,2.501465 l 0.60709,1.111798 v 8.20102 8.201022 l -0.51696,1.0047 c -0.64709,1.2576 -1.88553,2.21962 -3.22804,2.50754 -0.67703,0.14519 -5.03562,0.22148 -12.70708,0.22242 -10.8137,10e-4 -11.79623,0.0301 -13.29551,0.38989 -2.79038,0.66957 -1.40637,-0.0987 -18.61755,10.3349 -11.70852,7.09784 -18.79765,11.37963 -23.9802,14.48388 -6.47202,3.87662 -9.179,6.35384 -11.03957,10.10253 -1.7431,3.51202 -1.77954,3.78955 -1.86368,14.19379 -0.0702,8.68005 -0.053,9.22253 0.34538,10.89991 0.84677,3.56534 3.20717,6.85669 6.59875,9.20128 1.47065,1.01667 10.22323,5.41226 21.64238,10.86892 5.54182,2.64817 6.25269,3.12417 7.03436,4.7102 0.4255,0.86335 0.4593,1.24755 0.55431,6.30087 l 0.10118,5.38146 5.1603,4.00854 c 2.83816,2.20469 5.46741,4.29071 5.84276,4.63559 0.87229,0.80145 1.64053,2.42074 1.64162,3.46015 0.002,1.90869 -0.16789,2.15613 -6.73911,9.81468 -3.11626,3.63191 -3.25622,3.76607 -4.29994,4.1217 -2.22677,0.75874 -3.4041,0.38366 -6.56356,-2.09101 -1.05736,-0.82818 -4.01694,-3.1423 -6.57685,-5.1425 -6.95625,-5.43528 -7.32651,-5.73937 -7.85476,-6.45094 -0.81662,-1.10003 -0.94802,-1.84606 -0.94964,-5.39183 -0.002,-3.90125 -0.24693,-6.41635 -0.7133,-7.31822 -0.70932,-1.37166 -1.94921,-2.26868 -5.7728,-4.17643 -2.05248,-1.02406 -5.01922,-2.54001 -6.59276,-3.36876 -1.57354,-0.82876 -3.05079,-1.56707 -3.28277,-1.6407 l -0.42178,-0.13387 -0.0563,16.65633 c -0.0561,16.612 -0.0574,16.65849 -0.49187,17.46579 -0.50482,0.93804 -1.09887,1.51978 -2.09393,2.05057 -0.64993,0.34668 -1.30843,0.38066 -7.9934,0.41239 -4.00682,0.019 -7.5824,-0.038 -7.94573,-0.12681 z";
+
+    // The Hypertree mark centred on (cx, cy), fitted into a size×size box, in Hypertree's brand green.
+    internal static void DrawHypertreeMark(DrawingContext ctx, double cx, double cy, double size)
     {
-        if (!(ShowFullPanel && HypertreeStripVisible && _hypertreeExpanded)) return -1;
-
-        double top = HypertreeTop + HypertreeCaptionHeight;
-        double lineH = HypertreeLineHeight;
-        int count = _hypertree!.Rows.Count;
-        if (p.Y < top || p.Y >= top + count * lineH) return -1;
-
-        int index = (int)((p.Y - top) / lineH);
-        return index >= 0 && index < count ? index : -1;
+        var mark = _hypertreeMark ??= Geometry.Parse(HypertreeMarkPath);
+        var b = mark.Bounds;
+        double scale = size / Math.Max(b.Width, b.Height);
+        var m = Matrix.CreateTranslation(-(b.X + b.Width / 2), -(b.Y + b.Height / 2))
+              * Matrix.CreateScale(scale, scale)
+              * Matrix.CreateTranslation(cx, cy);
+        using (ctx.PushTransform(m))
+            ctx.DrawGeometry(Palette.HypertreeBrush, null, mark);
     }
-
-    // Returns the Hypertree row whose trailing desktop chip is under p, or -1. Only rows with more than
-    // one desktop have a chip, so a hit here always means there is a choice to offer.
-    private int HitTestHypertreeDesktop(Point p)
-        => ShowFullPanel && HypertreeStripVisible && _hypertreeExpanded ? HitRect(_hyperDesktopRects, p) : -1;
 
     /// <summary>
     /// Paints the daemon section: a "daemon" caption, then one narrow line per dispatched background
@@ -4231,14 +4097,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
 
-        int hyper = HitTestHypertreeRow(p);
-        if (hyper != _hoveredHypertreeRow) { _hoveredHypertreeRow = hyper; InvalidateVisual(); }
-
-        int hyperDesk = HitTestHypertreeDesktop(p);
-        if (hyperDesk != _hoveredHyperDesktop) { _hoveredHyperDesktop = hyperDesk; InvalidateVisual(); }
-
-        bool hyperHeader = ShowFullPanel && HypertreeStripVisible && _hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p);
-        if (hyperHeader != _hoveredHyperHeader) { _hoveredHyperHeader = hyperHeader; InvalidateVisual(); }
+        // The Hypertree strip is one control, like the GitHub strip: the whole band opens the map.
+        bool overHypertree = HitTestHypertree(p);
+        if (overHypertree != _hoveredHypertree) { _hoveredHypertree = overHypertree; InvalidateVisual(); }
 
         int daemon = HitTestDaemonRow(p);
         if (daemon != _hoveredDaemonRow) { _hoveredDaemonRow = daemon; InvalidateVisual(); }
@@ -4319,7 +4180,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Clickable only over an account's collapse/expand target — its name (expanded) or its chip (collapsed).
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         Cursor = overResize ? ResizeCursor
-            : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
                || overRoost || overRecent || overUsageToggle || overGitHub || overFeeds)
             ? HandCursor : Cursor.Default;
@@ -4438,7 +4299,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
@@ -4446,8 +4307,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
         _hoveredNewSession = false;
-        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
+        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHypertree = _hoveredAutonomousHeader = false;
+        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -4887,26 +4748,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // The Hypertree header toggles the branch section collapsed/expanded.
-        if (_hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p)) { OnHypertreeHeaderClicked(); return; }
-
-        // The trailing desktop chip opens a picker for that row's desktops; the rest of the line is the
-        // plain "go to this branch" jump. Tested first — the chip sits inside the line's own hit-band.
-        int hyperDesk = HitTestHypertreeDesktop(p);
-        if (hyperDesk >= 0)
-        {
-            ShowHypertreeDesktopPicker(hyperDesk);
-            return;
-        }
-
-        int hyper = HitTestHypertreeRow(p);
-        if (hyper >= 0 && _hypertree is { } hs && hyper < hs.Rows.Count)
-        {
-            var branch = hs.Rows[hyper];
-            MarkHypertreeRow(hyper); // move the marker now; the confirming read corrects it if the jump fails
-            HypertreeRowActivated?.Invoke(branch, -1);
-            return;
-        }
+        // Anywhere on the Hypertree strip opens Hypertree's map.
+        if (HitTestHypertree(p)) { HypertreeMapRequested?.Invoke(); return; }
 
         // Docked: a header click collapses/expands the reserved column (the same thing Ctrl+Shift+W does).
         // (The brand mark's own secret — long-press to open the arcade — is handled on press/release, not here.)
@@ -5410,39 +5253,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return item;
     }
 
-    /// <summary>
-    /// Pops the desktops on a Hypertree row at the cursor; picking one jumps straight to it instead of to
-    /// the row's resume point. Only ever reached from the trailing chip, which is only drawn when the row
-    /// has more than one desktop — so this never offers a list of one.
-    /// </summary>
-    /// <remarks>The desktop you're on is called out in the menu text: the strip says "you are here" with
-    /// an accent bar, and a menu has only words to say it with.</remarks>
-    private void ShowHypertreeDesktopPicker(int rowIndex)
-    {
-        if (_hypertree is not { } status || rowIndex < 0 || rowIndex >= status.Rows.Count) return;
-        var row = status.Rows[rowIndex];
-
-        var items = new List<Control>(row.Desktops.Count);
-        for (int i = 0; i < row.Desktops.Count; i++)
-        {
-            int desktop = i; // captured per item — the click fires long after this loop
-            var label = row.Desktops[i].Label;
-            if (string.IsNullOrWhiteSpace(label)) label = $"Desktop {i + 1}";
-            // A menu header is access-key text, so a desktop the user named "dev_env" would otherwise lose
-            // its underscore to a mnemonic. These are labels, not commands — nothing here wants one.
-            label = label.Replace("_", "__");
-            if (status.IsCurrentRow(rowIndex) && status.Current.Desktop == i) label += "   (here)";
-
-            items.Add(MenuItem(label, () =>
-            {
-                // Optimistic, exactly as a line click is: the confirming snapshot corrects a jump that
-                // didn't happen.
-                MarkHypertreeRow(rowIndex, desktop);
-                HypertreeRowActivated?.Invoke(row, desktop);
-            }));
-        }
-        ShowFlyout(items);
-    }
 
     /// <summary>
     /// The options menu for a daemon worker line — reached from either mouse button, since focusing a
