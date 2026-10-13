@@ -2655,11 +2655,25 @@ internal sealed partial class SessionThreadView : ScrollViewer
             Background = _p.Surface, MaxWidth = SessionPalette.ThreadMaxWidth * 0.86,
             Child = new StackPanel { Children = { header, body } },
         };
+        // Pinned while a long report scrolls by: the agent's icon (as on its launch card), whose report it is, and how the
+        // agent ended, so the row reads like the tool cards' pinned headers.
         var name = n.Task.Description.Length > 0 ? n.Task.Description : n.Task.TaskId;
         sticky = new Sticky
         {
-            Card = card, IsOpen = () => body.IsVisible, Collapse = () => SetOpen(false), Glyph = "",
-            Label = () => new StickyLabel("Report", name, ObjectMono: false),
+            Card = card, IsOpen = () => body.IsVisible, Collapse = () => SetOpen(false), Glyph = "⇄",
+            Label = () =>
+            {
+                var t = n.Task;
+                var (status, statusBrush) = t.Status switch
+                {
+                    BackgroundTaskStatus.Failed  => ("failed", _p.Err),
+                    BackgroundTaskStatus.Stopped => ("stopped", _p.Faint),
+                    _                            => ("done", _p.Ok),
+                };
+                if (t.EndedUtc is { } end && end - t.StartedUtc >= TimeSpan.FromSeconds(1))
+                    status += " · " + BackgroundTaskText.Elapsed(end - t.StartedUtc);
+                return new StickyLabel("Report", name, ObjectMono: false, Status: status, StatusBrush: statusBrush);
+            },
         };
         return card;
     }

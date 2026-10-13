@@ -93,7 +93,30 @@ session, try `useCurrentUser` (it's in the Mobile survey's report). Leave **Tool
 | Results | No hit from that session (the reports were never indexed) | Two hits with an **Agent** chip (the Mobile and Spa reports both mention it), each with an excerpt |
 | Choosing the hit | n/a | History opens on that session with the find bar on the query. The report card is collapsed; expand it to see the match. |
 
-## 6. Not checkable on demand
+## 6. A long report pins its header while you scroll
+
+Use any session with a long report: the Safety session's Spa or Api survey in History (12–14K characters), or this
+prompt in a new Perch session:
+
+```text
+Launch one Explore agent in the background with this prompt: "Survey this repository and write a long report of at
+least 1,500 words, with several headed sections and a table. That report is your final answer." Do not wait for it:
+end your turn by saying only "waiting". When it finishes, reply with just "got it".
+```
+
+Open the report card, then scroll so its top goes off the top of the view.
+
+| | Before (`b7c76ba`) | After |
+|---|---|---|
+| Pinned row | A bare `▾ Report  <agent name>` row, easy to miss | `▾ ⇄ Report <agent name>` with a green **done · 1m 25s** (red **failed** for a failed agent), like a tool card's pinned row |
+| Click the row | Collapses the card and lands on its header | Same |
+| ↑ / ↓ | Jump to the card's start, or just past its end | Same |
+
+The row only pins once the open card is taller than about 220 px and its top has scrolled past the top of the view.
+Session windows, History and Roost panes share the same thread view, so check whichever you use. Only the session
+window is render-verified (`session_agent_report_sticky*.png`).
+
+## 7. Not checkable on demand
 
 - **A terminal session's "done" alert after a hand-back.** The `<task-notification>` that follows a `SubagentHandback`
   is now ignored when deciding whether the parent still owes a reply. That needs a terminal (not Perch) session where

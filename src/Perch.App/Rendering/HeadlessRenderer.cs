@@ -2144,7 +2144,16 @@ internal static class HeadlessRenderer
             "### Where a setting would go\n\n" +
             "- `src/composables/api/meApi/types.ts` holds the `/me` response, next to `impersonationEnabled`.\n" +
             "- `src/composables/useCurrentUser.ts` caches it per profile, so it works offline.\n\n" +
-            "| Area | Uses |\n|---|---|\n| Events | V1 only |\n| Actions | V1 and V2 owners |";
+            "| Area | Uses |\n|---|---|\n| Events | V1 only |\n| Actions | V1 and V2 owners |\n\n" +
+            "### Navigation entry points\n\n" +
+            "- The tab bar's Events tab, and the centre **New** button when the user can submit events or actions.\n" +
+            "- Home's \"report an event\" tile, and the Needs-attention row.\n" +
+            "- Routes `/tabs/events`, `/submit/:eventTypeId`, `/events/:id` and its actions and linked items.\n\n" +
+            "None of the routes have flag or permission guards today. Gating is done in the UI with `can()`, so a new " +
+            "event-model setting would gate the same entry points the permissions already do.\n\n" +
+            "### Offline sync\n\n" +
+            "The events outbox, the sync status page and the local-data clear all touch events, and the home page " +
+            "preloads the event collections. A V2 switch would need each of them to pick the right collection.";
         var events = new List<Perch.Data.Control.SessionEvent>
         {
             new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "auto", 18),
@@ -2187,6 +2196,10 @@ internal static class HeadlessRenderer
             Shot(dark ? "session_agent_report_1x.png" : "session_agent_report_light_1x.png");
             w.OpenReportsForRender();
             Shot(dark ? "session_agent_report_open_1x.png" : "session_agent_report_open_light_1x.png");
+            // Scrolled into the open report: its header pins to the top of the view, like any tall card's.
+            Dispatcher.UIThread.RunJobs();
+            if (w.ScrollIntoReportForRender(260))
+                Shot(dark ? "session_agent_report_sticky_1x.png" : "session_agent_report_sticky_light_1x.png");
             w.Close();
         }
     }

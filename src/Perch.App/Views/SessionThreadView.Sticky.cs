@@ -64,6 +64,21 @@ internal sealed partial class SessionThreadView
         }
     }
 
+    /// <summary>Render mode only: scroll so the viewport top sits <paramref name="into"/> DIPs inside the first open agent
+    /// report card. False when none is built.</summary>
+    internal bool ScrollIntoReportForRender(double into)
+    {
+        foreach (var (item, view) in _views)
+            if (item is TaskNoticeItem && view.Stickies.FirstOrDefault() is { } s && TryCardRect(s, out var r))
+            {
+                _stickToBottom = false;
+                Offset = new Vector(Offset.X, r.Top + into);
+                UpdateSticky();
+                return true;
+            }
+        return false;
+    }
+
     /// <summary>Render mode only: scroll so the viewport top sits <paramref name="into"/> DIPs inside the first tool
     /// card for <paramref name="toolName"/>. False when no such card is built.</summary>
     internal bool ScrollIntoToolForRender(string toolName, double into)
