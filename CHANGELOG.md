@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.29] - 2026-10-13
+
+- Selections in replies start where you click (not at the paragraph's top)
+- Dragging from a code block's padding copies just the code, no fences
+
+---
+
 ## [v0.5.28] - 2026-10-13
 
 - File paths in replies are clickable, backticks or not

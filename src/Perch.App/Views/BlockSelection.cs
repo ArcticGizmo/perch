@@ -6,8 +6,10 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Perch.Data;
@@ -375,32 +377,33 @@ internal sealed class BlockSelection
         }
     }
 
-    // The nearest block to a viewport point, plus the caret char within it: a block whose (visible) vertical
-    // band holds the point — the horizontally nearest of them, so a table row resolves to the right cell — else
-    // the last block that starts above it (a point in the gap after a block lands at that block's end), else the
-    // first visible block. Null when there are no blocks on show.
+    // The nearest block to a viewport point, plus the caret char within it: the block vertically nearest the point
+    // (zero when its visible band holds it), ties broken by horizontal distance so a table row resolves to the
+    // right cell. A point in a gap or a panel's padding is pulled onto that block's nearest line — so a drag that
+    // starts in a code panel's top padding anchors on the code's first line, not on the end of the block above
+    // (which would make a selection inside one block copy as a cross-block one, fences and all). Null when there
+    // are no blocks on show.
     private (int Pos, int Ch)? Nearest(Point pView)
     {
-        int inBand = -1, above = -1, first = -1;
-        double bestDx = double.MaxValue;
+        int chosen = -1;
+        double bestDy = double.MaxValue, bestDx = double.MaxValue;
+        Rect chosenRect = default;
         for (int i = 0; i < _blocks.Count; i++)
         {
             if (VisibleRect(_blocks[i], _scroll) is not { } r)
                 continue;
-            if (first < 0) first = i;
-            if (pView.Y >= r.Top && pView.Y <= r.Bottom)
+            double dy = pView.Y < r.Top ? r.Top - pView.Y : pView.Y > r.Bottom ? pView.Y - r.Bottom : 0;
+            double dx = pView.X < r.Left ? r.Left - pView.X : pView.X > r.Right ? pView.X - r.Right : 0;
+            if (dy < bestDy || (dy == bestDy && dx < bestDx))
             {
-                double dx = pView.X < r.Left ? r.Left - pView.X : pView.X > r.Right ? pView.X - r.Right : 0;
-                if (dx < bestDx) { bestDx = dx; inBand = i; }
+                bestDy = dy; bestDx = dx; chosen = i; chosenRect = r;
             }
-            else if (r.Top <= pView.Y)
-                above = i;
         }
-        int chosen = inBand >= 0 ? inBand : above >= 0 ? above : first;
         if (chosen < 0)
             return null;
         var tb = _blocks[chosen];
-        int ch = _scroll.TranslatePoint(pView, tb) is { } pInText ? CharIndexAt(tb, pInText, TextOf(tb).Length) : 0;
+        var p = new Point(pView.X, Math.Clamp(pView.Y, chosenRect.Top, Math.Max(chosenRect.Top, chosenRect.Bottom - 1)));
+        int ch = _scroll.TranslatePoint(p, tb) is { } pInText ? CharIndexAt(tb, pInText, TextOf(tb).Length) : 0;
         return (chosen, ch);
     }
 
@@ -428,10 +431,26 @@ internal sealed class BlockSelection
     // The caret char index for a point in a block's own space. The TextLayout is laid out inside the padding.
     private static int CharIndexAt(SelectableTextBlock tb, Point p, int maxLen)
     {
-        if (tb.TextLayout is not { } layout)
+        if (FreshLayout(tb, maxLen) is not { } layout)
             return 0;
         var hit = layout.HitTestPoint(new Point(p.X - tb.Padding.Left, p.Y - tb.Padding.Top));
         return Math.Clamp(hit.TextPosition + (hit.IsTrailing ? 1 : 0), 0, maxLen);
+    }
+
+    // A block's text layout, current. A SelectableTextBlock drops its layout whenever its native selection moves (the
+    // press that starts a drag, each move while it holds the pointer) without asking for a new measure, and until
+    // the next layout pass a block built from inlines (every rendered Markdown block) hands back a stand-in with no
+    // text — so a hit-test lands every point on the block's start. Re-measure such a block against its last
+    // constraint, which rebuilds the real layout.
+    private static TextLayout? FreshLayout(SelectableTextBlock tb, int textLength)
+    {
+        var layout = tb.TextLayout;
+        if (layout is null || textLength == 0 || layout.TextLines.Sum(l => l.Length) >= textLength
+            || LayoutInformation.GetPreviousMeasureConstraint(tb) is not { } constraint)
+            return layout;
+        tb.InvalidateMeasure();
+        tb.Measure(constraint);
+        return tb.TextLayout;
     }
 
     // The selection in document order: (startBlock, startChar, endBlock, endChar); startBlock < 0 when empty.
