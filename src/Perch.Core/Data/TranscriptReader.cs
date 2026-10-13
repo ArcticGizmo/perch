@@ -1283,6 +1283,9 @@ internal sealed class TranscriptReader
         return lastWasInterrupt;
     }
 
+    // Test seam: the uncached verdict for a transcript at a path.
+    internal static bool ParseAwaitingAssistantAt(string path) => ParseAwaitingAssistant(path);
+
     private static bool ParseAwaitingAssistant(string path)
     {
         // Walk the tail chronologically; the verdict is decided by the last meaningful assistant/user
@@ -1308,6 +1311,10 @@ internal sealed class TranscriptReader
             var type = node?["type"]?.GetValue<string>();
             if (type == "user")
             {
+                // A transcript-only record (the <task-notification> after a SubagentHandback) runs no turn, so
+                // nothing will answer it: it leaves the verdict as it was.
+                if (TranscriptJson.IsTranscriptOnly(node))
+                    continue;
                 sawTurn = true;
                 awaiting = true;
             }
@@ -1319,7 +1326,8 @@ internal sealed class TranscriptReader
                     foreach (var block in content)
                         if (TranscriptJson.BlockType(block) == "tool_use")
                             hadToolUse = true;
-                awaiting = hadToolUse;
+                // A thinking-only record is a message still being written, not a finished turn.
+                awaiting = hadToolUse || TranscriptJson.IsThinkingOnly(node);
             }
         }
 

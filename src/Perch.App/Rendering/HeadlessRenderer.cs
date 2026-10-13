@@ -2133,6 +2133,77 @@ internal static class HeadlessRenderer
         }
     }
 
+    // An async agent that finished and handed back its report (docs/agent-report-notice-plan.md): the notice as a
+    // collapsed card showing the report's gist, then clicked open to the report itself. The parent's reply follows.
+    private static void RenderAgentReport(string outDir, string cwd)
+    {
+        const string report =
+            "## Safety.Mobile: safety events and feature flags\n\n" +
+            "Short answer: mobile only uses the V1 `/safety-events` API. There is no reference to V2 anywhere, and no " +
+            "feature-flag system; it learns about the org from `GET /me`.\n\n" +
+            "### Where a setting would go\n\n" +
+            "- `src/composables/api/meApi/types.ts` holds the `/me` response, next to `impersonationEnabled`.\n" +
+            "- `src/composables/useCurrentUser.ts` caches it per profile, so it works offline.\n\n" +
+            "| Area | Uses |\n|---|---|\n| Events | V1 only |\n| Actions | V1 and V2 owners |\n\n" +
+            "### Navigation entry points\n\n" +
+            "- The tab bar's Events tab, and the centre **New** button when the user can submit events or actions.\n" +
+            "- Home's \"report an event\" tile, and the Needs-attention row.\n" +
+            "- Routes `/tabs/events`, `/submit/:eventTypeId`, `/events/:id` and its actions and linked items.\n\n" +
+            "None of the routes have flag or permission guards today. Gating is done in the UI with `can()`, so a new " +
+            "event-model setting would gate the same entry points the permissions already do.\n\n" +
+            "### Offline sync\n\n" +
+            "The events outbox, the sync status page and the local-data clear all touch events, and the home page " +
+            "preloads the event collections. A V2 switch would need each of them to pick the right collection.";
+        var events = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "auto", 18),
+            new Perch.Data.Control.AssistantTextEvent("I'll survey the mobile app in the background while I read the API side."),
+            new Perch.Data.Control.ToolUseEvent("u1", "Agent", "Survey Mobile event usage",
+                "{\"description\":\"Survey Mobile event usage\",\"subagent_type\":\"Explore\",\"run_in_background\":true}"),
+            new Perch.Data.Control.TaskStartedEvent("a362b6a7", "u1", "local_agent", "Survey Mobile event usage", true, false),
+            new Perch.Data.Control.ToolResultEvent("u1", "Async agent launched successfully.", false,
+                new Perch.Data.Control.BackgroundLaunch("a362b6a7", Perch.Data.BackgroundTaskKind.Agent)),
+            new Perch.Data.Control.AssistantTextEvent("The survey is running. I'll write the plan once it reports back."),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.12, InputTokens: 600, OutputTokens: 120, DurationMs: 4200),
+            new Perch.Data.Control.AgentReportEvent(null, "u1", report),
+            new Perch.Data.Control.TaskUpdatedEvent("a362b6a7", "completed", null),
+            new Perch.Data.Control.TaskNotificationEvent(new Perch.Data.TaskNotification("a362b6a7", "u1", "completed", null,
+                "Agent finished"), Delivered: false),
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "auto", 18),
+            new Perch.Data.Control.AssistantTextEvent(
+                "The Mobile survey is back: it only uses V1 and has no flag system, so a new `/me` field is the natural switch."),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.09, InputTokens: 700, OutputTokens: 90, DurationMs: 3100),
+        };
+
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 900 };
+            w.FeedSampleForRender(cwd, "Survey the mobile app's event usage in the background, then plan the flags.", events);
+            var task = w.ConversationForRender.BackgroundTasks.Get("a362b6a7")!;
+            task.StartedUtc = DateTime.UtcNow.AddSeconds(-85);
+            task.EndedUtc = DateTime.UtcNow;
+            w.Show();
+            void Shot(string file)
+            {
+                for (int i = 0; i < 20; i++) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(15); }
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (w.CaptureRenderedFrame() is { } frame)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, file));
+                    frame.Save(fs);
+                }
+            }
+            Shot(dark ? "session_agent_report_1x.png" : "session_agent_report_light_1x.png");
+            w.OpenReportsForRender();
+            Shot(dark ? "session_agent_report_open_1x.png" : "session_agent_report_open_light_1x.png");
+            // Scrolled into the open report: its header pins to the top of the view, like any tall card's.
+            Dispatcher.UIThread.RunJobs();
+            if (w.ScrollIntoReportForRender(260))
+                Shot(dark ? "session_agent_report_sticky_1x.png" : "session_agent_report_sticky_light_1x.png");
+            w.Close();
+        }
+    }
+
     private static void RenderSessionWindow(string outDir)
     {
         const string cwd = @"C:\src\perch";
@@ -2252,6 +2323,7 @@ internal static class HeadlessRenderer
         }
 
         RenderBackgroundTasks(outDir, cwd);
+        RenderAgentReport(outDir, cwd);
 
         // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
         // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).

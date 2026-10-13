@@ -34,6 +34,42 @@ public class TranscriptReaderTests
         Assert.True(reader.LastTurnAwaitingAssistant("sessPendingTool", Cwd));
     }
 
+    // Hand-back shapes captured live (2026-10-13, claude 2.1.296), trimmed. The report arrives as a peer message that
+    // starts a turn; the agent's <task-notification> follows as a transcript-only record that no turn answers.
+    private const string HandbackMessage =
+        """{"type":"user","isMeta":true,"turnOrigin":"peer","message":{"role":"user","content":"Another Claude session sent a message:\n<agent-message from=\"a362b\">\n[Subagent hand-back] The report follows:\n  done\n</agent-message>"},"origin":{"kind":"peer","from":"a362b","handback":true}}""";
+    private const string ParentThinking =
+        """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Weighing it.","signature":"x"}]}}""";
+    private const string ParentReply =
+        """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The survey is back."}]}}""";
+    private const string TranscriptOnlyNotification =
+        """{"type":"user","queueTranscriptOnly":true,"message":{"role":"user","content":"<task-notification>\n<task-id>a362b</task-id>\n<status>completed</status>\n</task-notification>"},"origin":{"kind":"task-notification"}}""";
+
+    private static bool AwaitingAfter(params string[] lines)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "perch-awaiting-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        try
+        {
+            File.WriteAllLines(path, lines);
+            return TranscriptReader.ParseAwaitingAssistantAt(path);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
+    public void LastTurnAwaitingAssistant_TrueWhileHandbackTurnIsThinking()
+    {
+        Assert.True(AwaitingAfter(ParentReply, HandbackMessage));
+        Assert.True(AwaitingAfter(ParentReply, HandbackMessage, ParentThinking));
+    }
+
+    [Fact]
+    public void LastTurnAwaitingAssistant_TranscriptOnlyNotificationDoesNotReopenTheTurn() =>
+        Assert.False(AwaitingAfter(ParentReply, HandbackMessage, ParentThinking, ParentReply, TranscriptOnlyNotification));
+
     [Fact]
     public void LastTurnAwaitingAssistant_FalseWhenTranscriptMissing()
     {

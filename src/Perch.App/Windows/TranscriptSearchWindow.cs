@@ -16,7 +16,7 @@ namespace Perch.Avalonia.Windows;
 /// transcript is streamed off the UI thread (<see cref="TranscriptSearch"/>); matching sessions stream in, grouped,
 /// newest first (active ones on top, the same order as the history list), each with its first few hits as one-line
 /// excerpts. Picking a hit raises <see cref="HitChosen"/> and the app opens the history viewer on it, with the find
-/// bar lit on the query. By default only prompts and replies are searched; "Tools & thinking" widens it to tool
+/// bar lit on the query. By default only prompts, replies and agents' reports are searched; "Tools & thinking" widens it to tool
 /// calls, tool output and thinking. A reused window, not a palette: it stays open while you read the hits.
 /// </summary>
 internal sealed class TranscriptSearchWindow : Window
@@ -333,6 +333,7 @@ internal sealed class TranscriptSearchWindow : Window
             TranscriptHitKind.Prompt => ("You", _p.Brand, _p.BrandWash),
             TranscriptHitKind.Reply => ("Claude", _p.Text, _p.Raised2),
             TranscriptHitKind.Thinking => ("Thinking", _p.Violet, _p.VioletWash),
+            TranscriptHitKind.Report => ("Agent", _p.Text, _p.Raised2),
             _ => ("Tool", _p.Muted, _p.Raised2),
         };
         var chip = new Border

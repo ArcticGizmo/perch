@@ -601,7 +601,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         PermissionItem p       => new ItemView { Root = Row(BuildPermission(p), null, null) },
         NoteItem n             => new ItemView { Root = Row(BuildNote(n), null, null) },
         CompactionItem cm      => new ItemView { Root = Row(BuildCompaction(cm), null, null) },
-        TaskNoticeItem tn      => new ItemView { Root = Row(BuildTaskNotice(tn), null, null) },
+        TaskNoticeItem tn      => BuildTaskNoticeView(tn),
         _                      => new ItemView { Root = new Panel() },
     };
 
@@ -727,6 +727,12 @@ internal sealed partial class SessionThreadView : ScrollViewer
                 break;
             case CompactionItem cm:
                 if (_compactions.TryGetValue(cm, out var card)) card.Update(cm);
+                break;
+            case TaskNoticeItem tn:
+                // A report that landed after the notice turns the one-liner into its expandable card.
+                var rebuilt = BuildTaskNoticeView(tn);
+                if (_wraps.TryGetValue(item, out var noticeWrap)) noticeWrap.Child = rebuilt.Root;
+                _views[item] = rebuilt;
                 break;
         }
     }
@@ -2546,8 +2552,33 @@ internal sealed partial class SessionThreadView : ScrollViewer
     // ── Background-task notice ────────────────────────────────────────────────────
 
     // A background task ended, or a Monitor fired: a quiet centred line like a note, marked by how it ended. It
-    // stands in for the raw <task-notification> the CLI hands Claude, which used to render as a user bubble.
+    // stands in for the raw <task-notification> the CLI hands Claude, which used to render as a user bubble. An agent
+    // that handed back a report gets an expandable card instead (docs/agent-report-notice-plan.md).
+    private ItemView BuildTaskNoticeView(TaskNoticeItem n)
+    {
+        if (!n.IsEvent && n.Task.Report is { } report)
+        {
+            var card = BuildAgentReport(n, report, out var sticky);
+            var view = new ItemView { Root = Row(card, null, null) };
+            view.Stickies.Add(sticky);
+            return view;
+        }
+        return new ItemView { Root = Row(BuildTaskNotice(n), null, null) };
+    }
+
     private Control BuildTaskNotice(TaskNoticeItem n)
+    {
+        var (glyph, brush, text) = NoticeLine(n);
+        return new TextBlock
+        {
+            Text = glyph + "  " + text, FontFamily = _p.Mono, FontSize = 11.5, Foreground = brush,
+            HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center, Margin = new Thickness(0, -8, 0, -8),
+        };
+    }
+
+    // The notice's glyph, colour and words ("Agent "Survey Api" finished · 1m 25s").
+    private (string Glyph, IBrush Brush, string Text) NoticeLine(TaskNoticeItem n)
     {
         var t = n.Task;
         var (glyph, brush) = n.IsEvent
@@ -2561,12 +2592,90 @@ internal sealed partial class SessionThreadView : ScrollViewer
         var text = BackgroundTaskText.Notice(t, n.EventText);
         if (!n.IsEvent && t.EndedUtc is { } end && end - t.StartedUtc >= TimeSpan.FromSeconds(1))
             text += "  ·  " + BackgroundTaskText.Elapsed(end - t.StartedUtc);
-        return new TextBlock
+        return (glyph, brush, text);
+    }
+
+    // An agent's notice with its report: the notice line as a header with a chevron, and the report's gist beneath it;
+    // a click opens the report itself, rendered as Markdown (file references clickable) with a hover copy button.
+    // Collapsed by default: the parent's next reply usually sums the report up. Open state survives a rebuild.
+    private Control BuildAgentReport(TaskNoticeItem n, string report, out Sticky sticky)
+    {
+        var (glyph, brush, text) = NoticeLine(n);
+        bool open = _expandState.TryGetValue(n, out var o) && o;
+        var chevron = new TextBlock { Text = open ? "▾" : "▸", Foreground = _p.Faint, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var gist = AgentReport.Gist(report);
+        var header = new Border
         {
-            Text = glyph + "  " + text, FontFamily = _p.Mono, FontSize = 11.5, Foreground = brush,
-            HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap,
-            TextAlignment = TextAlignment.Center, Margin = new Thickness(0, -8, 0, -8),
+            Padding = new Thickness(13, 9), Cursor = new Cursor(StandardCursorType.Hand), Background = Brushes.Transparent,
+            Child = new StackPanel
+            {
+                Spacing = 3,
+                Children =
+                {
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal, Spacing = 9,
+                        Children =
+                        {
+                            chevron,
+                            new TextBlock
+                            {
+                                Text = glyph + "  " + text, FontFamily = _p.Mono, FontSize = 11.5, Foreground = brush,
+                                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                            },
+                        },
+                    },
+                    new TextBlock
+                    {
+                        Text = "Report · " + gist, Foreground = _p.Muted, FontSize = 13, FontFamily = _p.Body,
+                        Margin = new Thickness(21, 0, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis,
+                    },
+                },
+            },
         };
+        var body = new Border
+        {
+            Padding = new Thickness(34, 2, 15, 13), IsVisible = open,
+            Child = WithCopy(Prose(report), () => report, userSide: false),
+        };
+        void SetOpen(bool show)
+        {
+            body.IsVisible = show;
+            _expandState[n] = show;
+            chevron.Text = show ? "▾" : "▸";
+        }
+        header.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            SetOpen(!body.IsVisible);
+        };
+        var card = new Border
+        {
+            BorderBrush = _p.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(11),
+            Background = _p.Surface, MaxWidth = SessionPalette.ThreadMaxWidth * 0.86,
+            Child = new StackPanel { Children = { header, body } },
+        };
+        // Pinned while a long report scrolls by: the agent's icon (as on its launch card), whose report it is, and how the
+        // agent ended, so the row reads like the tool cards' pinned headers.
+        var name = n.Task.Description.Length > 0 ? n.Task.Description : n.Task.TaskId;
+        sticky = new Sticky
+        {
+            Card = card, IsOpen = () => body.IsVisible, Collapse = () => SetOpen(false), Glyph = "⇄",
+            Label = () =>
+            {
+                var t = n.Task;
+                var (status, statusBrush) = t.Status switch
+                {
+                    BackgroundTaskStatus.Failed  => ("failed", _p.Err),
+                    BackgroundTaskStatus.Stopped => ("stopped", _p.Faint),
+                    _                            => ("done", _p.Ok),
+                };
+                if (t.EndedUtc is { } end && end - t.StartedUtc >= TimeSpan.FromSeconds(1))
+                    status += " · " + BackgroundTaskText.Elapsed(end - t.StartedUtc);
+                return new StickyLabel("Report", name, ObjectMono: false, Status: status, StatusBrush: statusBrush);
+            },
+        };
+        return card;
     }
 
     // ── Compaction progress ───────────────────────────────────────────────────────

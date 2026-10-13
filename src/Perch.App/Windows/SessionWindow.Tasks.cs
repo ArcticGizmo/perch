@@ -146,4 +146,10 @@ internal sealed partial class SessionWindow
 
     /// <summary>Render-only: what a RUNNING chip's click does.</summary>
     internal void RevealBackgroundTaskForRender(string taskId) => _thread.RevealBackgroundTask(taskId);
+
+    /// <summary>Render-only: opens every agent report notice, as a click on its header would.</summary>
+    internal void OpenReportsForRender() => _thread.OpenReportsForRender();
+
+    /// <summary>Render-only: scrolls into the open report card, so its pinned header shows.</summary>
+    internal bool ScrollIntoReportForRender(double into) => _thread.ScrollIntoReportForRender(into);
 }

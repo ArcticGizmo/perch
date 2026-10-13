@@ -73,6 +73,71 @@ internal static class BackgroundTaskOutput
         resultText is not null && LaunchOutputRx.Match(resultText) is { Success: true } m ? m.Groups[1].Value : null;
 }
 
+/// <summary>
+/// An agent's report as Perch shows it: the text a background agent handed back to its parent. Pure string work over
+/// the CLI's forms (see <c>docs/agent-report-notice-plan.md</c>): the hand-back message's framed body, a
+/// <c>&lt;task-notification&gt;</c>'s <c>&lt;result&gt;</c>, or the raw <c>SubagentHandback</c> input.
+/// </summary>
+internal static class AgentReport
+{
+    /// <summary>The longest report kept. A report is the agent's whole write-up (10 KB is common), and the thread holds it.</summary>
+    public const int MaxChars = 64 * 1024;
+
+    private const string FrameEnd = "The report follows:";
+
+    /// <summary>The report inside a hand-back message's body: the text after the CLI's "[Subagent hand-back] … The report
+    /// follows:" frame, with the two-space indent the CLI adds to every line removed. A body without the frame is taken
+    /// whole. Null when nothing is left.</summary>
+    public static string? FromHandbackBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        var text = body.Replace("\r\n", "\n");
+        int at = text.IndexOf(FrameEnd, StringComparison.Ordinal);
+        if (at >= 0) text = text[(at + FrameEnd.Length)..];
+        else if (text.StartsWith("[Subagent hand-back]", StringComparison.Ordinal))
+            text = text.IndexOf('\n') is >= 0 and var nl ? text[(nl + 1)..] : "";
+        var lines = text.Split('\n').Select(l => l.StartsWith("  ", StringComparison.Ordinal) ? l[2..] : l);
+        return Clean(string.Join('\n', lines));
+    }
+
+    /// <summary>The body of the <c>&lt;agent-message&gt;</c> in a hand-back record's text (the fallback when the record has
+    /// no <c>origin.body</c>), then as <see cref="FromHandbackBody"/>.</summary>
+    public static string? FromAgentMessage(string? text)
+    {
+        if (text is null) return null;
+        int open = text.IndexOf("<agent-message", StringComparison.Ordinal);
+        if (open < 0 || text.IndexOf('>', open) is not (>= 0 and var gt)) return null;
+        int close = text.LastIndexOf("</agent-message>", StringComparison.Ordinal);
+        return close > gt ? FromHandbackBody(text[(gt + 1)..close]) : null;
+    }
+
+    /// <summary>A notification's <c>&lt;result&gt;</c> as a report. Null for the placeholder the CLI writes when a
+    /// <c>SubagentHandback</c> already delivered the report ("…delivered to you as a message… not repeated here").</summary>
+    public static string? FromNotificationResult(string? result) =>
+        result is null || result.Contains("report was delivered to you as a message", StringComparison.Ordinal)
+            ? null
+            : Clean(result);
+
+    /// <summary>Trimmed and capped, or null when blank.</summary>
+    public static string? Clean(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        text = text.Replace("\r\n", "\n").Trim('\n', '\r', ' ');
+        return text.Length <= MaxChars ? text : text[..MaxChars].TrimEnd() + $"\n\n… (+{text.Length - MaxChars:N0} more characters)";
+    }
+
+    /// <summary>The report's first meaningful line, for a collapsed header: a heading's text, else the first line.</summary>
+    public static string Gist(string report)
+    {
+        foreach (var raw in report.Split('\n'))
+        {
+            var line = raw.Trim().TrimStart('#', '>', ' ').Trim();
+            if (line.Length > 0) return line;
+        }
+        return "";
+    }
+}
+
 /// <summary>The words every surface uses for a background task (card status, notices, chips), so they read alike.</summary>
 internal static class BackgroundTaskText
 {
@@ -183,6 +248,11 @@ internal sealed class BackgroundTask(string taskId)
     public string? LastEvent { get; internal set; }
     /// <summary>An agent's latest progress line ("Running Sleep for 15 seconds").</summary>
     public string? Progress { get; internal set; }
+    /// <summary>An agent's report: the text it handed back to the parent (see <see cref="AgentReport"/>). Null until one
+    /// arrives, and for shells and Monitors.</summary>
+    public string? Report { get; internal set; }
+    // The report came from a SubagentHandback (the agent's own deliberate hand-off), which no other source overrides.
+    internal bool ReportIsHandback;
 
     public bool IsRunning => Status == BackgroundTaskStatus.Running;
 }
@@ -193,15 +263,17 @@ internal sealed class BackgroundTask(string taskId)
 /// tool-use id and no status, because the task is still running.
 /// </summary>
 internal sealed record TaskNotification(
-    string TaskId, string? ToolUseId, string? Status, string? OutputFile, string? Summary, string? EventText = null)
+    string TaskId, string? ToolUseId, string? Status, string? OutputFile, string? Summary, string? EventText = null,
+    string? Result = null)
 {
     public bool IsEvent => EventText is not null && Status is null;
 
     private static readonly Regex Tag = new(@"<(task-id|tool-use-id|output-file|status|summary|event)>(.*?)</\1>",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
-    /// <summary>Parses the notification at the start of <paramref name="text"/>, or null when it isn't one. Only the
-    /// small header tags are read; an agent's <c>&lt;result&gt;</c> (which can be huge) is skipped.</summary>
+    /// <summary>Parses the notification at the start of <paramref name="text"/>, or null when it isn't one. The header
+    /// tags are matched only before any <c>&lt;result&gt;</c>; the result itself (an agent's report, which can be
+    /// large and can quote tags) is taken whole, up to its last closing tag.</summary>
     public static TaskNotification? Parse(string? text)
     {
         if (text is null) return null;
@@ -210,6 +282,14 @@ internal sealed record TaskNotification(
         var end = text.IndexOf("</task-notification>", start, StringComparison.Ordinal);
         // The tags sit before any <result>; stop there so a report quoting tags can't be read as the header.
         var resultAt = text.IndexOf("<result>", start, StringComparison.Ordinal);
+        string? result = null;
+        if (resultAt >= 0)
+        {
+            // The report may itself contain "</task-notification>", so the closing tags are found from the end.
+            int limit = text.LastIndexOf("</task-notification>", StringComparison.Ordinal) is >= 0 and var last ? last : text.Length;
+            int close = text.LastIndexOf("</result>", limit - 1, StringComparison.Ordinal);
+            if (close > resultAt) result = text[(resultAt + "<result>".Length)..close];
+        }
         int stop = resultAt >= 0 ? resultAt : end >= 0 ? end : text.Length;
         var body = text[start..stop];
         string? id = null, toolUse = null, file = null, status = null, summary = null, ev = null;
@@ -226,7 +306,7 @@ internal sealed record TaskNotification(
                 case "event": ev ??= m.Groups[2].Value.Trim('\n', '\r'); break;
             }
         }
-        return id is { Length: > 0 } ? new TaskNotification(id, toolUse, status, file, summary, ev) : null;
+        return id is { Length: > 0 } ? new TaskNotification(id, toolUse, status, file, summary, ev, result) : null;
     }
 
     private static readonly Regex ExitCodeRx = new(@"exit code (-?\d+)", RegexOptions.Compiled);
@@ -363,8 +443,16 @@ internal sealed class BackgroundTaskTracker(Func<DateTime>? clock = null)
             t.Description = DescriptionFor(n.ToolUseId) ?? "";
         }
         t.OutputFile ??= n.OutputFile is { Length: > 0 } f ? f : null;
-        if (n.Summary is { Length: > 0 }) t.Summary = n.Summary;
-        t.ExitCode ??= TaskNotification.ExitCodeOf(n.Summary);
+        if (t.Kind == BackgroundTaskKind.Agent)
+        {
+            // An agent's report: the transcript's <result> (null when the CLI only says a hand-back delivered it). On the
+            // stream the summary IS the agent's final text, so it's taken as the report and kept off the notice line.
+            var report = delivered ? AgentReport.FromNotificationResult(n.Result) : AgentReport.Clean(n.Summary);
+            if (report is not null) SetReport(t, report, handback: false);
+        }
+        if (n.Summary is { Length: > 0 } && (delivered || t.Kind != BackgroundTaskKind.Agent)) t.Summary = n.Summary;
+        // Only a shell has an exit code; an agent's summary can be its report, which may well mention one.
+        if (t.Kind != BackgroundTaskKind.Agent) t.ExitCode ??= TaskNotification.ExitCodeOf(n.Summary);
         // The notification is the final word. It can correct a task_updated: an update that said completed and a
         // notification that says failed reads failed. ("killed" then "stopped" is the same end.)
         var status = TaskNotification.StatusOf(n.Status) ?? BackgroundTaskStatus.Completed;
@@ -374,6 +462,32 @@ internal sealed class BackgroundTaskTracker(Func<DateTime>? clock = null)
     }
 
     private readonly HashSet<string> _noticed = new(StringComparer.Ordinal);
+
+    /// <summary>A background agent's report arrived (see <see cref="Control.AgentReportEvent"/>), keyed by the agent's
+    /// task id or the tool-use id that launched it. A report for a task not seen yet is held until the task appears.
+    /// A <paramref name="handback"/> report wins over one read from a notification, never the reverse.</summary>
+    public void Reported(string? taskId, string? toolUseId, string report, bool handback = true)
+    {
+        if (AgentReport.Clean(report) is not { } text) return;
+        if ((Get(taskId) ?? ByToolUseId(toolUseId)) is { } t)
+        {
+            SetReport(t, text, handback);
+            return;
+        }
+        if (taskId is { Length: > 0 }) _pendingReports[taskId] = (text, handback);
+    }
+
+    private readonly Dictionary<string, (string Text, bool Handback)> _pendingReports = new(StringComparer.Ordinal);
+
+    private void SetReport(BackgroundTask t, string text, bool handback)
+    {
+        if (t.ReportIsHandback && !handback) return;
+        if (t.Report == text && t.ReportIsHandback == handback) return;
+        t.Report = text;
+        t.ReportIsHandback |= handback;
+        t.Kind = BackgroundTaskKind.Agent;   // only an agent reports
+        Changed?.Invoke(t);
+    }
 
     /// <summary><c>background_tasks_changed</c>: the CLI's whole current set. A tracked task missing from it has
     /// ended (its own update normally said so first). A task in it we haven't seen is added.</summary>
@@ -417,6 +531,7 @@ internal sealed class BackgroundTaskTracker(Func<DateTime>? clock = null)
         _order.InsertRange(0, adopted);
         foreach (var id in other._noticed) _noticed.Add(id);
         foreach (var (id, tool) in other._tools) _tools.TryAdd(id, tool);
+        foreach (var (id, report) in other._pendingReports) _pendingReports.TryAdd(id, report);
     }
 
     private bool Settle(BackgroundTask t, BackgroundTaskStatus status, DateTime? at)
@@ -433,6 +548,12 @@ internal sealed class BackgroundTaskTracker(Func<DateTime>? clock = null)
         t = new BackgroundTask(taskId) { StartedUtc = at ?? _clock() };
         _byId[taskId] = t;
         _order.Add(t);
+        if (_pendingReports.Remove(taskId, out var pending))
+        {
+            t.Report = pending.Text;
+            t.ReportIsHandback = pending.Handback;
+            t.Kind = BackgroundTaskKind.Agent;
+        }
         return t;
     }
 

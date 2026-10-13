@@ -181,6 +181,12 @@ internal static class StreamJsonParser
                         name,
                         ToolSummary.Describe(name, block?["input"]),
                         block?["input"]?.ToJsonString() ?? "{}"));
+                    // A background agent handing its report back: the stream's only copy of the report (the parent's
+                    // hand-back message is a user record, which stream-json doesn't echo). Keyed by the launch it answers.
+                    if (name == "SubagentHandback"
+                        && TranscriptJson.AsString(root["parent_tool_use_id"]) is { Length: > 0 } launch
+                        && TranscriptJson.AsString(block?["input"]?["message"]) is { Length: > 0 } report)
+                        events.Add(new AgentReportEvent(null, launch, report));
                     break;
             }
         }
@@ -250,9 +256,11 @@ internal static class StreamJsonParser
         // A delivered <task-notification> (transcript only: stream-json doesn't echo user records) is a user
         // record with plain string content. It ends a background task, or carries a Monitor event.
         if (TranscriptJson.AsString(root["message"]?["content"]) is { } text)
-            return TaskNotification.Parse(text) is { } n
-                ? [new TaskNotificationEvent(n, Delivered: true, TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"])))]
-                : [];
+        {
+            if (TaskNotification.Parse(text) is { } n)
+                return [new TaskNotificationEvent(n, Delivered: true, TranscriptJson.ParseTimestamp(TranscriptJson.AsString(root["timestamp"])))];
+            return ParseHandback(root, text) is { } handback ? [handback] : [];
+        }
 
         var blocks = TranscriptJson.ContentArray(root);
         if (blocks is null) return [];
@@ -268,6 +276,21 @@ internal static class StreamJsonParser
                 LaunchOf(root, resultText)));
         }
         return events;
+    }
+
+    // A background agent's hand-back, as the transcript records it (claude 2.1.296): an isMeta user record "Another Claude
+    // session sent a message: <agent-message from="{agentId}">[Subagent hand-back] … The report follows: …", with
+    // origin {kind:"peer", from: agentId, handback: true, body}. Plain peer messages (no handback flag) aren't reports.
+    private static AgentReportEvent? ParseHandback(JsonNode root, string text)
+    {
+        var origin = root["origin"];
+        bool handback;
+        try { handback = origin?["handback"]?.GetValue<bool>() == true; }
+        catch { handback = false; }
+        if (!handback) return null;
+        var report = AgentReport.FromHandbackBody(TranscriptJson.AsString(origin?["body"])) ?? AgentReport.FromAgentMessage(text);
+        var from = TranscriptJson.AsString(origin?["from"]) ?? TranscriptJson.AsString(origin?["senderTaskId"]);
+        return report is not null && from is { Length: > 0 } ? new AgentReportEvent(from, null, report) : null;
     }
 
     // The background task a tool result reports starting, from its structured result (stream-json's

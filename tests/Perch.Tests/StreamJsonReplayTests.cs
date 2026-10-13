@@ -19,6 +19,7 @@ public class StreamJsonReplayTests
     [InlineData("absorbed-mid-turn-prompt.jsonl")]
     [InlineData("queued-prompts-own-turn.jsonl")]
     [InlineData("background-agent-after-result.jsonl")]
+    [InlineData("agent-message-mid-task.jsonl")]
     [InlineData("interrupt-mid-tool.jsonl")]
     [InlineData("interrupt-mid-text.jsonl")]
     public void Replay_MatchesExpectedTurnState(string fixture)
@@ -53,5 +54,28 @@ public class StreamJsonReplayTests
             }
         }
         Assert.True(checkpoints > 0, $"{fixture} has no expect checkpoints");
+    }
+
+    // The same capture's thread: before the sub-agent filter, the background agent's ToolSearch + SendMessage calls and
+    // its "done" rendered as an assistant message of the parent's own. Now the thread holds only the parent's work, and
+    // the agent's reply (the stream's task_notification summary) is its notice's report.
+    [Fact]
+    public void Replay_BackgroundAgentWork_StaysOffTheParentThread()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "stream-json", "agent-message-mid-task.jsonl");
+        var conv = new SessionConversation();
+        foreach (var line in File.ReadLines(path))
+        {
+            var node = JsonNode.Parse(line)!;
+            var perch = node["perch"]?.GetValue<string>();
+            if (perch == "prompt") conv.AddUserPrompt(node["text"]!.GetValue<string>());
+            else if (perch is null) foreach (var ev in StreamJsonParser.Parse(line)) conv.Apply(ev);
+        }
+
+        var tools = conv.Items.OfType<AssistantMessageItem>().SelectMany(a => a.Parts).OfType<ToolCallPart>().Select(t => t.ToolName);
+        Assert.Equal(["Agent"], tools);
+        Assert.DoesNotContain(conv.Items.OfType<AssistantMessageItem>().SelectMany(a => a.Parts).OfType<TextPart>(),
+            t => t.Text == "done");
+        Assert.Equal("done", Assert.Single(conv.Items.OfType<TaskNoticeItem>()).Task.Report);
     }
 }
