@@ -471,6 +471,7 @@ public partial class App : Application
 
             // Hypertree branch strip: a click hands the jump to Hypertree's tray via its CLI.
             _overlay.Canvas.HypertreeRowActivated += OnHypertreeRowActivated;
+            _overlay.Canvas.HypertreeMapRequested += OnHypertreeMapRequested;
 
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
@@ -3069,6 +3070,31 @@ public partial class App : Application
         var target = row.Target;
         var cli = _hypertreeHost?.Last?.Cli;
         System.Threading.Tasks.Task.Run(() => HypertreeBridge.GoTo(target, cli, desktopIndex));
+    }
+
+    /// <summary>
+    /// Opens Hypertree's map from the strip header's location chip. Off the UI thread for the same reason
+    /// as a jump. Failures are silent like a jump's, with one exception: a Hypertree too old to know
+    /// <c>htree map</c> (BadUsage) expands the branch list instead, so the click still gives a way to move.
+    /// </summary>
+    private void OnHypertreeMapRequested()
+    {
+        var cli = _hypertreeHost?.Last?.Cli;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (HypertreeBridge.OpenMap(cli) != HypertreeJump.BadUsage) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    if (_overlay is null || _appSettings is not { } s || s.HypertreeExpanded) return;
+                    s.HypertreeExpanded = true;
+                    s.Save();
+                    _overlay.Canvas.SetHypertreeExpanded(true);
+                }
+                catch { /* the overlay went away mid-flight */ }
+            });
+        });
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

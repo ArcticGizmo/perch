@@ -170,8 +170,9 @@ internal sealed class AppSettings
     public bool ShowRecentSessions { get; set; } = true;
 
     // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
-    // its header. Toggled by the section's own chevron. Defaults to expanded.
-    public bool HypertreeExpanded { get; set; } = true;
+    // its header. Toggled by the section's own chevron. Defaults to collapsed: the header alone shows where
+    // you are and opens Hypertree's map, which is the better way to move than a long branch list.
+    public bool HypertreeExpanded { get; set; }
 
     // How the Roost's rail orders sessions (by status group, or A–Z), picked by the toggle in the rail's header.
     // UI state, not a Settings-window control. See docs/roost-tabs-plan.md. (The pre-tabs RoostLayout,

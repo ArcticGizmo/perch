@@ -1009,9 +1009,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Collapsed → only the header (caption + chevron) shows. Seeded from AppSettings.HypertreeExpanded and
     // toggled by the header chevron (the standard collapsible-section pattern — see CLAUDE.md).
-    private bool _hypertreeExpanded = true;
+    private bool _hypertreeExpanded;
     private bool _hoveredHyperHeader;
     private Rect _hyperHeaderRect;
+
+    // The "you are here" chip on the header's right — the current branch · desktop. It's the section's main
+    // control: clicking it opens Hypertree's own map (where picking a desktop jumps and closes it), so the
+    // section can sit collapsed to one line and still get you anywhere. The rest of the header still toggles.
+    private Rect _hyperHereRect;
+    private bool _hoveredHyperHere;
+
+    /// <summary>Raised when the header's current-location chip is clicked. The app asks Hypertree to open
+    /// its map (<c>HypertreeBridge.OpenMap</c>) off the UI thread.</summary>
+    internal event Action? HypertreeMapRequested;
 
     private double HypertreeStripHeight
         => !HypertreeStripVisible
@@ -2026,7 +2036,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // Drop stale hit-rects for any section that wasn't painted this pass (its glyphs are gone, so a
             // click must not still land on where it used to be).
             if (!showBody || !SectionVisible(OverlaySection.QuickLinks)) _noteButtonRect = default;
-            if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hyperDesktopRects.Clear();
+            if (!showBody || !SectionVisible(OverlaySection.Hypertree))
+            {
+                _hyperDesktopRects.Clear();
+                _hyperHeaderRect = _hyperHereRect = default;
+            }
             if (!showBody || !MicStripVisible) ClearMicHitRects();
             if (!showBody || !MediaStripVisible) ClearMediaHitRects();
             if (!showBody || !FeedStripVisible) ClearSocialRegionHitRects();
@@ -2636,6 +2650,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var caption = OverlayDraw.Text("Hypertree", HyperLabelSize, MutedBrush, FontWeight.SemiBold);
         OverlayDraw.TextLeftMid(ctx, caption, HorizPad + 14, capMid);
         _hyperHeaderRect = new Rect(0, y, width, captionH);
+        DrawHypertreeHere(ctx, status, width, y, captionH, HorizPad + 14 + caption.Width + 10);
         y += captionH;
 
         if (!_hypertreeExpanded) return;
@@ -2709,6 +2724,38 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
             y += lineH;
         }
+    }
+
+    /// <summary>
+    /// Paints the header's right-hand "you are here" chip — <c>branch · desktop</c> — and records its
+    /// hit-rect. It reads as a quiet label until hovered, then takes the same lit chip background as a
+    /// row's desktop picker, since it is a control: clicking it opens Hypertree's map.
+    /// </summary>
+    /// <param name="minX">The chip's left limit (just past the caption); the location is truncated to fit.</param>
+    private void DrawHypertreeHere(DrawingContext ctx, HypertreeStatus status, double width, double y,
+                                   double captionH, double minX)
+    {
+        _hyperHereRect = default;
+        int rowIndex = status.Current.Row;
+        if (rowIndex < 0 || rowIndex >= status.Rows.Count) return;
+
+        var row = status.Rows[rowIndex];
+        int desk = status.Current.Desktop;
+        string label = desk >= 0 && desk < row.Desktops.Count ? row.Desktops[desk].Label : "";
+        string here = label.Length > 0 ? $"{row.Name} · {label}" : row.Name;
+
+        double maxW = width - HorizPad - minX - 10;
+        if (maxW < 24) return; // too narrow to say anything legible — the caption alone stays clickable
+        here = OverlayDraw.Truncate(here, HyperMetaSize, maxW);
+
+        var brush = _hoveredHyperHere ? FgBrush : BotBrush;
+        var ft = OverlayDraw.Text(here, HyperMetaSize, brush);
+        double x = width - HorizPad - ft.Width;
+        var chip = new Rect(x - 5, y + 1, ft.Width + 10, Math.Max(2, captionH - 2));
+        _hyperHereRect = chip;
+        if (_hoveredHyperHere)
+            OverlayDraw.Panel(ctx, chip, OverlayDraw.Brush(Color.FromArgb(58, 255, 255, 255)), null, 4);
+        OverlayDraw.TextLeftMid(ctx, ft, x, y + captionH / 2);
     }
 
     // Returns the index into the Hypertree rows under p, or -1 if none (or the strip isn't shown).
@@ -4237,8 +4284,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hyperDesk = HitTestHypertreeDesktop(p);
         if (hyperDesk != _hoveredHyperDesktop) { _hoveredHyperDesktop = hyperDesk; InvalidateVisual(); }
 
-        bool hyperHeader = ShowFullPanel && HypertreeStripVisible && _hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p);
-        if (hyperHeader != _hoveredHyperHeader) { _hoveredHyperHeader = hyperHeader; InvalidateVisual(); }
+        // The location chip sits inside the header band, so don't also light the header when hovering it.
+        bool hyperHere = ShowFullPanel && HypertreeStripVisible && _hyperHereRect.Width > 0 && _hyperHereRect.Contains(p);
+        bool hyperHeader = !hyperHere && ShowFullPanel && HypertreeStripVisible && _hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p);
+        if (hyperHeader != _hoveredHyperHeader || hyperHere != _hoveredHyperHere)
+        {
+            _hoveredHyperHeader = hyperHeader;
+            _hoveredHyperHere = hyperHere;
+            InvalidateVisual();
+        }
 
         int daemon = HitTestDaemonRow(p);
         if (daemon != _hoveredDaemonRow) { _hoveredDaemonRow = daemon; InvalidateVisual(); }
@@ -4319,7 +4373,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Clickable only over an account's collapse/expand target — its name (expanded) or its chip (collapsed).
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         Cursor = overResize ? ResizeCursor
-            : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+            : (ql >= 0 || hyper >= 0 || hyperHere || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
                || overRoost || overRecent || overUsageToggle || overGitHub || overFeeds)
             ? HandCursor : Cursor.Default;
@@ -4438,7 +4492,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredHyperHere || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
@@ -4446,7 +4500,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
         _hoveredNewSession = false;
-        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
+        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredHyperHere = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
@@ -4887,7 +4941,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // The Hypertree header toggles the branch section collapsed/expanded.
+        // The Hypertree header's location chip opens Hypertree's map; the rest of the header toggles the
+        // branch section collapsed/expanded. Chip first — it sits inside the header band.
+        if (_hyperHereRect.Width > 0 && _hyperHereRect.Contains(p)) { HypertreeMapRequested?.Invoke(); return; }
         if (_hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p)) { OnHypertreeHeaderClicked(); return; }
 
         // The trailing desktop chip opens a picker for that row's desktops; the rest of the line is the

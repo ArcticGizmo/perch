@@ -257,15 +257,21 @@ internal static class HeadlessRenderer
         RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1x.png"), 96);
         RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1.5x.png"), 144);
 
-        // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
-        // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
-        // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
+        // Hypertree strip, collapsed (the default): one header line whose right-hand chip says where you are
+        // and opens Hypertree's map.
         var hyperProbe = new OverlayCanvas();
         hyperProbe.Update(SampleData.Sessions());
         hyperProbe.SetQuickLinks(links, icons);
         hyperProbe.SetHypertree(SampleHypertree());
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1.5x.png"), 144);
+
+        // …and expanded: the branch list under the header, with the row the cursor is on marked. The sample
+        // puts main mid-stack (Hypertree publishes the stack already flattened, main at its slot) and gives
+        // one branch a long desktop label so the trailing-label truncation is exercised.
+        hyperProbe.SetHypertreeExpanded(true);
+        RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_expanded_1x.png"), 96);
+        RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_expanded_1.5x.png"), 144);
 
         // Daemon strip: the background daemon's headless workers as their own "daemon" section below the
         // rows, capped at five with the "show +N more" overflow line (the spare is hidden as noise). One
