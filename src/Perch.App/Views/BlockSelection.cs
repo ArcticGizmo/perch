@@ -6,8 +6,10 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Perch.Data;
@@ -429,10 +431,26 @@ internal sealed class BlockSelection
     // The caret char index for a point in a block's own space. The TextLayout is laid out inside the padding.
     private static int CharIndexAt(SelectableTextBlock tb, Point p, int maxLen)
     {
-        if (tb.TextLayout is not { } layout)
+        if (FreshLayout(tb, maxLen) is not { } layout)
             return 0;
         var hit = layout.HitTestPoint(new Point(p.X - tb.Padding.Left, p.Y - tb.Padding.Top));
         return Math.Clamp(hit.TextPosition + (hit.IsTrailing ? 1 : 0), 0, maxLen);
+    }
+
+    // A block's text layout, current. A SelectableTextBlock drops its layout whenever its native selection moves (the
+    // press that starts a drag, each move while it holds the pointer) without asking for a new measure, and until
+    // the next layout pass a block built from inlines (every rendered Markdown block) hands back a stand-in with no
+    // text — so a hit-test lands every point on the block's start. Re-measure such a block against its last
+    // constraint, which rebuilds the real layout.
+    private static TextLayout? FreshLayout(SelectableTextBlock tb, int textLength)
+    {
+        var layout = tb.TextLayout;
+        if (layout is null || textLength == 0 || layout.TextLines.Sum(l => l.Length) >= textLength
+            || LayoutInformation.GetPreviousMeasureConstraint(tb) is not { } constraint)
+            return layout;
+        tb.InvalidateMeasure();
+        tb.Measure(constraint);
+        return tb.TextLayout;
     }
 
     // The selection in document order: (startBlock, startChar, endBlock, endChar); startBlock < 0 when empty.
