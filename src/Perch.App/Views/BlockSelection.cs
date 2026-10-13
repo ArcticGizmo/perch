@@ -375,32 +375,33 @@ internal sealed class BlockSelection
         }
     }
 
-    // The nearest block to a viewport point, plus the caret char within it: a block whose (visible) vertical
-    // band holds the point — the horizontally nearest of them, so a table row resolves to the right cell — else
-    // the last block that starts above it (a point in the gap after a block lands at that block's end), else the
-    // first visible block. Null when there are no blocks on show.
+    // The nearest block to a viewport point, plus the caret char within it: the block vertically nearest the point
+    // (zero when its visible band holds it), ties broken by horizontal distance so a table row resolves to the
+    // right cell. A point in a gap or a panel's padding is pulled onto that block's nearest line — so a drag that
+    // starts in a code panel's top padding anchors on the code's first line, not on the end of the block above
+    // (which would make a selection inside one block copy as a cross-block one, fences and all). Null when there
+    // are no blocks on show.
     private (int Pos, int Ch)? Nearest(Point pView)
     {
-        int inBand = -1, above = -1, first = -1;
-        double bestDx = double.MaxValue;
+        int chosen = -1;
+        double bestDy = double.MaxValue, bestDx = double.MaxValue;
+        Rect chosenRect = default;
         for (int i = 0; i < _blocks.Count; i++)
         {
             if (VisibleRect(_blocks[i], _scroll) is not { } r)
                 continue;
-            if (first < 0) first = i;
-            if (pView.Y >= r.Top && pView.Y <= r.Bottom)
+            double dy = pView.Y < r.Top ? r.Top - pView.Y : pView.Y > r.Bottom ? pView.Y - r.Bottom : 0;
+            double dx = pView.X < r.Left ? r.Left - pView.X : pView.X > r.Right ? pView.X - r.Right : 0;
+            if (dy < bestDy || (dy == bestDy && dx < bestDx))
             {
-                double dx = pView.X < r.Left ? r.Left - pView.X : pView.X > r.Right ? pView.X - r.Right : 0;
-                if (dx < bestDx) { bestDx = dx; inBand = i; }
+                bestDy = dy; bestDx = dx; chosen = i; chosenRect = r;
             }
-            else if (r.Top <= pView.Y)
-                above = i;
         }
-        int chosen = inBand >= 0 ? inBand : above >= 0 ? above : first;
         if (chosen < 0)
             return null;
         var tb = _blocks[chosen];
-        int ch = _scroll.TranslatePoint(pView, tb) is { } pInText ? CharIndexAt(tb, pInText, TextOf(tb).Length) : 0;
+        var p = new Point(pView.X, Math.Clamp(pView.Y, chosenRect.Top, Math.Max(chosenRect.Top, chosenRect.Bottom - 1)));
+        int ch = _scroll.TranslatePoint(p, tb) is { } pInText ? CharIndexAt(tb, pInText, TextOf(tb).Length) : 0;
         return (chosen, ch);
     }
 
