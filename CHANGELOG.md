@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.27] - 2026-10-13
+
+- Background agents' reports, as expandable cards on their finish notice
+- Long reports pin their header while you scroll
+- Reports show in session history and transcript search
+- A background agent's own work no longer poses as Claude's replies
+- Finish notices stay one line (no more entire reports, centred)
+- Context bar ignores a background agent's context
+- Sessions stay "running" while an agent writes up (it was thinking, not done)
+
+---
+
 ## [v0.5.26] - 2026-10-12
 
 - Search transcripts: find what was said, in every session ever
