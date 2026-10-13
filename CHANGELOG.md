@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.28] - 2026-10-13
+
+- File paths in replies are clickable, backticks or not
+- `file.cs:42` and `#L42` references open VS Code at that line
+- Ctrl+click opens any file: Markdown in the viewer, the rest in VS Code
+- Linked paths are underlined, with the full path on hover
+- "Copy path" on the file right-click menu
+- Network shares are still never touched (your password hash stays home)
+
+---
+
 ## [v0.5.27] - 2026-10-13
 
 - Background agents' reports, as expandable cards on their finish notice

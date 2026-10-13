@@ -116,6 +116,38 @@ public class FileRefResolverTests
         Assert.Empty(_probed);
     }
 
+    [Theory]
+    [InlineData("src/a.cs:42", 42)]
+    [InlineData("src/a.cs:42:7", 42)]
+    [InlineData("src/a.cs:42-50", 42)]
+    [InlineData("src/a.cs#L42", 42)]
+    [InlineData("src/a.cs#L42-L50", 42)]
+    [InlineData("src/a.cs", 0)]
+    public void A_line_suffix_is_split_off_before_the_probe(string text, int line)
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "perch-fileref-repo");
+        var hit = FileRefResolver.ResolveRef(cwd, text, Exists);
+        Assert.Equal(new FileRefTarget(Path.GetFullPath(Path.Combine(cwd, "src/a.cs")), line), hit);
+        Assert.Equal([Path.GetFullPath(Path.Combine(cwd, "src/a.cs"))], _probed);
+    }
+
+    [Theory]
+    [InlineData(@"\\perch-cp9.invalid\s\a.cs:42")]
+    [InlineData("//perch-cp9.invalid/s/a.cs#L3")]
+    public void A_line_suffix_never_makes_an_unsafe_span_probeable(string text)
+    {
+        Assert.Null(FileRefResolver.ResolveRef(@"C:\work\repo", text, Exists));
+        Assert.Empty(_probed);
+    }
+
+    [Fact]
+    public void An_alternate_data_stream_is_refused_without_a_probe()
+    {
+        if (!OperatingSystem.IsWindows()) return;   // ':' is an ordinary file-name char elsewhere
+        Assert.Null(FileRefResolver.ResolveRef(@"C:\work\repo", "a.md:payload", Exists));
+        Assert.Empty(_probed);
+    }
+
     [Fact]
     public void Repeated_resolves_are_served_from_the_cache()
     {

@@ -27,6 +27,20 @@ inert. Two capabilities were added:
    existing URL-link `Ctrl+click` convention, so plain text stays selectable). Threaded through
    `MarkdownView.Build(md, style, FileRefContext)`; other `MarkdownView` callers pass none and are unchanged.
 
+   **Extended (bare paths + lines):**
+   - **Bare paths.** Paths written without backticks (`src/a.cs`, `README.md`) are found by `FilePathDetect`.
+     It is a pure shape filter that skips URLs, `scheme:` words and version numbers, with at most 32 candidates
+     per block.
+   - **Line refs.** `a.cs:42`, `a.cs:42:7` and `a.cs#L42` (including a link's `#L42` fragment) resolve through
+     `FileRefResolver.ResolveRef`. It splits the line off before the CP9 safety check, so a suffix can't make an
+     unsafe path probeable.
+   - **Opening.** Linked ranges are **underlined**. Hovering one shows the path, and a hand cursor appears while
+     Ctrl is held. **Ctrl+click opens any file**: a Markdown file goes to the viewer, anything else to VS Code at
+     the line.
+   - **Safety.** Opening never shell-executes. `OpenInEditor` falls back only to the view-only default handler, or
+     else to a reveal. The menu gains **Copy path**.
+   - **Hardening.** The resolver now also refuses NTFS alternate-stream paths (`a.md:payload`).
+
 2. **Changed-files side panel + toggle.** A `◨` toggle at the **top-right of the composer** (right end of the
    quick-action glyph row, shown once a session attaches) shows/hides a right-docked panel listing the **repo's working-tree
    changes** (`git status`) with **git diff line markers** (`+added` / `−removed`). Each row is the same
@@ -71,9 +85,10 @@ inert. Two capabilities were added:
 - Renames show `R` with no `+/-` (numstat's `{old => new}` key doesn't match the status path — deliberately
   simple).
 - Panel open/closed state is **per-window ephemeral** (default closed), not persisted.
-- Prose file refs are existence-gated, so a file mentioned in prose that doesn't exist yet won't link. Hover
-  gives no cursor/tooltip for prose spans (deliberate — avoids clobbering a URL link armed on the same block);
-  discoverability is via right-click.
+- Prose file refs are existence-gated, so a file mentioned in prose that doesn't exist yet won't link. The hover
+  tip/cursor only clears what it set itself, so it never clobbers a URL link armed on the same block. The hand
+  cursor follows Ctrl on the next pointer move (no key hook, unlike `LinkText`).
+- Only the settled part of a streaming reply links; the still-forming tail is rendered without file refs.
 - "Open in VS Code" is best-effort: if the `code` CLI isn't on PATH it falls back to the OS default handler.
 - The panel isn't in the headless render harness (it's hidden by default) — eyeball it by running the tray
   app and toggling `◨`.
