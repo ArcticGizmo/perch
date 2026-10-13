@@ -7,7 +7,7 @@ namespace Perch.Data;
 
 /// <summary>Where in a transcript a search hit landed: a typed prompt, Claude's reply, its thinking, or a tool
 /// call / tool output. Thinking and tools are only searched when asked (they're most of a transcript's bulk).</summary>
-internal enum TranscriptHitKind { Prompt, Reply, Thinking, Tool }
+internal enum TranscriptHitKind { Prompt, Reply, Thinking, Tool, Report }
 
 /// <summary>A one-line excerpt around a hit: whitespace collapsed, "…" where it was cut, and the match's
 /// position within <see cref="Text"/> so the UI can highlight it.</summary>
@@ -131,6 +131,11 @@ internal static class TranscriptSearch
                     case AssistantThinkingEvent th when includeTools: Try(TranscriptHitKind.Thinking, th.Text); break;
                     case ToolUseEvent u when includeTools: Try(TranscriptHitKind.Tool, ToolUseText(u)); break;
                     case ToolResultEvent r when includeTools: Try(TranscriptHitKind.Tool, r.Text); break;
+                    // A background agent's report, as its notice card shows it: prose like a reply, so always searched.
+                    case AgentReportEvent rep: Try(TranscriptHitKind.Report, rep.Report); break;
+                    case TaskNotificationEvent { Notification.Result: var result }:
+                        Try(TranscriptHitKind.Report, AgentReport.FromNotificationResult(result));
+                        break;
                 }
             }
         }

@@ -54,6 +54,16 @@ internal sealed partial class SessionThreadView
         }
     }
 
+    /// <summary>Render mode only: open every agent report notice (the state a click on its header sets) and rebuild it.</summary>
+    internal void OpenReportsForRender()
+    {
+        foreach (var item in _views.Keys.OfType<TaskNoticeItem>().Where(n => n.Task.Report is not null).ToList())
+        {
+            _expandState[item] = true;
+            UpdateItem(item);
+        }
+    }
+
     /// <summary>Render mode only: scroll so the viewport top sits <paramref name="into"/> DIPs inside the first tool
     /// card for <paramref name="toolName"/>. False when no such card is built.</summary>
     internal bool ScrollIntoToolForRender(string toolName, double into)

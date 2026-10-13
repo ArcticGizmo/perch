@@ -1,6 +1,8 @@
 # Agent report notice
 
-**Status:** plan only (investigated 2026-10-13 against claude 2.1.296). Branch `fix/subagent-handback-idle`.
+**Status:** built 2026-10-13 on branch `fix/subagent-handback-idle` (investigated against claude 2.1.296). Unit and
+replay tested, render-verified (`render` → `session_agent_report*.png`); not yet run live. Manual checks:
+[`agent-report-notice-testing.md`](agent-report-notice-testing.md). The "Optional: Open in agent tab" link was not built.
 
 ## Goal
 

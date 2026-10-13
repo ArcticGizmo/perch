@@ -65,6 +65,12 @@ internal sealed record TaskUpdatedEvent(string TaskId, string? Status, DateTime?
 /// <c>&lt;task-notification&gt;</c> user record (<paramref name="Delivered"/>, which also carries Monitor events).</summary>
 internal sealed record TaskNotificationEvent(TaskNotification Notification, bool Delivered, DateTime? At = null) : SessionEvent;
 
+/// <summary>A background agent's report reached the session, keyed by its task id (the agent id) or the tool-use id
+/// that launched it. Two sources: the agent's own <c>SubagentHandback</c> call on the stream
+/// (<paramref name="ToolUseId"/> = its <c>parent_tool_use_id</c>), and the transcript's hand-back message
+/// (<paramref name="TaskId"/> = <c>origin.from</c>). See <c>docs/agent-report-notice-plan.md</c>.</summary>
+internal sealed record AgentReportEvent(string? TaskId, string? ToolUseId, string Report) : SessionEvent;
+
 /// <summary><c>system/background_tasks_changed</c>: the CLI's whole set of running background tasks.</summary>
 internal sealed record BackgroundTasksChangedEvent(
     IReadOnlyList<(string TaskId, string? TaskType, string? Description)> Tasks) : SessionEvent;

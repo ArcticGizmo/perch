@@ -152,6 +152,8 @@ internal sealed class SessionConversation
     private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _toolCalls = new();
     // Launch cards of background tasks, by task id, so a task's progress re-syncs the card that started it.
     private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _launchCards = new();
+    // The notice each ended task posted, by task id, so a report arriving after it re-renders the notice.
+    private readonly Dictionary<string, TaskNoticeItem> _endNotices = new();
 
     public SessionConversation()
     {
@@ -248,12 +250,27 @@ internal sealed class SessionConversation
 
     public void Apply(SessionEvent ev)
     {
+        // A sub-agent's own work (its text, thinking, tool calls and their results, its context size) belongs to its
+        // agent tab, which reads the agent's transcript, not to this thread: appended here it reads as the parent's.
+        // Only what the parent needs survives: a background launch it makes, and the report it hands back.
+        if (ev.FromSubagent && ev is TextDeltaEvent or AssistantTextEvent or AssistantThinkingEvent or ToolUseEvent
+                or ToolResultEvent or AssistantUsageEvent)
+        {
+            if (ev is ToolUseEvent { ToolName: var name } call && CanLaunchBackground(name))
+                BackgroundTasks.NoteToolUse(call.ToolUseId, name, LaunchDescription(call.InputJson));
+            return;
+        }
+
         // Main-thread output after a result means the CLI started a queued prompt as its own turn.
         if (ev is TextDeltaEvent or AssistantTextEvent or AssistantThinkingEvent or ToolUseEvent && ReopenTurn(ev))
             StateChanged?.Invoke();
 
         switch (ev)
         {
+            case AgentReportEvent report:
+                BackgroundTasks.Reported(report.TaskId, report.ToolUseId, report.Report);
+                break;
+
             case SessionInitEvent init:
             {
                 // A second init with a *different* id means the session was re-based mid-process — the CLI's
@@ -353,7 +370,11 @@ internal sealed class SessionConversation
             case TaskNotificationEvent notified:
                 // A task ending (once) or a Monitor event becomes a quiet notice. Never a user bubble.
                 if (BackgroundTasks.Notified(notified.Notification, notified.At, notified.Delivered) is { } task)
-                    Append(new TaskNoticeItem(task, notified.Notification.IsEvent ? notified.Notification.EventText : null));
+                {
+                    var notice = new TaskNoticeItem(task, notified.Notification.IsEvent ? notified.Notification.EventText : null);
+                    if (!notice.IsEvent) _endNotices[task.TaskId] = notice;   // re-rendered if its report lands later
+                    Append(notice);
+                }
                 break;
 
             case PermissionRequestEvent request:
@@ -698,6 +719,7 @@ internal sealed class SessionConversation
     private void OnBackgroundTaskChanged(BackgroundTask task)
     {
         if (_launchCards.TryGetValue(task.TaskId, out var card)) Changed?.Invoke(card.Owner, ConversationChange.Updated);
+        if (_endNotices.TryGetValue(task.TaskId, out var notice)) Changed?.Invoke(notice, ConversationChange.Updated);
         BackgroundTaskChanged?.Invoke(task);
     }
 
@@ -764,6 +786,7 @@ internal sealed class SessionConversation
         _items.Clear();
         _toolCalls.Clear();
         _launchCards.Clear();   // the tasks keep running in the same process; only their cards are gone
+        _endNotices.Clear();
         PendingPermission = null;
         TurnActive = false;
         QueuedPrompts = 0;
