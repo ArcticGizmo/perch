@@ -19,6 +19,7 @@ public class StreamJsonReplayTests
     [InlineData("absorbed-mid-turn-prompt.jsonl")]
     [InlineData("queued-prompts-own-turn.jsonl")]
     [InlineData("background-agent-after-result.jsonl")]
+    [InlineData("agent-message-mid-task.jsonl")]
     [InlineData("interrupt-mid-tool.jsonl")]
     [InlineData("interrupt-mid-text.jsonl")]
     public void Replay_MatchesExpectedTurnState(string fixture)

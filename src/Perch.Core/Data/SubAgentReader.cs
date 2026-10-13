@@ -372,6 +372,9 @@ internal sealed class SubAgentReader
         public bool SawTurn;
         public bool LastWasUser;
         public bool LastAssistantHadToolUse;
+        // The last assistant record held only thinking: the message is still being written (see
+        // TranscriptJson.IsThinkingOnly), so the agent is working even though no tool call is pending yet.
+        public bool LastAssistantThinkingOnly;
         public string? LastToolName;
         public JsonNode? LastToolInput;
         public List<string>? Launched;  // Task/Agent tool_use ids this transcript has spawned
@@ -407,6 +410,7 @@ internal sealed class SubAgentReader
             s.SawTurn = true;
             s.LastWasUser = false;
             s.LastAssistantHadToolUse = false;
+            s.LastAssistantThinkingOnly = TranscriptJson.IsThinkingOnly(node);
             s.HandbackId = null;
             if (TranscriptJson.ContentArray(node) is { } content)
             {
@@ -441,11 +445,14 @@ internal sealed class SubAgentReader
         var launched = s.Launched?.ToList();   // a copy: the fold keeps appending to its own list
         if (!s.SawTurn)
             return new Classification(false, null, launched);  // nothing yet / just spawned — idle
+        bool thinking = !s.LastWasUser && s.LastAssistantThinkingOnly;
         bool working = s.HandbackId is null    // handed its report back: done, whatever the tail looks like
             && (s.LastWasUser                  // an injected prompt or a tool_result awaiting the next step
-                || s.LastAssistantHadToolUse); // assistant ended on a tool_use -> awaiting its result
-        string? activity = working && !string.IsNullOrEmpty(s.LastToolName)
-            ? ToolSummary.Describe(s.LastToolName!, s.LastToolInput)
+                || s.LastAssistantHadToolUse   // assistant ended on a tool_use -> awaiting its result
+                || thinking);                  // mid-message: thought, the rest (often a long tool input) to come
+        string? activity = !working ? null
+            : thinking ? TranscriptReader.ThinkingActivity   // the last tool already returned; don't re-show it
+            : !string.IsNullOrEmpty(s.LastToolName) ? ToolSummary.Describe(s.LastToolName!, s.LastToolInput)
             : null;
         TimeSpan? shellTimeout = !s.LastWasUser && s.LastAssistantHadToolUse
             && s.LastToolName is "Bash" or "PowerShell"

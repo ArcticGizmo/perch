@@ -33,6 +33,23 @@ internal static class TranscriptJson
     /// <c>tool_result</c>, …), or null.</summary>
     public static string? BlockType(JsonNode? block) => block?["type"]?.GetValue<string>();
 
+    /// <summary>True when an assistant record holds only thinking. Claude Code writes each block of a message as
+    /// its own record, so this is a message still being written: after thinking comes text or a tool call. The rest
+    /// of the message can take a long time to appear, because nothing is written while a tool call's input streams
+    /// (a sub-agent composing a long <c>SubagentHandback</c> report goes silent for most of a minute).</summary>
+    public static bool IsThinkingOnly(JsonNode? record) =>
+        ContentArray(record) is { Count: > 0 } blocks
+        && blocks.All(b => BlockType(b) is "thinking" or "redacted_thinking");
+
+    /// <summary>True for a record the CLI wrote to the transcript without running a turn for it
+    /// (<c>queueTranscriptOnly</c>). After a <c>SubagentHandback</c> has already delivered an agent's report, the
+    /// agent's <c>&lt;task-notification&gt;</c> is recorded this way, so no assistant reply ever follows it.</summary>
+    public static bool IsTranscriptOnly(JsonNode? record)
+    {
+        try { return record?["queueTranscriptOnly"]?.GetValue<bool>() == true; }
+        catch { return false; }
+    }
+
     /// <summary>Reads a node as a string, returning null rather than throwing when it holds something
     /// else (a block array, a number). Transcript fields change shape between Claude Code versions —
     /// <c>message.content</c> is a plain string in some records and an array in others — so any read of

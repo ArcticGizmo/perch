@@ -460,6 +460,30 @@ public class SubAgentReaderTests
         Assert.Single(ScanShellAgent(TimeSpan.Zero, ShellAgentPrompt, HandbackCall, HandbackResult,
             """{"type":"user","message":{"role":"user","content":"one more thing: run the lint too"}}"""));
 
+    // Captured live (2026-10-13, claude 2.1.296): each block of a message is its own record, and an agent's last
+    // record before SubagentHandback held only thinking. It then spent 22–50s composing the report as the tool's
+    // input, writing nothing, and was dropped as finished, so its parent session read "idle" before the hand-back.
+    private const string ThinkingOnly =
+        """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Now the report.","signature":"x"}],"stop_reason":null}}""";
+
+    [Fact]
+    public void ScanBackground_ThinkingOnlyTail_IsStillWorking()
+    {
+        var agent = Assert.Single(ScanShellAgent(TimeSpan.FromSeconds(45),
+            ShellAgentPrompt, ShellToolUse("Bash", null), ShellToolResult, ThinkingOnly));
+        Assert.False(agent.IsStale);
+        Assert.Equal(TranscriptReader.ThinkingActivity, agent.Activity);   // not the shell call that already returned
+    }
+
+    [Fact]
+    public void ScanBackground_ThinkingOnlyTailThenHandback_IsFinished() =>
+        Assert.Empty(ScanShellAgent(TimeSpan.Zero,
+            ShellAgentPrompt, ShellToolUse("Bash", null), ShellToolResult, ThinkingOnly, HandbackCall, HandbackResult));
+
+    [Fact]
+    public void ScanBackground_ThinkingOnlyTailSilentPastTheWindow_IsDropped() =>
+        Assert.Empty(ScanShellAgent(TimeSpan.FromMinutes(3), ShellAgentPrompt, ThinkingOnly));
+
     [Fact]
     public void ScanBackground_ShellCallThatReturned_FallsBackToTheUsualWindow()
     {
