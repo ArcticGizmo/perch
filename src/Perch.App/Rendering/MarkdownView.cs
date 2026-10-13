@@ -276,9 +276,11 @@ internal sealed class MarkdownView
     {
         var sink = new InlineSink(this, size, brush);
         var map = MarkdownSourceMap.ForInlines(_doc, owner, inlines, style, sink, extendLead);
+        var files = ResolveFileRefs(sink);   // underlines the runs it links, so before the inlines are handed over
         tb.Inlines = sink.Inlines;
         LinkText.Attach(tb, sink.Links, _s.PlainClickLinks);
-        AttachFileRefs(tb, sink);
+        if (files is { Count: > 0 } && _files is { } f)
+            FileRef.AttachInline(tb, files, f.OpenViewer, f.ViewDiff);
         BlockSelection.SetSourceMap(tb, map);
     }
 
@@ -580,13 +582,38 @@ internal sealed class MarkdownView
         public readonly InlineCollection Inlines = new();
         public readonly List<UrlSpan> Links = new();
         public readonly List<(int Start, int Length, string Text)> Codes = new();
+        // Stretches of plain (non-link, non-code) prose, for bare file paths Claude wrote without backticks.
+        public readonly List<(int Start, string Text)> Plain = new();
+
+        private readonly System.Text.StringBuilder _plain = new();
+        private int _plainStart, _pos;
 
         private IBrush BrushFor(MarkdownInlineStyle style) => style.Link ? view._s.Link : brush;
 
-        public void Text(string text, MarkdownInlineStyle style) => Inlines.Add(Styled(text, size, BrushFor(style), style));
+        public void Text(string text, MarkdownInlineStyle style)
+        {
+            // Markdig can split one word across literals (an unmatched `_` or `*`), so plain text is joined up
+            // until something that isn't plain text breaks it.
+            if (style.Link) Flush();
+            else
+            {
+                if (_plain.Length == 0) _plainStart = _pos;
+                _plain.Append(text);
+            }
+            _pos += text.Length;
+            Inlines.Add(Styled(text, size, BrushFor(style), style));
+        }
+
+        public void Flush()
+        {
+            if (_plain.Length > 0) Plain.Add((_plainStart, _plain.ToString()));
+            _plain.Clear();
+        }
 
         public void Code(int pos, string code, MarkdownInlineStyle style)
         {
+            Flush();
+            _pos = pos + code.Length;
             Codes.Add((pos, code.Length, code));   // a possible file reference
             var run = new Run(code)
             {
@@ -596,35 +623,109 @@ internal sealed class MarkdownView
             Inlines.Add(run);
         }
 
-        public void Checkbox(bool isChecked, MarkdownInlineStyle style) =>
+        public void Checkbox(bool isChecked, MarkdownInlineStyle style)
+        {
+            Flush();
+            _pos++;
             Inlines.Add(new InlineUIContainer(view.Checkbox(isChecked, size)) { BaselineAlignment = BaselineAlignment.Center });
+        }
 
-        public void LineBreak(string text, MarkdownInlineStyle style) => Inlines.Add(new Run(text) { Foreground = BrushFor(style) });
+        public void LineBreak(string text, MarkdownInlineStyle style)
+        {
+            Flush();
+            _pos += text.Length;
+            Inlines.Add(new Run(text) { Foreground = BrushFor(style) });
+        }
 
         // Only an http(s)/mailto target becomes a browser link (review fixes CP8). A relative or file: target
-        // joins the file-ref candidates instead, so it opens in the viewer only if it names a real local file;
-        // any other scheme (javascript:, search-ms:, ms-*:) is left as inert text.
+        // joins the file-ref candidates instead, so it opens only if it names a real local file — at the line a
+        // GitHub-style "#L42" fragment names; any other scheme (javascript:, search-ms:, ms-*:) is inert text.
         public void Link(int start, int end, string? url)
         {
             if (OpenTargets.WebUrl(url) is { } web) Links.Add(new UrlSpan(start, end - start, web));
-            else if (OpenTargets.LinkFilePath(url) is { } path) Codes.Add((start, end - start, path));
+            else if (OpenTargets.LinkFilePath(url) is { } path)
+            {
+                var (_, line) = FileRefResolver.SplitLine(url!.Trim());
+                Codes.Add((start, end - start, line > 0 ? $"{path}:{line}" : path));
+            }
         }
     }
 
-    // Arm any inline-code spans in this block that resolve to a real file (relative to the session cwd, or an
-    // absolute path). Gating on existence keeps it accurate — arbitrary code spans never become file links.
-    private void AttachFileRefs(SelectableTextBlock tb, InlineSink sink)
+    // The file references in this block that resolve to a real file (relative to the session cwd, or absolute):
+    // inline-code spans, file-link targets, and bare paths in the plain prose. Gating on existence keeps it accurate
+    // — arbitrary code and dotted words never become links. Each linked range is underlined. Null without a
+    // FileRefContext (the markdown viewer, the streaming tail).
+    private List<FileRef.FileSpan>? ResolveFileRefs(InlineSink sink)
     {
-        if (_files is not { } f || sink.Codes.Count == 0)
-            return;
+        if (_files is not { } f) return null;
+        sink.Flush();
         List<FileRef.FileSpan>? spans = null;
+        // Never probes a UNC/device/network-drive path (NTLM leak + UI hang), and caches per (cwd, text) so a
+        // streaming re-render doesn't hit the disk again (review fixes CP9).
         foreach (var (start, len, text) in sink.Codes)
-            // Never probes a UNC/device/network-drive path (NTLM leak + UI hang), and caches per (cwd, text) so a
-            // streaming re-render doesn't hit the disk again (review fixes CP9).
-            if (FileRefResolver.Resolve(f.Cwd, text) is { } abs)
-                (spans ??= new()).Add(new FileRef.FileSpan(start, len, abs));
-        if (spans is { Count: > 0 })
-            FileRef.AttachInline(tb, spans, f.OpenViewer, f.ViewDiff);
+            if (FileRefResolver.ResolveRef(f.Cwd, text) is { } hit)
+                (spans ??= new()).Add(new FileRef.FileSpan(start, len, hit.Path, hit.Line));
+        foreach (var (segStart, segText) in sink.Plain)
+            foreach (var c in FilePathDetect.Find(segText))
+                if (FileRefResolver.ResolveRef(f.Cwd, c.Text) is { } hit)
+                    (spans ??= new()).Add(new FileRef.FileSpan(segStart + c.Start, c.Length, hit.Path, hit.Line));
+        if (spans is { Count: > 0 }) Underline(sink.Inlines, spans);
+        return spans;
+    }
+
+    // Underline the given char ranges of a block's inlines, splitting a run where a range starts or ends inside it.
+    // Positions count a run by its text and anything else (a checkbox) as one, as the TextLayout does.
+    private static void Underline(InlineCollection inlines, IReadOnlyList<FileRef.FileSpan> spans)
+    {
+        var rebuilt = new List<global::Avalonia.Controls.Documents.Inline>(inlines.Count + spans.Count * 2);
+        int pos = 0;
+        foreach (var inline in inlines)
+        {
+            if (inline is not Run { Text: { Length: > 0 } t } run) { rebuilt.Add(inline); pos += inline is Run ? 0 : 1; continue; }
+            int end = pos + t.Length;
+            var cuts = new SortedSet<int> { pos, end };
+            foreach (var s in spans)
+            {
+                if (s.Start > pos && s.Start < end) cuts.Add(s.Start);
+                if (s.Start + s.Length > pos && s.Start + s.Length < end) cuts.Add(s.Start + s.Length);
+            }
+            int prev = -1;
+            foreach (int cut in cuts)
+            {
+                if (prev >= 0)
+                {
+                    bool linked = spans.Any(s => prev >= s.Start && prev < s.Start + s.Length);
+                    if (cuts.Count == 2 && !linked) rebuilt.Add(run);
+                    else rebuilt.Add(CloneRun(run, t.Substring(prev - pos, cut - prev), linked));
+                }
+                prev = cut;
+            }
+            pos = end;
+        }
+        inlines.Clear();
+        inlines.AddRange(rebuilt);
+    }
+
+    private static readonly AvaloniaProperty[] RunProps =
+    [
+        TextElement.ForegroundProperty, TextElement.BackgroundProperty, TextElement.FontSizeProperty,
+        TextElement.FontWeightProperty, TextElement.FontStyleProperty, TextElement.FontFamilyProperty,
+    ];
+
+    // A piece of run, carrying only the properties the original set locally (so inherited ones — the body font — still
+    // inherit), plus an underline when it's a linked file reference.
+    private static Run CloneRun(Run run, string text, bool underline)
+    {
+        var piece = new Run(text);
+        foreach (var p in RunProps)
+            if (run.IsSet(p)) piece.SetValue(p, run.GetValue(p));
+        var deco = new TextDecorationCollection();
+        if (run.TextDecorations is { } existing)
+            foreach (var d in existing) deco.Add(new TextDecoration { Location = d.Location });
+        if (underline && !deco.Any(d => d.Location == TextDecorationLocation.Underline))
+            deco.Add(new TextDecoration { Location = TextDecorationLocation.Underline });
+        if (deco.Count > 0) piece.TextDecorations = deco;
+        return piece;
     }
 
     // A drawn task-list checkbox — a rounded, bordered box with a soft drop shadow (and a check mark when
