@@ -97,8 +97,25 @@ public class SessionAccountChoiceTests
         var only = Assert.Single(set.Options);
         Assert.Equal("acme-uuid", only.Org!.Uuid);
         Assert.Equal(acme, set.Default);
-        Assert.Equal(acme.Dir.Root, set.InjectRootFor(set.Default));   // under a guardrail, pin explicitly
+        Assert.Equal(acme.Dir.Root, set.InjectRootFor(set.Default));   // under a guardrail, a non-primary is pinned
         Assert.False(set.GuardrailUnsatisfiable);
+    }
+
+    [Fact]
+    public void Guardrail_PrimaryAllowed_StillInherits()
+    {
+        if (!Win) return;
+        // Pinning the default ~/.claude explicitly moves Claude's .claude.json lookup off the legacy ~/.claude.json
+        // onto a divergent copy inside the dir, so the primary must inherit even when a guardrail picks it.
+        var acme = SignedIn(@"C:\Users\me\.claude", "acme-uuid");        // primary
+        var contoso = SignedIn(@"C:\Users\me\.claude-contoso", "contoso-uuid");
+        var rules = new[] { Rule(@"C:\work\acme", "acme-uuid") };
+
+        var set = SessionAccountChoice.Resolve(@"C:\work\acme\repo", new[] { acme, contoso }, rules);
+
+        Assert.True(set.Restricted);
+        Assert.Equal(acme, set.Default);
+        Assert.Null(set.InjectRootFor(set.Default));
     }
 
     [Fact]
@@ -131,6 +148,7 @@ public class SessionAccountChoiceTests
         Assert.True(set.GuardrailUnsatisfiable);
         Assert.Empty(set.Options);
         Assert.Equal(contoso, set.Default);   // the primary (the only dir) — alerting-only, never blocks
+        Assert.Null(set.InjectRootFor(set.Default));   // …and falling back to it inherits, never pins
         Assert.True(set.ShowSelector);         // still surfaces (to carry the warning)
     }
 
