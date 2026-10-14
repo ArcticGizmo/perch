@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.31] - 2026-10-14
+
+- Perch sessions can publish artifacts (via a hidden background claude)
+- Claude publishes finished pieces itself in Perch sessions
+- "Publish as artifact…" on .html, .md and .svg file paths
+- Publishes show under their session, not as a stray daemon
+- Published artifacts light up the session's artifact glyph
+- "Open in browser" on .html paths (middle-click: new window)
+- `perch artifact publish <file>` prints the link
+
+---
+
 ## [v0.5.30] - 2026-10-13
 
 - Hypertree is one row: logo, branch, desktop
