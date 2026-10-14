@@ -461,10 +461,17 @@ static bool IsPerchRunning()
 // would inherit that stdout handle and hold the pipe's write end open for the whole session, so Claude
 // Code never sees EOF and the first prompt hangs until the hook times out. ShellExecuteEx launches the
 // tray detached, without inheriting our std handles, so the pipe closes the instant this hook exits.
+//
+// The tray must not inherit this session's CLAUDE_CONFIG_DIR: a tray started with it set pins its whole config-dir
+// set to that one directory (ClaudeConfigSet.IsPinned), so every other directory vanishes and adding one back does
+// nothing, and Velopack's update restart carries the pin into the next version too. ShellExecute hands the child
+// our environment block, so drop the variable from it first; the session's own dir was resolved at the top of the
+// hook and isn't read again after this.
 static void LaunchPerch()
 {
     try
     {
+        Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
         // Never the bare name: this hook runs with the session's project folder as its current directory, and

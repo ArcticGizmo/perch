@@ -2262,11 +2262,10 @@ internal sealed partial class SettingsWindow : Window
     {
         // Un-declare it (if it was added) and hide it by real path, so an auto-discovered dir stays gone
         // across refreshes and a later self-report can't resurrect it. The primary has no Remove button.
-        _settings.DeclaredConfigDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
-            Path.TrimEndingDirectorySeparator(x), Path.TrimEndingDirectorySeparator(d.Root)));
+        _settings.DeclaredConfigDirs?.RemoveAll(x => ClaudeConfigDir.SameRoot(x, d.Root));
 
         var hidden = _settings.HiddenConfigDirs ??= new();
-        if (!hidden.Any(x => ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), d.RealRoot)))
+        if (!hidden.Any(x => ClaudeConfigDir.SameRoot(x, d.RealRoot)))
             hidden.Add(d.RealRoot);
 
         // Strip our hooks from the dir we're dropping (once it's hidden it leaves the set, so ReconcileAll
@@ -2308,14 +2307,14 @@ internal sealed partial class SettingsWindow : Window
             if (string.IsNullOrEmpty(path)) return;
 
             var list = _settings.DeclaredConfigDirs ??= new();
-            if (!list.Any(d => ClaudeConfigDir.PathComparer.Equals(
-                    Path.TrimEndingDirectorySeparator(d), Path.TrimEndingDirectorySeparator(path))))
+            if (!list.Any(d => ClaudeConfigDir.SameRoot(d, path)))
                 list.Add(path);
 
-            // Adding a dir un-hides it — re-adding one you previously removed brings it back.
+            // Adding a dir un-hides it — re-adding one you previously removed brings it back (including a hidden
+            // entry recorded with a stray trailing space, which names the same folder on Windows).
             var real = Path.TrimEndingDirectorySeparator(ClaudeConfigSet.ResolveReal(path));
-            _settings.HiddenConfigDirs?.RemoveAll(x =>
-                ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), real));
+            _settings.HiddenConfigDirs?.RemoveAll(x => ClaudeConfigDir.SameRoot(x, real));
+            if (_settings.HiddenConfigDirs is { Count: 0 }) _settings.HiddenConfigDirs = null;
             SetConfigDirHooksState(real, prov, dlg.HooksEnabled);
             SetConfigDirLabel(real, dlg.DirLabel);
         }

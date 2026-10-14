@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.33] - 2026-10-14
+
+- Perch no longer adopts a session's config directory when it starts (it was hiding all the others)
+- Re-adding a removed config directory brings it back, trailing space or not
+
+---
+
 ## [v0.5.32] - 2026-10-14
 
 - Todo is one row: checkbox, open count, overdue count

@@ -104,6 +104,21 @@ internal sealed record ClaudeConfigDir
 
     public override string ToString() => $"ClaudeConfigDir({Label}: {Root})";
 
+    /// <summary>True when two config-dir roots name the same directory: trailing separators ignored, compared
+    /// with <see cref="PathComparer"/>. On Windows trailing spaces and dots are ignored too, as Win32 drops them
+    /// from a path (so <c>C:\x </c> <em>is</em> <c>C:\x</c>), while .NET's <c>GetFullPath</c> keeps them, so a
+    /// root that arrived with a stray trailing space (e.g. a launcher's <c>CLAUDE_CONFIG_DIR</c>) still matches.</summary>
+    public static bool SameRoot(string? a, string? b) =>
+        a is not null && b is not null && PathComparer.Equals(RootKey(a), RootKey(b));
+
+    private static string RootKey(string path)
+    {
+        var key = Path.TrimEndingDirectorySeparator(path);
+        if (!OperatingSystem.IsWindows()) return key;
+        var trimmed = Path.TrimEndingDirectorySeparator(key.TrimEnd(' ', '.'));
+        return trimmed.Length == 0 ? key : trimmed;
+    }
+
     /// <summary>Trims a trailing directory separator (so <c>C:\x\</c> and <c>C:\x</c> unify) while
     /// leaving a bare root like <c>C:\</c> intact.</summary>
     private static string Normalize(string path) =>
