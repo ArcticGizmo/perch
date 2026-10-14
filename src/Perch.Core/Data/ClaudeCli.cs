@@ -28,6 +28,12 @@ public static class ClaudeCli
         s is { Length: > 0 } && !s.EndsWith('\\') &&
         s.All(c => char.IsLetterOrDigit(c) || c is ' ' or '.' or ',' or '-' or '_' or '/' or '\\' or ':' or '(' or ')');
 
+    /// <summary>An <see cref="IsSafePrompt"/> string (a prompt, or a plain path) quoted as one argument for
+    /// <see cref="CreateStartInfo"/>: double
+    /// quotes for the Windows argument string, single quotes inside the POSIX <c>sh -lc "…"</c>.</summary>
+    public static string QuotePrompt(string prompt) =>
+        OperatingSystem.IsWindows() ? $"\"{prompt}\"" : $"'{prompt}'";
+
     /// <summary>The absolute path of the <c>claude</c> CLI on PATH, or <c>null</c> when it isn't installed. Never the
     /// current directory — see <see cref="ExecutableResolver"/>.</summary>
     public static string? Find() => ExecutableResolver.Find("claude");

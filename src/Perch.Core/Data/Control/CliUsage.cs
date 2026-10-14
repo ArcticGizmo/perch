@@ -10,7 +10,7 @@ internal static class CliUsage
     /// <summary>The verbs <c>Program.Main</c> dispatches before any session parsing. Their arguments are theirs.</summary>
     private static readonly HashSet<string> Subcommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "render", "bench-roost", "configdirs", "statusline", "handle", "uninstall", "replay",
+        "render", "bench-roost", "configdirs", "statusline", "handle", "uninstall", "replay", "artifact",
     };
 
     /// <summary>True for <c>perch --help</c>, <c>-h</c>, <c>-?</c>, <c>/?</c> or <c>perch help</c>, unless a subcommand leads.</summary>
@@ -46,6 +46,8 @@ internal static class CliUsage
 
         Commands:
           perch statusline [verb]     design and switch Claude Code status lines (perch statusline help)
+          perch artifact publish <file>
+                                      publish a page as a private claude.ai artifact and print its link
           perch configdirs            list the Claude config directories Perch has discovered
           perch uninstall             remove the PATH entry, login item and Claude Code hooks
                                       (for a portable copy, before deleting its folder)

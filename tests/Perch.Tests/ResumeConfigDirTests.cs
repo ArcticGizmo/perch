@@ -394,6 +394,16 @@ public class ArtifactPublishTests
         Assert.True(ClaudeCli.IsSafePrompt(prompt));
     }
 
+    // A background session may run in a worktree, so its prompt always carries the absolute path.
+    [Fact]
+    public void Background_prompt_names_the_file_in_full_and_is_command_line_safe()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "repo", "artefacts", "page.html");
+        var prompt = ArtifactPublish.BackgroundPrompt(file);
+        Assert.Contains(" " + file + " ", prompt);
+        Assert.True(ClaudeCli.IsSafePrompt(prompt));
+    }
+
     [Fact]
     public void Prompt_names_a_file_outside_the_cwd_in_full()
     {

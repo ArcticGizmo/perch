@@ -71,6 +71,11 @@ internal sealed class ClaudeSessionController : IDisposable
         if (IsSafeToken(model)) args += $" --model {model}";
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
         if (IsEffortLevel(effort)) args += $" --effort {effort}";
+        // Perch's own plugin (the publish-artifact skill), for this session only. Skipped if it can't be written or
+        // its path couldn't ride the command line as one plain quoted argument.
+        if (PerchSessionPlugin.Ensure() is { } pluginDir && ClaudeCli.IsSafePrompt(pluginDir))
+            args += $" --plugin-dir {ClaudeCli.QuotePrompt(pluginDir)}" +
+                    $" --append-system-prompt {ClaudeCli.QuotePrompt(PerchSessionPlugin.SystemPromptNote)}";
 
         // Resolved to an absolute path, never against `cwd`: the session runs inside a repo Perch didn't write, and
         // a `claude.cmd` committed there would otherwise run in place of the real CLI (review fixes CP7).
@@ -90,6 +95,9 @@ internal sealed class ClaudeSessionController : IDisposable
         // Have the CLI report its own turn state (system/session_state_changed), so a turn a Remote Control client
         // started or answered still reads right here. Undocumented; an older CLI ignores it and Perch infers as before.
         psi.Environment["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] = "1";
+        // Where the publish-artifact skill finds `perch artifact publish` (PerchSessionPlugin).
+        if (Environment.ProcessPath is { } perchExe) psi.Environment[PerchSessionPlugin.ExeEnvVar] = perchExe;
+        psi.Environment[PerchSessionPlugin.SessionEnvVar] = id;
         // Account selection: pin the config dir (and with it, that account's credentials) for this session only.
         // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
         if (!string.IsNullOrWhiteSpace(configDir))
