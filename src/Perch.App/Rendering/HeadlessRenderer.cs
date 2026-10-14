@@ -1056,10 +1056,10 @@ internal static class HeadlessRenderer
             try
             {
                 var seeded = Perch.Statusline.StatuslineStore.Seeded();
-                var applied = new ClaudeConfigDir(appliedDir, slug: "work") { Provenance = ConfigDirProvenance.Convention };
+                var applied = new ClaudeConfigDir(appliedDir, slug: "work") { Provenance = ConfigDirProvenance.Declared };
                 var notApplied = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-play"), slug: "play")
                 {
-                    Provenance = ConfigDirProvenance.Convention,
+                    Provenance = ConfigDirProvenance.Declared,
                 };
                 Perch.Statusline.StatuslineInstaller.Apply(seeded.Find("Minimal")!, applied, out _);
                 ClaudeConfigSet.SetForTesting(new[] { primary, applied, notApplied });

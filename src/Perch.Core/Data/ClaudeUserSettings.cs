@@ -148,7 +148,7 @@ internal static class ClaudeUserSettings
                 return false;   // no file, unreadable, or no hooks block
 
             // Only rewrite when we actually removed one of our own entries — so calling this on a directory
-            // that has no Perch hooks (e.g. an auto-discovered dir the user left hooks off for) never touches
+            // that has no Perch hooks (e.g. a dir the user turned hooks off for) never touches
             // its file, and ReconcileAll can safely strip every not-hooked dir without gratuitous writes.
             if (!StripManaged(hooks, OwnedBy(isDev, devBinaryPath))) return false;
             if (hooks.Count == 0) root.Remove("hooks");

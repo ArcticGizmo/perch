@@ -511,11 +511,10 @@ internal sealed class AppSettings
     }
 
     // Config-dir discovery (Layer 1). The user-declared list of extra Claude Code config directories
-    // (each a CLAUDE_CONFIG_DIR root) Perch should watch alongside the primary ~/.claude — the
-    // *backbone* of discovery, authoritative over the convention scan. Null/empty means "none declared"
-    // (Perch still auto-discovers convention dirs, but only declared/self-reported ones are ever written
-    // to; see the M4 safe-write policy). Managed by the dedicated declared-config-dirs editor page, not a
-    // registry toggle (like QuickLinks) — see docs/config-dir-plan.md. A missing key keeps it empty.
+    // (each a CLAUDE_CONFIG_DIR root) Perch should watch alongside the primary ~/.claude — the whole set
+    // besides the primary; nothing joins it by auto-detection (the editor's scan only suggests). Null/empty
+    // means "none declared". Managed by the dedicated config-directories editor page, not a registry toggle
+    // (like QuickLinks) — see docs/config-dir-plan.md. A missing key keeps it empty.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? DeclaredConfigDirs { get; set; }
 
@@ -527,26 +526,28 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ConfigDirLabel>? ConfigDirLabels { get; set; }
 
-    // Config-dir discovery (Layer 1). Config dirs the user has removed (hidden) from the set, keyed by
-    // resolved real path. Discovery excludes them so an auto-discovered (convention/self-reported) dir stays
-    // gone across refreshes and a later self-report can't resurrect it; re-adding one via the editor un-hides
-    // it. The primary can never be hidden. Managed by the config-directories editor page.
+    // LEGACY (auto-discovery era): config dirs the user removed (hidden) from the auto-discovered set, keyed
+    // by resolved real path. Read once by ConfigDirMigration (a hidden dir isn't carried over) and then
+    // cleared; nothing else reads or writes it.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? HiddenConfigDirs { get; set; }
 
     // Config-dir discovery (Layer 1). Config dirs the user turned Perch's hook install OFF for, keyed by
-    // resolved real path — an opt-OUT for directories that default ON (declared / self-reported).
-    // HookInstaller.ReconcileAll strips (and stops re-adding) Perch's managed hook block in a listed dir. The
-    // primary is always hooked and can never appear here. See HookPolicy.
+    // resolved real path — an opt-OUT (every non-primary dir defaults ON). HookInstaller.ReconcileAll strips
+    // (and stops re-adding) Perch's managed hook block in a listed dir. The primary is always hooked and can
+    // never appear here. See HookPolicy.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? HooksDisabledDirs { get; set; }
 
-    // Config-dir discovery (Layer 1). Config dirs the user turned Perch's hook install ON for, keyed by
-    // resolved real path — an opt-IN for directories that default OFF (auto-discovered / convention-only, the
-    // ones Perch won't hook silently). HookInstaller.ReconcileAll installs the managed hook block into a
-    // listed dir. Empty/null means "no opt-ins". See HookPolicy.
+    // LEGACY (auto-discovery era): the hooks opt-IN for auto-discovered dirs, which defaulted off. Read once by
+    // ConfigDirMigration (an opted-in dir keeps its hooks) and then cleared; nothing else reads or writes it.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? HooksEnabledDirs { get; set; }
+
+    // True once config dirs are explicit-only: set on a fresh install, or by ConfigDirMigration after it has
+    // turned the dirs an older version auto-discovered into declared ones. False = a settings file from before
+    // the change that still needs migrating (a missing key reads false). Not a Settings-window control.
+    public bool ConfigDirsExplicit { get; set; }
 
     // Config-dir discovery (Layer 1). Whether the per-session config-directory label (the small chip on a
     // session row, shown only when more than one config directory is in play) is drawn at all. On by default;
@@ -853,7 +854,8 @@ internal sealed class AppSettings
         }
 
         // No settings file — a genuinely fresh install. FirstRunComplete stays false so the Quick Start runs.
-        var fresh = new AppSettings();
+        // Nor are there any auto-discovered config dirs to carry over: start explicit.
+        var fresh = new AppSettings { ConfigDirsExplicit = true };
         fresh.MigrateQuickLinks();
         fresh.MigrateStartMode();
         return fresh;

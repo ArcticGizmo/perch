@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.34] - 2026-10-14
+
+- Config directories are only ever ones you added
+- "Scan for directories" suggests likely ones, including claude-envs envs
+- Directories found before the update stay, hooks and all
+- Removing a config directory removes it (a trailing space was keeping it alive)
+
+---
+
 ## [v0.5.33] - 2026-10-14
 
 - Perch no longer adopts a session's config directory when it starts (it was hiding all the others)

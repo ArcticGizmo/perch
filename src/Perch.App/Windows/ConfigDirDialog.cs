@@ -36,11 +36,11 @@ internal sealed class ConfigDirDialog : Window
     /// <param name="existing">The dir being edited, or null to add a new one.</param>
     /// <param name="existingLabel">The dir's current custom label (edit mode), or null.</param>
     /// <param name="hooksEnabled">Initial state of the "Install Perch hooks" toggle.</param>
-    /// <param name="hooksEditable">Whether that toggle can be changed (false for the always-on primary and for
-    /// a not-yet-added auto-discovered dir).</param>
+    /// <param name="hooksEditable">Whether that toggle can be changed (false for the always-on primary).</param>
     /// <param name="hooksNote">One-line explanation shown under the hooks toggle.</param>
+    /// <param name="suggestedPath">Add mode only: the directory to prefill (a scan suggestion), still editable.</param>
     public ConfigDirDialog(ClaudeConfigDir? existing, string? existingLabel,
-        bool hooksEnabled, bool hooksEditable, string hooksNote)
+        bool hooksEnabled, bool hooksEditable, string hooksNote, string? suggestedPath = null)
     {
         _editing = existing is not null;
         bool isPrimary = existing?.Provenance == ConfigDirProvenance.Primary;
@@ -56,10 +56,10 @@ internal sealed class ConfigDirDialog : Window
         var help = SettingsUi.BodyText(_editing
             ? "Rename how this directory appears on its session rows. The directory itself can't be moved from "
               + "here — remove it and add the new location instead."
-            : "Point Perch at a Claude Code config directory (a CLAUDE_CONFIG_DIR root) that lives somewhere it "
-              + "wouldn't auto-discover. Give it a label to control what shows on its session rows.");
+            : "Point Perch at a Claude Code config directory (a CLAUDE_CONFIG_DIR root) to watch alongside "
+              + "~/.claude. Give it a label to control what shows on its session rows.");
 
-        _pathBox = SettingsUi.ThemedTextBox(existing?.Root ?? "");
+        _pathBox = SettingsUi.ThemedTextBox(existing?.Root ?? suggestedPath ?? "");
         Control pathControl;
         if (_editing)
         {

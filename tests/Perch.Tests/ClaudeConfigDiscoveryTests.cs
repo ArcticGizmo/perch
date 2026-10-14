@@ -4,12 +4,13 @@ using Xunit;
 namespace Perch.Tests;
 
 /// <summary>
-/// Covers M1 config-dir discovery: <see cref="ClaudeConfigDiscovery.Discover"/>'s declaration-first,
-/// deduped ordering; the <see cref="ClaudeConfigDiscovery.LooksLikeConfigDir"/> marker gate; the
-/// siblings-only home scan (which must not match a scheme's container/shared store); the claude-envs
-/// manifest source; and link-resolver-injected dedup that proves junction collapsing without minting a
-/// real junction. Each test builds its own throwaway directory tree under the OS temp dir, so it never
-/// depends on the pinned fixture <c>CLAUDE_CONFIG_DIR</c> or on the developer's real <c>~/.claude</c>.
+/// Covers config-dir membership and the suggestion scan: <see cref="ClaudeConfigDiscovery.Discover"/> builds
+/// the set from the primary plus declared roots only (nothing joins by pattern-matching), deduped by real
+/// path; <see cref="ClaudeConfigDiscovery.Suggest"/> recommends what the convention scan finds — siblings-only
+/// home scan (which must not match a scheme's container/shared store), the claude-envs <c>envs/*</c> source and
+/// session self-reports — minus what's already in the set; and the <see cref="ClaudeConfigDiscovery.LooksLikeConfigDir"/>
+/// marker gate. Each test builds its own throwaway directory tree under the OS temp dir, so it never depends
+/// on the pinned fixture <c>CLAUDE_CONFIG_DIR</c> or on the developer's real <c>~/.claude</c>.
 /// </summary>
 public sealed class ClaudeConfigDiscoveryTests : IDisposable
 {
@@ -46,7 +47,7 @@ public sealed class ClaudeConfigDiscoveryTests : IDisposable
         var primary = Primary();
         var declared = MakeConfigDir("work/.claude");
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, new[] { declared });
+        var set = ClaudeConfigDiscovery.Discover(primary, new[] { declared });
 
         Assert.Equal(primary.RealRoot, set[0].RealRoot);
         Assert.Equal(ConfigDirProvenance.Primary, set[0].Provenance);
@@ -54,62 +55,101 @@ public sealed class ClaudeConfigDiscoveryTests : IDisposable
     }
 
     [Fact]
-    public void Discover_DeclaredWinsOverConvention_WhenSameRealPath()
+    public void Discover_NeverAddsUndeclaredSiblings()
     {
-        // A ~/.claude-work sibling is also declared explicitly: it dedups to one entry, and because the
-        // declared tier is scanned before the convention tier, that one entry is Declared (writable).
+        // A ~/.claude-alt sibling that looks exactly like a config dir stays out until the user adds it.
         var primary = Primary();
-        var sibling = MakeConfigDir(".claude-work");
+        MakeConfigDir(".claude-alt", marker: "settings+projects");
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, new[] { sibling });
+        var set = ClaudeConfigDiscovery.Discover(primary, declaredRoots: null);
 
-        var match = set.Where(d => ClaudeConfigDir.PathComparer.Equals(d.RealRoot,
-            ClaudeConfigSet.ResolveReal(sibling))).ToList();
-        Assert.Single(match);
-        Assert.Equal(ConfigDirProvenance.Declared, match[0].Provenance);
+        Assert.Single(set);
     }
 
     [Fact]
-    public void Discover_ConventionScan_PicksUpSiblingConfigDirs()
+    public void Suggest_PicksUpSiblingConfigDirs()
     {
         var primary = Primary();
         MakeConfigDir(".claude-alt", marker: "settings+projects");
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, declaredRoots: null);
+        var found = ClaudeConfigDiscovery.Suggest(_sandbox, new[] { primary });
 
-        Assert.Contains(set, d =>
-            Path.GetFileName(d.Root) == ".claude-alt" && d.Provenance == ConfigDirProvenance.Convention);
+        Assert.Contains(found, s =>
+            Path.GetFileName(s.Root) == ".claude-alt" && s.Source == ConfigDirSuggestionSource.HomeFolder);
+        Assert.DoesNotContain(found, s => s.RealRoot == primary.RealRoot); // already in the set
     }
 
     [Fact]
-    public void Discover_SiblingsScan_DoesNotMatchSchemeContainer_ButSourceDoes()
+    public void Suggest_SkipsWhatIsAlreadyDeclared()
+    {
+        var primary = Primary();
+        var sibling = MakeConfigDir(".claude-work");
+        var set = ClaudeConfigDiscovery.Discover(primary, new[] { sibling });
+
+        var found = ClaudeConfigDiscovery.Suggest(_sandbox, set);
+
+        Assert.DoesNotContain(found, s => Path.GetFileName(s.Root) == ".claude-work");
+    }
+
+    [Fact]
+    public void Suggest_SiblingsScan_DoesNotMatchSchemeContainer_ButEnvsSourceDoes()
     {
         // ~/.claude-envs is a container (no config-dir markers of its own) — the siblings scan must NOT
-        // add it, and must NOT descend into its children. The env dir under envs/ comes only through the
-        // manifest source, gated by the marker.
+        // suggest it, and must NOT descend into its children. The env dir under envs/ comes only through the
+        // claude-envs source, gated by the marker.
         var primary = Primary();
         MakeConfigDir(".claude-envs", marker: "none");                 // the container itself: no markers
-        File.WriteAllText(Path.Combine(_sandbox, ".claude-envs", "manifest.json"), "{}");
         var env = MakeConfigDir(Path.Combine(".claude-envs", "envs", "acme")); // a real env config dir
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, declaredRoots: null);
+        var found = ClaudeConfigDiscovery.Suggest(_sandbox, new[] { primary });
 
-        Assert.DoesNotContain(set, d => Path.GetFileName(d.Root) == ".claude-envs");
-        var acme = Assert.Single(set, d => d.Root == env);
-        Assert.Equal("acme", acme.Slug);
+        Assert.DoesNotContain(found, s => Path.GetFileName(s.Root) == ".claude-envs");
+        var acme = Assert.Single(found, s => s.Root == env);
         Assert.Equal("acme", acme.Label);
+        Assert.Equal(ConfigDirSuggestionSource.Scheme, acme.Source);
     }
 
     [Fact]
-    public void Discover_ManifestSource_Ignored_WhenNoManifest()
+    public void Suggest_EnvsSource_NeedsNoManifest_ButStillGatesOnMarkers()
     {
-        // Without a manifest, the scheme's envs/ children are not descended into (siblings-only scan).
+        // No manifest.json/envs.json: every envs/* child is still looked at, and only the one that looks like a
+        // config dir (here, just a .claude.json) is suggested.
         var primary = Primary();
+        var env = MakeConfigDir(Path.Combine(".claude-envs", "envs", "incontrol"), marker: "claudejson");
+        var empty = MakeConfigDir(Path.Combine(".claude-envs", "envs", "empty"), marker: "none");
+
+        var found = ClaudeConfigDiscovery.Suggest(_sandbox, new[] { primary });
+
+        Assert.Contains(found, s => s.Root == env && s.Source == ConfigDirSuggestionSource.Scheme);
+        Assert.DoesNotContain(found, s => s.Root == empty);
+    }
+
+    [Fact]
+    public void EnvsSource_RequireManifest_MatchesTheOldDiscovery()
+    {
+        // The migration's view: without a manifest the old discovery never looked in envs/, so neither does this.
         var env = MakeConfigDir(Path.Combine(".claude-envs", "envs", "acme"));
+        var legacy = new ClaudeEnvsSource(_sandbox, requireManifest: true);
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, declaredRoots: null);
+        Assert.Empty(legacy.Enumerate());
+        File.WriteAllText(Path.Combine(_sandbox, ".claude-envs", "envs.json"), "{}");
+        Assert.Contains(legacy.Enumerate(), e => e.Root == env);
+    }
 
-        Assert.DoesNotContain(set, d => d.Root == env);
+    [Fact]
+    public void Suggest_ReportedRoots_ComeFirst_AndAreMarkerGated()
+    {
+        // A session-reported dir is suggested ahead of the scan's own find for the same folder; a reported
+        // path that no longer looks like a config dir is dropped.
+        var primary = Primary();
+        var sibling = MakeConfigDir(".claude-x");
+        var gone = Path.Combine(_sandbox, "deleted", ".claude");
+
+        var found = ClaudeConfigDiscovery.Suggest(_sandbox, new[] { primary }, reportedRoots: new[] { sibling, gone });
+
+        var x = Assert.Single(found, s => s.Root == sibling);
+        Assert.Equal(ConfigDirSuggestionSource.ReportedBySession, x.Source);
+        Assert.DoesNotContain(found, s => s.Root == gone);
     }
 
     [Theory]
@@ -145,7 +185,7 @@ public sealed class ClaudeConfigDiscoveryTests : IDisposable
         string Resolver(string p) =>
             (p == a || p == b) ? shared : p;
 
-        var set = ClaudeConfigDiscovery.Discover(_sandbox, primary, new[] { a, b }, selfReportedRoots: null, linkResolver: Resolver);
+        var set = ClaudeConfigDiscovery.Discover(primary, new[] { a, b }, linkResolver: Resolver);
 
         Assert.Single(set, d => ClaudeConfigDir.PathComparer.Equals(d.RealRoot, shared));
         // Primary + one shared entry (alpha wins, declared before beta).

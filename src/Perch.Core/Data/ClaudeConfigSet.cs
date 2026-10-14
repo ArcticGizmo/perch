@@ -26,9 +26,9 @@ internal sealed class ClaudeConfigSet
     private static Func<string, string> _resolveReal = DefaultResolveReal;
 
     // Sticky memory of self-reported roots (a running session's hook stamped a {sid}.configdir naming the
-    // dir). Persisted so a dir revealed once survives the tray restarting, and writable under the M4
-    // safe-write policy. Keyed by declared-form path. Loaded once (non-pinned) by EnsureSelfReportedLoaded.
-    // Declared before Instance: BuildInitial reads them.
+    // dir). Never set members on their own — they only feed Suggestions(). Persisted so a dir revealed once
+    // is still suggested after the tray restarts. Keyed by declared-form path. Loaded once (non-pinned) by
+    // EnsureSelfReportedLoaded.
     private static readonly HashSet<string> _selfReported = new(ClaudeConfigDir.PathComparer);
     private static bool _selfReportedLoaded;
 
@@ -52,7 +52,6 @@ internal sealed class ClaudeConfigSet
     private static long _lastRefreshTick = long.MinValue;
     private static Func<IReadOnlyList<string>>? _declaredRootsProvider;
     private static Func<IReadOnlyList<ConfigDirLabel>>? _labelsProvider;
-    private static Func<IReadOnlyList<string>>? _suppressedProvider;
 
     /// <summary>The primary config dir — <c>CLAUDE_CONFIG_DIR</c> if set, else <c>~/.claude</c>.</summary>
     public ClaudeConfigDir Primary { get; }
@@ -173,20 +172,38 @@ internal sealed class ClaudeConfigSet
     }
 
     /// <summary>
-    /// Wires all three settings-backed inputs at once — the declared roots (backbone), the custom labels
-    /// (chip display), and the hidden dirs (removed from the set) — and forces a single immediate refresh so
-    /// they take effect together. The app calls this at start-up and whenever the config-directories editor
-    /// changes anything. No-op under a pinned <c>CLAUDE_CONFIG_DIR</c>. Idempotent.
+    /// Wires both settings-backed inputs at once — the declared roots (the set's members besides the primary)
+    /// and the custom labels (chip display) — and forces a single immediate refresh so they take effect
+    /// together. The app calls this at start-up and whenever the config-directories editor changes anything.
+    /// No-op under a pinned <c>CLAUDE_CONFIG_DIR</c>. Idempotent.
     /// </summary>
     public static void ConfigureFromSettings(
         Func<IReadOnlyList<string>> declaredRoots,
-        Func<IReadOnlyList<ConfigDirLabel>> labels,
-        Func<IReadOnlyList<string>> hiddenRoots)
+        Func<IReadOnlyList<ConfigDirLabel>> labels)
     {
         _declaredRootsProvider = declaredRoots;
         _labelsProvider = labels;
-        _suppressedProvider = hiddenRoots;
         RefreshNow();
+    }
+
+    /// <summary>
+    /// Config dirs worth adding that aren't in the set: session self-reports, <c>~/.claude*</c> folders and
+    /// scheme-managed envs (see <see cref="ClaudeConfigDiscovery.Suggest"/>). Touches the disk, so call it off
+    /// the UI thread. Empty while pinned — a pinned tray can't add dirs. <paramref name="asOldDiscovery"/>
+    /// limits it to what the pre-explicit auto-discovery would have found (claude-envs only with a manifest),
+    /// for <see cref="ConfigDirMigration"/>.
+    /// </summary>
+    public static IReadOnlyList<ConfigDirSuggestion> Suggestions(bool asOldDiscovery = false)
+    {
+        if (IsPinned) return [];
+        List<string> reported;
+        lock (RefreshGate)
+        {
+            EnsureSelfReportedLoaded();
+            reported = _selfReported.ToList();
+        }
+        return ClaudeConfigDiscovery.Suggest(Home, Instance.All, reported,
+            sources: new IConfigDirSource[] { new ClaudeEnvsSource(Home, requireManifest: asOldDiscovery) });
     }
 
     /// <summary>Re-runs discovery if at least the throttle floor (~5s) has elapsed since the last
@@ -212,11 +229,7 @@ internal sealed class ClaudeConfigSet
         lock (RefreshGate)
         {
             _lastRefreshTick = Environment.TickCount64;
-            EnsureSelfReportedLoaded();
-            var declared = SafeDeclaredRoots();
-            var all = ClaudeConfigDiscovery.Discover(
-                Home, Instance.Primary, declared, _selfReported.ToList(),
-                labels: SafeLabels(), suppressedRealRoots: SafeSuppressed());
+            var all = ClaudeConfigDiscovery.Discover(Instance.Primary, SafeDeclaredRoots(), labels: SafeLabels());
             // Discover always emits the primary first (and never hides it), so all[0] is the primary — carry
             // the labelled copy through so the set's Primary and All[0] agree.
             next = new ClaudeConfigSet(all[0], all);
@@ -228,9 +241,9 @@ internal sealed class ClaudeConfigSet
 
     /// <summary>
     /// Records that a running session self-reported <paramref name="root"/> as its config dir (a
-    /// <c>.configdir</c> marker naming it was seen). Promotes a would-be convention dir to writable and
-    /// makes it sticky across restarts. No-op while pinned, when the dir is already primary/declared/self-
-    /// reported, or on a blank/invalid path. Persists and refreshes only when it actually learns something.
+    /// <c>.configdir</c> marker naming it was seen), so <see cref="Suggestions"/> recommends it — sticky across
+    /// restarts. Never adds it to the set. No-op while pinned, when the dir is already in the set or already
+    /// recorded, or on a blank/invalid path. Persists only when it actually learns something.
     /// </summary>
     public static void NoteSelfReport(string? root)
     {
@@ -238,23 +251,14 @@ internal sealed class ClaudeConfigSet
         var full = SafeFullPath(root);
         if (full is null) return;
 
-        // A dir the user explicitly removed stays removed even if a running session self-reports it.
-        var hidden = new HashSet<string>(SafeSuppressed(), ClaudeConfigDir.PathComparer);
-        if (hidden.Contains(ResolveReal(full))) return;
-
         bool learned;
         lock (RefreshGate)
         {
             EnsureSelfReportedLoaded();
-            if (_selfReported.Contains(full)) return;
-            // Already accounted for by a higher tier (primary or an explicit declaration)? Nothing to add —
-            // only a convention-scan-only dir is worth recording as a sticky self-report.
-            if (Instance.ForRoot(full) is { Provenance: not ConfigDirProvenance.Convention }) return;
+            if (_selfReported.Contains(full) || Instance.ForRoot(full) is not null) return;
             learned = _selfReported.Add(full);
         }
-        if (!learned) return;
-        SaveSelfReported();
-        RefreshNow();
+        if (learned) SaveSelfReported();
     }
 
     private static IReadOnlyList<string> SafeDeclaredRoots()
@@ -286,22 +290,9 @@ internal sealed class ClaudeConfigSet
         return map;
     }
 
-    /// <summary>The hidden (removed) dirs' real paths, best-effort.</summary>
-    private static IReadOnlyList<string> SafeSuppressed()
-    {
-        try
-        {
-            return _suppressedProvider?.Invoke() ?? [];
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
     // Membership is "same" only when each entry matches on identity (RealRoot), how it earned its place
-    // (Provenance — which the hook policy and labels read) AND its custom label — so a relabel or a
-    // hide/promote swaps the set and fires Changed, repainting the overlay. Order matters (primary first).
+    // (Provenance — which the hook policy and labels read) AND its custom label — so a relabel, an add or a
+    // remove swaps the set and fires Changed, repainting the overlay. Order matters (primary first).
     private static bool SameMembership(
         IReadOnlyList<ClaudeConfigDir> a, IReadOnlyList<ClaudeConfigDir> b)
     {
@@ -337,19 +328,11 @@ internal sealed class ClaudeConfigSet
 
     private static ClaudeConfigSet BuildInitial()
     {
+        // The primary alone; declared roots arrive via ConfigureFromSettings, which forces a refresh. Pinned
+        // (CLAUDE_CONFIG_DIR set) it stays that way — hermetic, no refresh.
         var root = ResolvePrimaryRoot();
         var primary = new ClaudeConfigDir(root, ResolveReal(root));
-
-        // Pinned (CLAUDE_CONFIG_DIR set): hermetic — the primary is the whole set, no disk fan-out.
-        if (IsPinned)
-            return new ClaudeConfigSet(primary, new[] { primary });
-
-        // Unpinned: discover from the persisted self-reported roots + the convention scan up front
-        // (declared roots arrive later via ConfigureDeclaredRoots, which forces a refresh). Best-effort;
-        // discovery never throws.
-        EnsureSelfReportedLoaded();
-        var all = ClaudeConfigDiscovery.Discover(Home, primary, declaredRoots: null, _selfReported.ToList());
-        return new ClaudeConfigSet(primary, all);
+        return new ClaudeConfigSet(primary, new[] { primary });
     }
 
     private static string ResolvePrimaryRoot()
@@ -442,7 +425,6 @@ internal sealed class ClaudeConfigSet
             Instance = new ClaudeConfigSet(primary, new[] { primary });
             _declaredRootsProvider = null;
             _labelsProvider = null;
-            _suppressedProvider = null;
             _lastRefreshTick = long.MinValue;
             _selfReported.Clear();
             _selfReportedLoaded = false;
