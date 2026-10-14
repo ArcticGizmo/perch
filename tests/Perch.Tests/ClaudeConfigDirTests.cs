@@ -60,6 +60,25 @@ public class ClaudeConfigDirTests
     }
 
     [Fact]
+    public void SameRoot_IgnoresTrailingSeparatorAndCase_PerPlatform()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "envs", "work");
+        Assert.True(ClaudeConfigDir.SameRoot(root, root + Path.DirectorySeparatorChar));
+        Assert.False(ClaudeConfigDir.SameRoot(root, Path.Combine(Path.GetTempPath(), "envs", "home")));
+        Assert.False(ClaudeConfigDir.SameRoot(root, null));
+    }
+
+    [Fact]
+    public void SameRoot_TrailingSpaceOrDot_IsTheSameDirOnWindowsOnly()
+    {
+        // A hidden entry recorded as "…\incontrol " must match a re-added "…\incontrol" on Windows (Win32 drops the
+        // trailing space, so both name one folder), or re-adding the dir could never un-hide it.
+        var root = Path.Combine(Path.GetTempPath(), "envs", "incontrol");
+        Assert.Equal(OperatingSystem.IsWindows(), ClaudeConfigDir.SameRoot(root + " ", root));
+        Assert.Equal(OperatingSystem.IsWindows(), ClaudeConfigDir.SameRoot(root + ". " + Path.DirectorySeparatorChar, root));
+    }
+
+    [Fact]
     public void ResolveReal_OnOrdinaryDir_ReturnsItself()
     {
         var real = ClaudeConfigSet.ResolveReal(TestEnvironment.FixtureConfigDir);

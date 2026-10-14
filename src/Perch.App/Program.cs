@@ -327,6 +327,11 @@ internal static class Program
             _instanceMutex?.Dispose();
             _instanceMutex = null;
 
+            // Nor does the tray take the terminal's CLAUDE_CONFIG_DIR: a tray started with it set pins its config-dir
+            // set to that one directory (ClaudeConfigSet.IsPinned) for its whole life, update restarts included.
+            // ShellExecute passes the child our environment, so drop it here (the intent doesn't carry it either way,
+            // which keeps this launch consistent with a `perch` forwarded to an already-running tray).
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
             Process.Start(psi);
             Console.WriteLine(intent is null ? "Starting Perch." : "Starting Perch and opening the session.");
             return 0;
