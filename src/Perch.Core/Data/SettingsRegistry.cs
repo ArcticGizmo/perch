@@ -128,7 +128,7 @@ internal static class SettingsRegistry
             s => s.ShowDaemonProcesses, (s, v) => s.ShowDaemonProcesses = v),
 
         Toggle("todos", "Todos",
-            "Show your outstanding todos and their due times as a section on the overlay.",
+            "Show a Todo line on the overlay counting your open and overdue todos; click it to open the list.",
             SettingSurface.SessionRow, ["todo", "to-do", "task", "reminder", "due", "checklist"],
             PreviewTarget.Todos, nameof(AppSettings.ShowTodos),
             s => s.ShowTodos, (s, v) => s.ShowTodos = v),

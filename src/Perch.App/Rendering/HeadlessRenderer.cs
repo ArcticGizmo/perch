@@ -280,26 +280,19 @@ internal static class HeadlessRenderer
         RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1x.png"), 96);
         RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1.5x.png"), 144);
 
-        // The user's "To do" strip: a captioned section under the daemon strip, one line per outstanding
-        // item with its relative due time — an overdue item (attention hue), one due soon, and one undated.
-        var todoProbe = new OverlayCanvas();
-        todoProbe.Update(SampleData.Sessions());
-        todoProbe.SetTopTodos(SampleTodoLines(), 3);
-        RenderControl(todoProbe, Path.Combine(outDir, "overlay_todos_1x.png"), 96);
-        RenderControl(todoProbe, Path.Combine(outDir, "overlay_todos_1.5x.png"), 144);
-
-        // Collapsed Todo section: just the header, with its open-count and the "+".
-        var todoCollapsedProbe = new OverlayCanvas();
-        todoCollapsedProbe.Update(SampleData.Sessions());
-        todoCollapsedProbe.SetTodosExpanded(false);
-        todoCollapsedProbe.SetTopTodos(SampleTodoLines(), 3);
-        RenderControl(todoCollapsedProbe, Path.Combine(outDir, "overlay_todos_collapsed_1x.png"), 96);
-
-        // Empty todo list: the section still shows, as a header over a single faint "add one…" prompt.
-        var todoEmptyProbe = new OverlayCanvas();
-        todoEmptyProbe.Update(SampleData.Sessions());
-        todoEmptyProbe.SetTopTodos([], 0);
-        RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
+        // The Todo strip, one line in each of its states: some overdue (badge + attention count), all on time
+        // (the next due label), and empty ("No todos" / "add one…").
+        void TodoProbe(string file, IReadOnlyList<OverlayCanvas.TodoLine> lines, int open, int overdue, double dpi = 96)
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.SetTopTodos(lines, open, overdue);
+            RenderControl(c, Path.Combine(outDir, file), dpi);
+        }
+        TodoProbe("overlay_todos_1x.png", SampleTodoLines(), 5, 1);
+        TodoProbe("overlay_todos_1.5x.png", SampleTodoLines(), 5, 1, 144);
+        TodoProbe("overlay_todos_ontime_1x.png", SampleTodoLines().Skip(1).ToList(), 2, 0);
+        TodoProbe("overlay_todos_empty_1x.png", [], 0, 0);
 
         // GitHub alerts strip: the one line in each of its states — PRs need you (count + summary + badge), all clear,
         // still checking, and a failure with nothing to show.
@@ -383,7 +376,7 @@ internal static class HeadlessRenderer
             c.UpdateSessionMetrics(SampleData.SessionMetrics());
             c.SetQuickLinks(links, icons);
             c.SetHypertree(SampleData.Hypertree());
-            c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+            c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count, 1);
             c.SetShowGitHubAlerts(true);
             c.SetGitHubStrip(SampleData.GitHubStrip());
             c.SetRecent(SampleData.RecentLines());
@@ -420,7 +413,7 @@ internal static class HeadlessRenderer
         rearrangeProbe.UpdateSessionMetrics(SampleData.SessionMetrics());
         rearrangeProbe.SetQuickLinks(links, icons);
         rearrangeProbe.SetHypertree(SampleData.Hypertree());
-        rearrangeProbe.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+        rearrangeProbe.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count, 1);
         rearrangeProbe.SetDaemonWorkers(SampleData.DaemonWorkers());
         rearrangeProbe.UpdateMedia(SampleData.Media());   // media/mic left disabled → dimmed in rearrange
         rearrangeProbe.UpdateMic(SampleData.Mic());
@@ -3475,8 +3468,8 @@ internal static class HeadlessRenderer
         return workers;
     }
 
-    // Three sample to-do lines for the overlay "To do" strip: an overdue item, one due soon, and an
-    // undated one (no trailing label) — the three shapes the strip has to render.
+    // Three sample to-do lines for the overlay Todo strip's tooltip and next-due label: an overdue item,
+    // one due soon, and an undated one.
     private static IReadOnlyList<OverlayCanvas.TodoLine> SampleTodoLines() =>
     [
         new("t1", "Cut the v1.0 release", "overdue 20m", Overdue: true),

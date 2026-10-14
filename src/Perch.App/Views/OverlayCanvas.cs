@@ -1698,7 +1698,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, FeedHead, FeedMore }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, Todos, FeedHead, FeedMore }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -3205,7 +3205,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // ── "Autonomous" section header ───────────────────────────────────────────
-    // The shared collapsible-section style, matching the Todo and Friends headers: a chevron + caption on
+    // The shared collapsible-section style, matching the Friends header: a chevron + caption on
     // the left, a right-hand count, a hover wash over the whole band, and a click on the band toggles
     // collapse (see RouteClick). The bot glyph rides next to the count (mirroring Friends' "N active" dot),
     // keeping the caption left-aligned with the other section captions.
@@ -4104,18 +4104,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int daemon = HitTestDaemonRow(p);
         if (daemon != _hoveredDaemonRow) { _hoveredDaemonRow = daemon; InvalidateVisual(); }
 
-        int todo = HitTestTodoRow(p);
-        if (todo != _hoveredTodoRow) { _hoveredTodoRow = todo; InvalidateVisual(); }
-
-        bool todoAdd = _todoAddRect.Width > 0 && _todoAddRect.Contains(p);
-        // The "+" sits inside the header band, so don't also light the header when hovering it.
-        bool todoHeader = !todoAdd && _todoHeaderRect.Width > 0 && _todoHeaderRect.Contains(p);
-        if (todoAdd != _hoveredTodoAdd || todoHeader != _hoveredTodoHeader)
-        {
-            _hoveredTodoAdd = todoAdd;
-            _hoveredTodoHeader = todoHeader;
-            InvalidateVisual();
-        }
+        // The Todo strip is one control too: the whole band opens the Todos window.
+        bool overTodos = HitTestTodos(p);
+        if (overTodos != _hoveredTodos) { _hoveredTodos = overTodos; InvalidateVisual(); }
 
         bool autoHeader = _autonomousHeaderRect.Width > 0 && _autonomousHeaderRect.Contains(p);
         if (autoHeader != _hoveredAutonomousHeader) { _hoveredAutonomousHeader = autoHeader; InvalidateVisual(); }
@@ -4182,7 +4173,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overUsageToggle || overGitHub || overFeeds)
+               || overRoost || overRecent || overUsageToggle || overGitHub || overTodos || overFeeds)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4215,6 +4206,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             OverRecentButton(p)                       ? (TipKind.Recent, -1) :
             HitTestGitHub(p)                          ? (TipKind.GitHub, -1) :
+            HitTestTodos(p)                           ? (TipKind.Todos, -1) :
             HitTestFeedHead(p) is var fh && fh >= 0   ? (TipKind.FeedHead, fh) :
             HitTestFeedMore(p)                        ? (TipKind.FeedMore, -1) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
@@ -4257,6 +4249,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Roost:   ShowRoostTooltip();          break;
             case TipKind.Recent:  ShowRecentTooltip();         break;
             case TipKind.GitHub:  ShowGitHubTooltip();         break;
+            case TipKind.Todos:   ShowTodosTooltip();          break;
             case TipKind.FeedHead: ShowFeedHeadTooltip(_tipRow); break;
             case TipKind.FeedMore: ShowFeedMoreTooltip();       break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
@@ -4299,7 +4292,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
@@ -4307,8 +4300,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
         _hoveredNewSession = false;
-        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHypertree = _hoveredAutonomousHeader = false;
-        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
+        _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
+        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -4716,15 +4709,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The feeds row: a head plays its story, "+N" plays the next unread, "+" adds a feed.
         if (RouteFeedsClick(p)) return;
 
-        // The Todo section: the header "+" opens the window to add, the header toggles collapse, and a body
-        // line opens the window (right-click a line offers "Complete" — see ShowContextMenuAt).
-        if (_todoAddRect.Width > 0 && _todoAddRect.Contains(p)) { TodosRequested?.Invoke(); return; }
-        if (_todoHeaderRect.Width > 0 && _todoHeaderRect.Contains(p)) { OnTodoHeaderClicked(); return; }
-        if (HitTestTodoRow(p) >= 0)
-        {
-            TodosRequested?.Invoke();
-            return;
-        }
+        // The Todo strip: anywhere on the line opens the Todos window.
+        if (HitTestTodos(p)) { TodosRequested?.Invoke(); return; }
 
         // The usage strip: clicking an account's NAME collapses just it to a chip; clicking its chip expands
         // it back (per-account, persisted). Clicking the bars themselves (or the strip padding) does nothing.
@@ -4795,14 +4781,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             if (DaemonOverflow && daemonRow == VisibleDaemonCount) DaemonListRequested?.Invoke();
             else ShowDaemonMenu(daemonRow);
-            return;
-        }
-
-        // A to-do line: right-click opens its options menu (Complete / open the full list).
-        int todoRow = HitTestTodoRow(p);
-        if (todoRow >= 0)
-        {
-            ShowTodoMenu(todoRow);
             return;
         }
 

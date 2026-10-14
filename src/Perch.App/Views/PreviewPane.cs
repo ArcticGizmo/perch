@@ -37,7 +37,7 @@ internal sealed class PreviewPane : Border
         _canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
         _canvas.SetDaemonWorkers(SampleData.DaemonWorkers());
         _canvas.SetHypertree(SampleData.Hypertree());
-        _canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+        _canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count, 1);
         _canvas.SetGitHubStrip(SampleData.GitHubStrip());
         _canvas.SetFeedsRow(SampleData.FeedHeads());
         _canvas.SetRecent(SampleData.RecentLines());
