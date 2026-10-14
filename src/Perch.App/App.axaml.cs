@@ -488,15 +488,10 @@ public partial class App : Application
 
             // The user's to-do list: the shared store, the poller that keeps the overlay "To do" strip current
             // and fires due reminders. Started/stopped from ApplyDisplaySettings per the ShowTodos / reminders
-            // settings. A Complete from the overlay writes through the same store and re-runs the poller.
+            // settings. Clicking the strip opens the Todos window.
             _todoStore = TodoStore.Load();
             _todoHost = new Services.TodoMonitorHost(
-                _todoStore, (lines, total) => _overlay!.Canvas.SetTopTodos(lines, total), _notifications, settings);
-            _overlay.Canvas.SetTodosExpanded(settings.TodosExpanded);
-            _overlay.Canvas.TodosExpandChanged += expanded =>
-            {
-                if (_appSettings is { } s) { s.TodosExpanded = expanded; s.Save(); }
-            };
+                _todoStore, (lines, total, overdue) => _overlay!.Canvas.SetTopTodos(lines, total, overdue), _notifications, settings);
             _overlay.Canvas.TodosRequested += OpenTodos;
             // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
             // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
@@ -535,13 +530,6 @@ public partial class App : Application
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
             _overlay.Canvas.RecentDismissRequested += DismissRecent;
             _overlay.Canvas.RecentMoreRequested += OpenSessionWindow;
-            _overlay.Canvas.TodoCompleteRequested += id =>
-            {
-                _todoStore!.Complete(id);
-                _todoStore.Save();
-                _todoHost?.RefreshNow();
-                _todoWindow?.Retarget();
-            };
 
             // In-app updater: reflect availability on the tray item, the overlay badge and any open
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.

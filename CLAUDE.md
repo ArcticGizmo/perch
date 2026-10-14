@@ -121,7 +121,7 @@ running the tray app.
   returns the content height when the context is null (measure pass) and paints when it isn't. Keep the
   two in one method so the measured height and the painted layout can never drift apart.
 - **Collapsible overlay sections follow one standard pattern.** A section that can collapse (the Social/
-  Friends region, the Todo section, the Hypertree strip) draws a **header row** = `chevron ▸/▾` (via the
+  Friends region) draws a **header row** = `chevron ▸/▾` (via the
   shared `OverlayCanvas.DrawChevron`) + a caption + an optional right-hand **"+"** (via `DrawPlusGlyph`,
   inside an ~18px box with its own hover), with a hover wash (`FeedHoverBrush`) over the band. A **click on
   the header toggles** expand/collapse; the **"+"** does the section's add action. Collapsed → only the
@@ -129,7 +129,9 @@ running the tray app.
   header plus the body lines. The expand state is **persisted per section** as a bool on `AppSettings` (in
   `SettingsRegistryTests.NotSettings`, not a Settings-window control), seeded once with `Set*Expanded(...)`
   and written back through a `*ExpandChanged` event the App handles. Reuse this shape for any new collapsible
-  section rather than inventing another; see `OverlayCanvas.Todos.cs` + `OverlayCanvas.Feed.cs`.
+  section rather than inventing another; see `OverlayCanvas.Feed.cs`. A section that only ever needs one
+  line (GitHub alerts, Hypertree, Todo) is instead a **one-line strip**: a mark, a headline, a right-aligned
+  detail, the whole band one click target with a hover wash and a dwell tooltip; see `OverlayCanvas.GitHub.cs`.
 - **The overlay panel's movable sections are laid out by one ordered pass, not a fixed sequence.** The
   vertical order of the ten movable sections (system info, claude metrics, quick links, hypertree, todo,
   github, sessions, friends, media, call — the header and outage bar are fixed chrome; Recent is a button on the

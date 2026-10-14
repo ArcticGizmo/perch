@@ -20,16 +20,16 @@ internal sealed class TodoMonitorHost : IDisposable
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
-    // At most this many lines on the overlay strip — matches OverlayCanvas.MaxTodoRows.
+    // At most this many items listed in the overlay strip's tooltip.
     private const int StripCount = 3;
 
     private readonly TodoStore _store;
-    private readonly Action<IReadOnlyList<OverlayCanvas.TodoLine>, int> _onTodos;
+    private readonly Action<IReadOnlyList<OverlayCanvas.TodoLine>, int, int> _onTodos;
     private readonly NotificationService _notifications;
     private readonly AppSettings _settings;
     private readonly DispatcherTimer _timer;
 
-    public TodoMonitorHost(TodoStore store, Action<IReadOnlyList<OverlayCanvas.TodoLine>, int> onTodos,
+    public TodoMonitorHost(TodoStore store, Action<IReadOnlyList<OverlayCanvas.TodoLine>, int, int> onTodos,
         NotificationService notifications, AppSettings settings)
     {
         _store = store;
@@ -51,7 +51,7 @@ internal sealed class TodoMonitorHost : IDisposable
     public void Stop()
     {
         _timer.Stop();
-        _onTodos([], 0);
+        _onTodos([], 0, 0);
     }
 
     /// <summary>Re-runs the feed + reminder pass immediately — used after the overlay completes an item, so
@@ -74,8 +74,14 @@ internal sealed class TodoMonitorHost : IDisposable
                 t.DueUtc is { } due ? RelativeTime.DueLabel(now, due) : null,
                 Overdue: t.DueUtc is { } d && d < now))
             .ToList();
-        int outstanding = _store.All().Count(t => !t.Completed);
-        _onTodos(lines, outstanding);
+        int outstanding = 0, overdue = 0;
+        foreach (var t in _store.All())
+        {
+            if (t.Completed) continue;
+            outstanding++;
+            if (t.DueUtc is { } d && d < now) overdue++;
+        }
+        _onTodos(lines, outstanding, overdue);
     }
 
     private void FireDueReminders(DateTime now)

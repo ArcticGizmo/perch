@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.32] - 2026-10-14
+
+- Todo is one row: checkbox, open count, overdue count
+- Clicking the Todo row opens the Todos editor
+- Hover the Todo row for the next few items
+- Retired the Todo chevron, "+" and per-item lines (the editor has them all)
+
+---
+
 ## [v0.5.31] - 2026-10-14
 
 - Perch sessions can publish artifacts (via a hidden background claude)

@@ -160,9 +160,6 @@ internal sealed class AppSettings
     // Defaults to true; a missing key keeps it on.
     public bool TodoRemindersEnabled { get; set; } = true;
 
-    // Whether the overlay's Todo section is expanded (showing the top items) or collapsed to just its
-    // header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
-    public bool TodosExpanded { get; set; } = true;
 
     // Whether the overlay shows its Recent button (beside the Roost button): sessions that ended lately, to pick back
     // up, filterable to the interrupted ones and those that ended just before a shutdown. On by default. (The retired
