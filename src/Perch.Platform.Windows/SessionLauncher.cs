@@ -20,8 +20,11 @@ public sealed class SessionLauncher : ISessionLauncher
     public bool Reopen(string cwd, string sessionId, TerminalApp terminal, string? configDir = null) =>
         ClaudeCli.IsSessionId(sessionId) && RunClaudeCommand(cwd, $"--resume {sessionId}", terminal, configDir);
 
-    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null)
+    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null,
+        string? prompt = null)
     {
+        // The prompt is the one free-text piece of the line; anything a shell could read into is refused up front.
+        if (prompt is not null && !ClaudeCli.IsSafePrompt(prompt)) return false;
         // claude is resolved to an absolute path up front: the terminal opens *in* `cwd` — a repo Perch didn't
         // write — and cmd (like ShellExecute) looks in the current directory before PATH, so a bare `claude` would
         // prefer a claude.cmd committed there (review fixes CP7). Not on PATH → false, and the app falls back to
@@ -30,15 +33,15 @@ public sealed class SessionLauncher : ISessionLauncher
         // configDir pins the account (CLAUDE_CONFIG_DIR): without it a session from another config dir resumes
         // under the primary, where its transcript doesn't exist. An unusable dir → false (copy fallback), never
         // a silent launch under the wrong account.
-        if (ClaudeCli.WindowsCmdLine(claude, claudeArgs, configDir) is not { } cmdLine) return false;
+        if (ClaudeCli.WindowsCmdLine(claude, claudeArgs, configDir, prompt) is not { } cmdLine) return false;
 
         // Try the preferred terminal first.
-        if (TryStart(StartInfo(terminal, cwd, claude, claudeArgs, cmdLine, configDir))) return true;
+        if (TryStart(StartInfo(terminal, cwd, claude, claudeArgs, cmdLine, configDir, prompt))) return true;
 
         // If an explicit choice failed (wt alias disabled, pwsh missing, …), fall back to a plain console so
         // the command still runs. CommandPrompt is already that fallback, so don't try it twice.
         if (terminal != TerminalApp.CommandPrompt
-            && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, claude, claudeArgs, cmdLine, configDir)))
+            && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, claude, claudeArgs, cmdLine, configDir, prompt)))
             return true;
 
         return false;
@@ -49,7 +52,7 @@ public sealed class SessionLauncher : ISessionLauncher
     // for a bare name. wt.exe is an execution alias on PATH, so it goes through the resolver. The -d value survives
     // a trailing backslash and a `;` (ClaudeCli.WindowsTerminalStartDir; review fixes CP13).
     private static ProcessStartInfo StartInfo(
-        TerminalApp terminal, string cwd, string claude, string claudeArgs, string cmdLine, string? configDir)
+        TerminalApp terminal, string cwd, string claude, string claudeArgs, string cmdLine, string? configDir, string? prompt)
     {
         string cmd = ExecutableResolver.SystemTool("cmd.exe");
         return terminal switch
@@ -57,7 +60,7 @@ public sealed class SessionLauncher : ISessionLauncher
             TerminalApp.PowerShell =>
                 new ProcessStartInfo(
                     Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-                    $"-NoExit -Command \"{ClaudeCli.WindowsPowerShellScript(claude, claudeArgs, configDir)}\"")
+                    $"-NoExit -Command \"{ClaudeCli.WindowsPowerShellScript(claude, claudeArgs, configDir, prompt)}\"")
                     { UseShellExecute = true, WorkingDirectory = cwd },
             TerminalApp.CommandPrompt =>
                 new ProcessStartInfo(cmd, $"/k {cmdLine}") { UseShellExecute = true, WorkingDirectory = cwd },

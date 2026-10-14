@@ -25,6 +25,22 @@ public sealed class UrlOpener : IUrlOpener
     // sign-in still works; it just won't force a private session on macOS yet.
     public void OpenPrivate(string url) => OpenInNewWindow(url);
 
+    // A local .html page (LocalPageUrl): `open [-n] <path>` hands it to the .html handler, a browser on a stock Mac.
+    // The path is fully qualified, so it can't be read as one of open's flags. Unverified on a Mac, like the rest.
+    public bool OpenLocalPage(string path, bool newWindow)
+    {
+        if (Perch.Data.OpenTargets.LocalPageUrl(path) is null || !File.Exists(path)) return false;
+        try
+        {
+            var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false, CreateNoWindow = true };
+            if (newWindow) psi.ArgumentList.Add("-n");
+            psi.ArgumentList.Add(path);
+            using var _ = Process.Start(psi);
+            return true;
+        }
+        catch { return false; }
+    }
+
     // Only http(s)/mailto get through (review fixes CP8): `open` runs a file:// .app or .command as readily as
     // it shows a page, and the scheme-led result can't be mistaken for one of its flags.
     private static void Run(string url, bool newInstance)

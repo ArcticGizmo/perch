@@ -82,6 +82,31 @@ public static class OpenTargets
         catch { return false; }
     }
 
+    /// <summary>
+    /// The <c>file:</c> URL of a local HTML page the user asked to open in a browser, else null: a fully-qualified,
+    /// local (never network-shaped), stream-free <c>.html</c>/<c>.htm</c> path. HTML stays out of
+    /// <see cref="IsViewerSafeFile"/>, because the shell may hand it to whatever handler is registered. This URL is only
+    /// ever passed to the default browser's own executable, and only on an explicit "Open in browser". Existence is
+    /// the caller's check.
+    /// </summary>
+    public static string? LocalPageUrl(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || IsNetworkShaped(path)) return null;
+        try
+        {
+            if (!Path.IsPathFullyQualified(path) || !IsHtmlPage(path)) return null;
+            if (path.IndexOf(':', OperatingSystem.IsWindows() ? 2 : 0) >= 0) return null;   // as IsViewerSafeFile
+            var uri = new Uri(path);
+            return uri.IsFile && !uri.IsUnc ? uri.AbsoluteUri : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>True for an <c>.html</c>/<c>.htm</c> file name — what "Open in browser" is offered on.</summary>
+    public static bool IsHtmlPage(string path) =>
+        path.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
+
     // Deliberately short: a file type only goes here if its default handler displays it and never executes it.
     // HTML/SVG are out (they open in a browser with file: access); macro-capable office formats are out.
     private static readonly HashSet<string> ViewerSafeExtensions = new(StringComparer.OrdinalIgnoreCase)

@@ -706,4 +706,5 @@ internal sealed class NoopUrlOpener : IUrlOpener
     public void Open(string url) { }
     public void OpenInNewWindow(string url) { }
     public void OpenPrivate(string url) { }
+    public bool OpenLocalPage(string path, bool newWindow) => false;
 }

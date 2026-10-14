@@ -15,7 +15,8 @@ public sealed class SessionLauncher : ISessionLauncher
 
     // Not yet implemented (see docs/macos-port-plan.md): should open Terminal.app running `claude <args>` in
     // cwd. Returns false for now, so the app tells the user it couldn't launch one.
-    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null) => false;
+    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null,
+        string? prompt = null) => false;
 
     // Opens Terminal.app in cwd (`open -a Terminal <dir>` starts a shell there). The TerminalApp choices are
     // Windows hosts, so every value maps to Terminal.app.

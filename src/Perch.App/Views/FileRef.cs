@@ -9,8 +9,8 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// Makes a file reference actionable: a right-click context menu — <em>View</em> (Markdown only),
-/// <em>View diff</em>, <em>Reveal in Explorer</em> (Finder on macOS), <em>Open in VS Code</em>, <em>Copy path</em>
-/// — plus a left-click primary for a whole-control reference. <em>View</em>/<em>View diff</em> route out via the
+/// <em>Open in browser</em> (HTML only; middle-click for a new window), <em>View diff</em>, <em>Reveal in Explorer</em> (Finder on macOS), <em>Open in VS Code</em>, <em>Copy path</em>,
+/// <em>Publish as artifact</em> (page-like files, inside an <see cref="IArtifactPublisher"/>) — plus a left-click primary for a whole-control reference. <em>View</em>/<em>View diff</em> route out via the
 /// caller's callbacks (the app owns the viewer/tree windows); reveal/editor go straight to
 /// <see cref="PlatformServices.FileRevealer"/>, the same direct-to-platform shape <see cref="LinkText"/> uses
 /// for URLs.
@@ -25,6 +25,13 @@ namespace Perch.Avalonia.Views;
 /// fixes CP8/CP12). Which files get here at all is <c>FileRefResolver</c>'s call (local, existing, never probed
 /// over the network — CP9).</para>
 /// </summary>
+/// <summary>A window that can hand a file off to be published as a claude.ai artifact (see
+/// <see cref="Perch.Data.ArtifactPublish"/>); <see cref="FileRef"/>'s menu offers the action only inside one.</summary>
+internal interface IArtifactPublisher
+{
+    void PublishArtifact(string absPath);
+}
+
 internal static class FileRef
 {
     // How far the pointer may travel between press and release and still count as a click, not a selection drag.
@@ -143,13 +150,54 @@ internal static class FileRef
     {
         var menu = new ContextMenu();
         if (IsMarkdown(absPath)) menu.Items.Add(Item("View", () => openViewer(absPath)));
+        if (Perch.Data.OpenTargets.IsHtmlPage(absPath))
+        {
+            // Click → the default browser (its usual new tab); middle-click → a fresh window, as every link menu does.
+            var browse = Item("Open in browser", () => OpenInBrowser(absPath, newWindow: false));
+            ToolTip.SetTip(browse, "Middle-click to open in a new window");
+            WireMiddleClick(menu, browse, () => OpenInBrowser(absPath, newWindow: true));
+            menu.Items.Add(browse);
+        }
         menu.Items.Add(Item("View diff", () => viewDiff(absPath)));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item(RevealLabel, () => PlatformServices.FileRevealer.RevealInFileManager(absPath)));
         menu.Items.Add(Item(line > 0 ? $"Open in VS Code at line {line}" : "Open in VS Code",
             () => PlatformServices.FileRevealer.OpenInEditor(absPath, line)));
         menu.Items.Add(Item("Copy path", () => TopLevel.GetTopLevel(owner)?.Clipboard?.SetTextAsync(absPath)));
+
+        // Publish as artifact: only where the hosting window can do it (a session window). Resolved when the menu
+        // opens, since a whole-control menu is built before the control joins a window.
+        if (Perch.Data.ArtifactPublish.IsPublishable(absPath))
+        {
+            var sep = new Separator();
+            var publish = Item("Publish as artifact…",
+                () => (TopLevel.GetTopLevel(owner) as IArtifactPublisher)?.PublishArtifact(absPath));
+            menu.Items.Add(sep);
+            menu.Items.Add(publish);
+            menu.Opening += (_, _) => sep.IsVisible = publish.IsVisible = TopLevel.GetTopLevel(owner) is IArtifactPublisher;
+        }
         return menu;
+    }
+
+    // No browser to hand it to → reveal it, never a shell open (see OpenTargets.LocalPageUrl).
+    private static void OpenInBrowser(string absPath, bool newWindow)
+    {
+        if (!PlatformServices.UrlOpener.OpenLocalPage(absPath, newWindow))
+            PlatformServices.FileRevealer.RevealInFileManager(absPath);
+    }
+
+    // A MenuItem only raises Click for the left button and the menu stays open on any other, so a middle click is
+    // caught on the tunnel (before MenuItem's own release handling), closes the menu as a click would, then runs —
+    // as OverlayCanvas.WireMiddleClick does for its flyouts.
+    private static void WireMiddleClick(ContextMenu menu, MenuItem item, System.Action onMiddleClick)
+    {
+        item.AddHandler(InputElement.PointerReleasedEvent, (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Middle) return;
+            menu.Close();
+            onMiddleClick();
+            e.Handled = true;
+        }, RoutingStrategies.Tunnel);
     }
 
     private static MenuItem Item(string header, System.Action onClick)

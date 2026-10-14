@@ -20,6 +20,14 @@ public static class ClaudeCli
     /// <summary>A general <c>claude &lt;args&gt;</c> invocation (e.g. <c>args = "auth login"</c>).</summary>
     public static string Command(string args) => $"claude {args}";
 
+    /// <summary>True for an opening prompt that can ride a cmd, Windows Terminal or PowerShell command line as one
+    /// quoted argument: letters, digits, spaces and <c>. , - _ / \ : ( )</c> only, not ending in <c>\</c> (it would
+    /// escape the closing quote). Nothing a shell interprets inside quotes, and no <c>;</c>, which wt splits on even
+    /// there.</summary>
+    public static bool IsSafePrompt(string? s) =>
+        s is { Length: > 0 } && !s.EndsWith('\\') &&
+        s.All(c => char.IsLetterOrDigit(c) || c is ' ' or '.' or ',' or '-' or '_' or '/' or '\\' or ':' or '(' or ')');
+
     /// <summary>The absolute path of the <c>claude</c> CLI on PATH, or <c>null</c> when it isn't installed. Never the
     /// current directory — see <see cref="ExecutableResolver"/>.</summary>
     public static string? Find() => ExecutableResolver.Find("claude");
@@ -44,12 +52,21 @@ public static class ClaudeCli
     /// environment, not ours — can't be handed an environment block. Null when <paramref name="configDir"/> holds a
     /// character cmd would interpret (<c>% " &amp; | &lt; &gt; ^</c> — the value is passed unquoted, see below) or that
     /// Windows Terminal splits on (<c>;</c>), so the caller falls back to copying the command rather than resuming
-    /// under the wrong account.</summary>
-    public static string? WindowsCmdLine(string claudePath, string args, string? configDir)
+    /// under the wrong account. <paramref name="prompt"/>, when set, is the session's opening prompt, appended as one
+    /// quoted argument; null too when it isn't <see cref="IsSafePrompt"/>.</summary>
+    public static string? WindowsCmdLine(string claudePath, string args, string? configDir, string? prompt = null)
     {
         // cmd keeps a quoted first token when it's the only quoted pair; with a `set "…"` prefix the line no longer
         // starts with a quote, so cmd strips nothing either way. The args are safe tokens.
         var run = $"{QuoteIfSpaced(claudePath)} {args}";
+        if (prompt is not null)
+        {
+            if (!IsSafePrompt(prompt)) return null;
+            // A quoted claude path plus a quoted prompt is two quoted pairs on a line that starts with a quote, and
+            // `cmd /k` then strips the first and last quote, mangling both. Rare (a space in the install path), so refuse.
+            if (string.IsNullOrEmpty(configDir) && claudePath.Contains(' ')) return null;
+            run += $" \"{prompt}\"";
+        }
         if (string.IsNullOrEmpty(configDir)) return run;
         if (configDir.IndexOfAny(['%', '"', ';', '&', '|', '<', '>', '^']) >= 0) return null;
         // `set VAR=value&&` — unquoted, with no space before `&&` — because Windows Terminal re-tokenises its command
@@ -61,11 +78,13 @@ public static class ClaudeCli
     }
 
     /// <summary>The PowerShell <c>-Command</c> script for the same launch; single-quoted literals, so nothing in the
-    /// paths is interpreted (<c>'</c> is doubled).</summary>
-    public static string WindowsPowerShellScript(string claudePath, string args, string? configDir)
+    /// paths is interpreted (<c>'</c> is doubled). <paramref name="prompt"/> as for <see cref="WindowsCmdLine"/> (the
+    /// caller checks <see cref="IsSafePrompt"/>, since no <c>"</c> may reach the surrounding <c>-Command "…"</c>).</summary>
+    public static string WindowsPowerShellScript(string claudePath, string args, string? configDir, string? prompt = null)
     {
         static string Lit(string s) => "'" + s.Replace("'", "''") + "'";
         var run = $"& {Lit(claudePath)} {args}";
+        if (prompt is not null) run += $" {Lit(prompt)}";
         // Single quotes only — the whole script rides inside the -Command "…" argument.
         return string.IsNullOrEmpty(configDir) ? run : $"$env:CLAUDE_CONFIG_DIR = {Lit(configDir)}; {run}";
     }

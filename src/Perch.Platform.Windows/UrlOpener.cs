@@ -83,6 +83,23 @@ public sealed class UrlOpener : IUrlOpener
         OpenInNewWindow(url);
     }
 
+    // A local page goes to the browser exe directly: shell-opening a .html would hand it to whatever handler owns the
+    // extension. No resolvable browser → false, and the caller reveals the file rather than shell-opening it.
+    public bool OpenLocalPage(string path, bool newWindow)
+    {
+        if (Perch.Data.OpenTargets.LocalPageUrl(path) is not { } url || !File.Exists(path)) return false;
+        if (ResolveDefaultBrowser() is not { } b) return false;
+        try
+        {
+            var psi = new ProcessStartInfo(b.ExePath) { UseShellExecute = false };
+            if (newWindow) psi.ArgumentList.Add(b.Family == BrowserFamily.Gecko ? "-new-window" : "--new-window");
+            AddUrl(psi, b.Family, url);
+            using var _ = Process.Start(psi);
+            return true;
+        }
+        catch { return false; }
+    }
+
     // The URL goes after Chromium's "--" switch terminator (the form Chrome registers for itself), so even a
     // URL that somehow began with "-" would be read as a URL, not a switch. Gecko has no terminator (Firefox
     // registers "-osint -url"), so it relies on the WebUrl check guaranteeing a scheme-led URL.

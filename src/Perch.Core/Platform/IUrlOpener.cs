@@ -37,4 +37,13 @@ public interface IUrlOpener
     /// <see cref="OpenInNewWindow"/> when the browser can't be resolved or its private switch isn't known.
     /// </summary>
     void OpenPrivate(string url);
+
+    /// <summary>
+    /// Opens a local HTML page (<see cref="Perch.Data.OpenTargets.LocalPageUrl"/>) in the default browser, never
+    /// through the shell: plainly (the browser's usual new tab), or in a fresh window when
+    /// <paramref name="newWindow"/> (the middle-click affordance, as <see cref="OpenInNewWindow"/>). Returns false
+    /// when it couldn't (not a local page, missing, no resolvable browser), so the caller can reveal the file
+    /// instead. Never throws.
+    /// </summary>
+    bool OpenLocalPage(string path, bool newWindow);
 }

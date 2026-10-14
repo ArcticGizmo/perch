@@ -328,4 +328,78 @@ public class ClaudeCliTerminalCommandTests
         Assert.EndsWith("; & '" + Claude + "' --resume abc", script);
         Assert.DoesNotContain("\"", script);   // it rides inside -Command "…"
     }
+
+    private const string Prompt = @"Load the Artifact tool, then publish the file docs\report.html as a private artifact";
+
+    // The opening prompt is one quoted argument, and stays one after Windows Terminal re-tokenises the line.
+    [Theory]
+    [InlineData(null)]
+    [InlineData(@"C:\Users\A B\.claude work")]
+    public void Cmd_line_carries_the_prompt_as_one_argument_through_windows_terminal(string? dir)
+    {
+        var line = ClaudeCli.WindowsCmdLine(Claude, "", dir, Prompt)!;
+        Assert.EndsWith($"\"{Prompt}\"", line);
+        Assert.Equal(Prompt, SplitLikeArgv(line)[^1]);
+    }
+
+    // `cmd /k "C:\A B\claude.cmd" "prompt"` would have its first and last quote stripped.
+    [Fact]
+    public void Cmd_line_refuses_a_prompt_behind_a_spaced_claude_path() =>
+        Assert.Null(ClaudeCli.WindowsCmdLine(@"C:\A B\claude.cmd", "", null, Prompt));
+
+    [Fact]
+    public void PowerShell_script_passes_the_prompt_as_a_literal()
+    {
+        var script = ClaudeCli.WindowsPowerShellScript(Claude, "", null, Prompt);
+        Assert.EndsWith($" '{Prompt}'", script);
+        Assert.DoesNotContain("\"", script);
+    }
+
+    [Theory]
+    [InlineData(Prompt, true)]
+    [InlineData(@"publish C:\work\my repo\page (1).html, then reply", true)]
+    [InlineData("publish a\"b", false)]       // ends the quoted argument
+    [InlineData("publish 100%x%", false)]     // cmd expands % inside quotes
+    [InlineData("publish a;b", false)]        // wt splits on ; even inside quotes
+    [InlineData("publish a&calc", false)]
+    [InlineData("publish $(calc)", false)]
+    [InlineData("publish it'", false)]
+    [InlineData(@"publish C:\dir\", false)]   // a trailing backslash escapes the closing quote
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Only_a_plain_prompt_is_passed_to_a_terminal(string? prompt, bool ok)
+    {
+        Assert.Equal(ok, ClaudeCli.IsSafePrompt(prompt));
+        if (!ok && prompt is { Length: > 0 }) Assert.Null(ClaudeCli.WindowsCmdLine(Claude, "", null, prompt));
+    }
+}
+
+public class ArtifactPublishTests
+{
+    [Theory]
+    [InlineData(@"C:\work\repo\artefacts\page.html", true)]
+    [InlineData(@"C:\work\repo\docs\Plan.MD", true)]
+    [InlineData(@"C:\work\repo\diagram.svg", true)]
+    [InlineData(@"C:\work\repo\src\App.cs", false)]
+    [InlineData(@"C:\work\repo\data.json", false)]
+    public void Only_page_like_files_are_offered(string path, bool ok) =>
+        Assert.Equal(ok, ArtifactPublish.IsPublishable(path));
+
+    [Fact]
+    public void Prompt_names_a_file_under_the_cwd_relatively()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "repo");
+        var prompt = ArtifactPublish.Prompt(cwd, Path.Combine(cwd, "artefacts", "page.html"));
+        Assert.Contains(" " + Path.Combine("artefacts", "page.html") + " ", prompt);
+        Assert.True(ClaudeCli.IsSafePrompt(prompt));
+    }
+
+    [Fact]
+    public void Prompt_names_a_file_outside_the_cwd_in_full()
+    {
+        var root = Path.GetTempPath();
+        var file = Path.Combine(root, "elsewhere", "page.html");
+        var prompt = ArtifactPublish.Prompt(Path.Combine(root, "repo"), file);
+        Assert.Contains(" " + file + " ", prompt);
+    }
 }

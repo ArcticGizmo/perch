@@ -47,7 +47,7 @@ internal sealed record ComposerAction(string Glyph, string Tooltip, Action<Contr
 /// (<see cref="LiveLookup"/>) or controlled by another Perch (<see cref="SessionLock.HeldByOther"/>); the
 /// controller pins the id and writes the lock before the process starts.</para>
 /// </summary>
-internal sealed partial class SessionWindow : Window
+internal sealed partial class SessionWindow : Window, IArtifactPublisher
 {
     private static readonly string[] Modes = ["default", "auto", "plan", "acceptEdits", "bypassPermissions"];
 
@@ -2037,6 +2037,23 @@ internal sealed partial class SessionWindow : Window
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
+    }
+
+    // "Publish as artifact…" on a file reference → a fresh interactive claude in a terminal, opened with a prompt to
+    // publish it: the Artifact tool doesn't exist in the headless -p session this window drives (ArtifactPublish).
+    // Same account as the auth hand-off. When no terminal can take it, the prompt goes to the clipboard instead.
+    public void PublishArtifact(string absPath)
+    {
+        var configDir = _session is { } s ? s.ConfigDir : LaunchConfigDir(_cwd);
+        var prompt = ArtifactPublish.Prompt(_cwd, absPath);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, "", TerminalApp.Auto, configDir, prompt))
+        {
+            Conv.AddNote($"opened a terminal to publish {PathLeaf.Of(absPath)} as an artifact — the link lands there");
+            return;
+        }
+        Clipboard?.SetTextAsync(prompt);
+        Conv.AddNote("couldn't open a terminal to publish it — run claude here and paste the prompt (copied)",
+            NoteKind.Error);
     }
 
     // ── Auto-compaction modal (/autocompact) ──────────────────────────────────────

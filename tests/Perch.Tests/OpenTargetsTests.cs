@@ -138,4 +138,41 @@ public class OpenTargetsTests
         if (!OperatingSystem.IsWindows()) return;
         Assert.False(OpenTargets.IsViewerSafeFile(@"C:\work\x.exe:payload.txt"));
     }
+
+    [Theory]
+    [InlineData("page.html")]
+    [InlineData("Report.HTM")]
+    [InlineData("my page #2.html")]   // spaces and # are escaped, not read as a fragment
+    public void LocalPageUrl_gives_a_file_url_for_a_local_html_page(string name)
+    {
+        var path = Path.Combine(Path.GetTempPath(), name);
+        var url = OpenTargets.LocalPageUrl(path);
+        Assert.NotNull(url);
+        Assert.StartsWith("file:///", url);
+        Assert.Equal(path, new Uri(url!).LocalPath);
+    }
+
+    [Theory]
+    [InlineData(@"\\attacker\s\page.html")]
+    [InlineData("//attacker/s/page.html")]
+    [InlineData("page.html")]   // relative
+    [InlineData("")]
+    [InlineData(null)]
+    public void LocalPageUrl_refuses_remote_and_relative_paths(string? path) =>
+        Assert.Null(OpenTargets.LocalPageUrl(path));
+
+    [Theory]
+    [InlineData("x.hta")]
+    [InlineData("x.svg")]
+    [InlineData("x.md")]
+    [InlineData("x.html.exe")]
+    public void LocalPageUrl_refuses_anything_but_html(string name) =>
+        Assert.Null(OpenTargets.LocalPageUrl(Path.Combine(Path.GetTempPath(), name)));
+
+    [Fact]
+    public void LocalPageUrl_refuses_an_alternate_data_stream()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Assert.Null(OpenTargets.LocalPageUrl(@"C:\work\x.exe:payload.html"));
+    }
 }
