@@ -4,13 +4,13 @@ using Xunit;
 namespace Perch.Tests;
 
 /// <summary>
-/// Covers the config-dir label + hide features: <see cref="ClaudeConfigDir.DisplayLabel"/>'s rules (the
-/// primary shows no chip unless named; others use their slug/dir-name; a custom label overrides), and
-/// <see cref="ClaudeConfigDiscovery.Discover"/> threading those custom labels through by real path and
-/// excluding hidden dirs (while never hiding the primary). Pure — each disk test builds its own throwaway
-/// tree and injects an identity link resolver so real paths are deterministic.
+/// Covers the config-dir label feature: <see cref="ClaudeConfigDir.DisplayLabel"/>'s rules (the primary shows
+/// no chip unless named; others use their slug/dir-name; a custom label overrides), and
+/// <see cref="ClaudeConfigDiscovery.Discover"/> threading those custom labels through by real path. Pure —
+/// each disk test builds its own throwaway tree and injects an identity link resolver so real paths are
+/// deterministic.
 /// </summary>
-public sealed class ConfigDirLabelsAndHidingTests : IDisposable
+public sealed class ConfigDirLabelsTests : IDisposable
 {
     private readonly string _sandbox = Directory.CreateTempSubdirectory("perch-cfglabel-").FullName;
 
@@ -63,7 +63,7 @@ public sealed class ConfigDirLabelsAndHidingTests : IDisposable
         };
 
         var set = ClaudeConfigDiscovery.Discover(
-            _sandbox, primary, new[] { work }, linkResolver: Identity, labels: labels);
+            primary, new[] { work }, linkResolver: Identity, labels: labels);
 
         Assert.Equal("Home", set.Single(d => d.Provenance == ConfigDirProvenance.Primary).DisplayLabel);
         Assert.Equal("Acme", set.Single(d => d.Root == work).DisplayLabel);
@@ -77,29 +77,10 @@ public sealed class ConfigDirLabelsAndHidingTests : IDisposable
         var primary = new ClaudeConfigDir(Make(".claude")) { CustomLabel = "OldName" };
 
         var set = ClaudeConfigDiscovery.Discover(
-            _sandbox, primary, declaredRoots: null, linkResolver: Identity,
+            primary, declaredRoots: null, linkResolver: Identity,
             labels: new Dictionary<string, string>(ClaudeConfigDir.PathComparer));
 
         Assert.Null(set[0].CustomLabel);
         Assert.Equal("", set[0].DisplayLabel);
-    }
-
-    // ── Hiding removes a dir, but never the primary ─────────────────────────────────
-
-    [Fact]
-    public void Discover_Suppressed_ExcludesConventionDir_ButNeverPrimary()
-    {
-        var primary = new ClaudeConfigDir(Make(".claude"));
-        Make(".claude-alt"); // a sibling convention dir the scan would otherwise pick up
-        var altReal = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(Path.Combine(_sandbox, ".claude-alt")));
-
-        // Hide the sibling AND (maliciously) the primary — the primary must survive regardless.
-        var set = ClaudeConfigDiscovery.Discover(
-            _sandbox, primary, declaredRoots: null, linkResolver: Identity,
-            suppressedRealRoots: new[] { altReal, primary.RealRoot });
-
-        Assert.Contains(set, d => d.Provenance == ConfigDirProvenance.Primary);
-        Assert.DoesNotContain(set, d => Path.GetFileName(d.Root) == ".claude-alt");
     }
 }

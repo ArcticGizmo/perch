@@ -62,13 +62,6 @@ internal static class HookInstaller
     public static Func<IReadOnlyList<string>>? DisabledRealRootsProvider { get; set; }
 
     /// <summary>
-    /// Source of the config dirs the user turned hooks ON for (resolved real paths), wired from
-    /// <c>AppSettings.HooksEnabledDirs</c> — the opt-IN for auto-discovered directories that default off.
-    /// Read live on every <see cref="ReconcileAll"/>. Null/throwing means "no opt-ins". See <see cref="HookPolicy"/>.
-    /// </summary>
-    public static Func<IReadOnlyList<string>>? EnabledRealRootsProvider { get; set; }
-
-    /// <summary>
     /// Copy-if-newer the shipped binary to <see cref="HookBinaryPath"/>, record the tray location, then
     /// reconcile the managed hook block in <c>~/.claude/settings.json</c>. Safe to call on every launch.
     /// </summary>
@@ -108,9 +101,8 @@ internal static class HookInstaller
     /// <summary>
     /// Reconciles Perch's managed hooks across the whole config-dir set per <see cref="HookPolicy"/>: install
     /// into every directory hooks are on for, strip our block from every one they're off for. The primary is
-    /// always hooked; declared / self-reported dirs default on (opt-out); an auto-discovered (convention) dir
-    /// defaults off but can be opted in. Stripping a directory that has none of our hooks is a no-op that
-    /// never touches its file, so a merely pattern-matched dir is never silently written. Best-effort per dir.
+    /// always hooked; every dir the user added defaults on (opt-out). Stripping a directory that has none of
+    /// our hooks is a no-op that never touches its file. Best-effort per dir.
     /// </summary>
     public static void ReconcileAll()
     {
@@ -118,12 +110,11 @@ internal static class HookInstaller
         lock (ReconcileGate)
         {
             var disabled = RealRootSet(DisabledRealRootsProvider);
-            var enabled = RealRootSet(EnabledRealRootsProvider);
             foreach (var dir in ClaudeConfigSet.Instance.All)
             {
                 try
                 {
-                    if (HookPolicy.IsEnabled(dir.Provenance, dir.RealRoot, disabled, enabled))
+                    if (HookPolicy.IsEnabled(dir.Provenance, dir.RealRoot, disabled))
                         ClaudeUserSettings.ReconcileHooks(dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
                     else
                         ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, AppProfile.IsDev, HookBinaryPath);

@@ -1941,17 +1941,18 @@ internal sealed partial class SettingsWindow : Window
 
     // ── Config directories (config-dir discovery, Layer 1) ──────────────────────────
     private StackPanel? _configDirsList;
+    private StackPanel? _configDirSuggestionsList;
+    private IReadOnlyList<ConfigDirSuggestion>? _configDirSuggestions;
 
     private void BuildConfigDirsPage(StackPanel page)
     {
         page.Children.Add(SettingsUi.BodyText(
             "Perch watches your ~/.claude config directory by default. If you run Claude Code with " +
-            "CLAUDE_CONFIG_DIR pointed at other directories (for example one per org, via a launcher), those " +
-            "are auto-discovered — and you can add one that lives somewhere unusual. Edit a row to rename its " +
-            "label (shown on its session rows), turn its Perch hooks on or off (needed for the accept-edits " +
-            "badge, session control and auto-start), or remove ones you don't want. The primary is always " +
-            "hooked; directories you add default to hooked; auto-discovered ones default off (Perch won't hook " +
-            "a directory it only guessed at unless you turn it on), but you can enable any of them from Edit."));
+            "CLAUDE_CONFIG_DIR pointed at other directories (for example one per org, via a launcher), add them " +
+            "here — or scan for likely ones and pick which to add; Perch never adds one on its own. Edit a row to " +
+            "rename its label (shown on its session rows) or turn its Perch hooks on or off (needed for the " +
+            "accept-edits badge, session control and auto-start). The primary is always hooked; directories you " +
+            "add default to hooked."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -1962,7 +1963,13 @@ internal sealed partial class SettingsWindow : Window
         var addBtn = SettingsUi.FlatButton("Add config directory…");
         addBtn.Click += async (_, _) => await AddOrEditConfigDir(null);
         addRow.Children.Add(addBtn);
+        var scanBtn = SettingsUi.FlatButton("Scan for directories");
+        scanBtn.Click += (_, _) => ScanConfigDirs(scanBtn);
+        addRow.Children.Add(scanBtn);
         page.Children.Add(addRow);
+
+        _configDirSuggestionsList = new StackPanel { Margin = new Thickness(0, 8, 0, 0), IsVisible = false };
+        page.Children.Add(_configDirSuggestionsList);
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -2156,7 +2163,7 @@ internal sealed partial class SettingsWindow : Window
             TextTrimming = TextTrimming.PrefixCharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
         });
         bool looksValid = isPrimary || ClaudeConfigDiscovery.LooksLikeConfigDir(d.Root);
-        var meta = ProvenanceLabel(d.Provenance);
+        var meta = isPrimary ? "primary" : "added";
         if (isPrimary && string.IsNullOrWhiteSpace(custom)) meta += "  ·  no chip unless labelled";
         if (!looksValid) meta += "  ·  ⚠ doesn't look like a Claude config directory yet";
         textStack.Children.Add(new TextBlock
@@ -2175,8 +2182,8 @@ internal sealed partial class SettingsWindow : Window
             Margin = new Thickness(0, 1, 0, 0),
         });
         // Hooks state as a plain status line (matching the other meta lines); the on/off control lives in the
-        // Edit dialog. Primary is always hooked; declared/reported dirs default on, auto-discovered off.
-        bool hooksOn = HookPolicy.IsEnabled(d.Provenance, d.RealRoot, HooksDisabledList, HooksEnabledList);
+        // Edit dialog. Primary is always hooked; added dirs default on.
+        bool hooksOn = HookPolicy.IsEnabled(d.Provenance, d.RealRoot, HooksDisabledList);
         textStack.Children.Add(new TextBlock
         {
             Text = $"Perch hooks: {(hooksOn ? "true" : "false")}",
@@ -2205,13 +2212,74 @@ internal sealed partial class SettingsWindow : Window
         return grid;
     }
 
-    private static string ProvenanceLabel(ConfigDirProvenance p) => p switch
+    // Runs the suggestion scan off the UI thread (it touches the disk) and lists what it found below the
+    // buttons. Only ever recommends — each row's Add goes through the same dialog as a manual add.
+    private void ScanConfigDirs(Button scanBtn)
     {
-        ConfigDirProvenance.Primary      => "primary",
-        ConfigDirProvenance.Declared     => "added",
-        ConfigDirProvenance.SelfReported => "auto · reported by a session",
-        _                                => "auto · discovered",
-    };
+        scanBtn.IsEnabled = false;
+        _configDirSuggestionsList!.IsVisible = true;
+        _configDirSuggestionsList.Children.Clear();
+        _configDirSuggestionsList.Children.Add(SettingsUi.BodyText("Scanning…"));
+        _ = System.Threading.Tasks.Task.Run(() => ClaudeConfigSet.Suggestions()).ContinueWith(t =>
+        {
+            scanBtn.IsEnabled = true;
+            if (!IsVisible) return;
+            _configDirSuggestions = t.IsCompletedSuccessfully ? t.Result : Array.Empty<ConfigDirSuggestion>();
+            RebuildConfigDirSuggestions();
+        }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // Lists the last scan's finds, minus any added since (so Add makes its row go away without a rescan).
+    private void RebuildConfigDirSuggestions()
+    {
+        if (_configDirSuggestionsList is null || _configDirSuggestions is null) return;
+        _configDirSuggestionsList.Children.Clear();
+        var set = ClaudeConfigSet.Instance;
+        var open = _configDirSuggestions.Where(s => set.ForRoot(s.Root) is null).ToList();
+        if (open.Count == 0)
+        {
+            _configDirSuggestionsList.Children.Add(SettingsUi.BodyText("No other config directories found."));
+            return;
+        }
+        _configDirSuggestionsList.Children.Add(SettingsUi.FieldCaption("Found — not added"));
+        foreach (var s in open)
+            _configDirSuggestionsList.Children.Add(BuildConfigDirSuggestionRow(s));
+    }
+
+    private Control BuildConfigDirSuggestionRow(ConfigDirSuggestion s)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 10) };
+        var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        textStack.Children.Add(new TextBlock
+        {
+            Text = s.Label, FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush,
+        });
+        textStack.Children.Add(new TextBlock
+        {
+            // A path keeps its tail (folder name) legible — leading ellipsis, never trailing.
+            Text = s.Root, FontSize = 12, Foreground = Palette.MutedBrush,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+        });
+        textStack.Children.Add(new TextBlock
+        {
+            Text = s.Source switch
+            {
+                ConfigDirSuggestionSource.ReportedBySession => "a session reported running from it",
+                ConfigDirSuggestionSource.HomeFolder        => "a ~/.claude* folder in your home directory",
+                _                                           => "a claude-envs environment",
+            },
+            FontSize = 12, Foreground = Palette.MutedBrush, Margin = new Thickness(0, 1, 0, 0),
+        });
+        Grid.SetColumn(textStack, 0);
+        grid.Children.Add(textStack);
+
+        var add = SettingsUi.FlatButton("Add…");
+        add.VerticalAlignment = VerticalAlignment.Center;
+        add.Click += async (_, _) => await AddOrEditConfigDir(null, s.Root);
+        Grid.SetColumn(add, 1);
+        grid.Children.Add(add);
+        return grid;
+    }
 
     /// <summary>The user's custom label for a dir (keyed by its real path), or null when none is set.</summary>
     private string? CurrentConfigDirLabel(ClaudeConfigDir d) =>
@@ -2234,71 +2302,47 @@ internal sealed partial class SettingsWindow : Window
 
     private IReadOnlyCollection<string> HooksDisabledList =>
         _settings.HooksDisabledDirs ?? (IReadOnlyCollection<string>)Array.Empty<string>();
-    private IReadOnlyCollection<string> HooksEnabledList =>
-        _settings.HooksEnabledDirs ?? (IReadOnlyCollection<string>)Array.Empty<string>();
 
-    // Record a config dir's chosen hooks state (keyed by real path): clear both override lists, then add an
-    // override only when the choice differs from the provenance default (so a dir left at its default carries
-    // no entry). The primary is never routed here. Does not persist/reconcile on its own; the config-dir Save
-    // path (PersistConfigDirs + an explicit reconcile) does both.
-    private void SetConfigDirHooksState(string realRootKey, ConfigDirProvenance provenance, bool enabled)
+    // Record a config dir's chosen hooks state (keyed by real path): hooks default on, so only "off" carries an
+    // entry. The primary is never routed here. Does not persist/reconcile on its own; the config-dir Save path
+    // (PersistConfigDirs + an explicit reconcile) does both.
+    private void SetConfigDirHooksState(string realRootKey, bool enabled)
     {
         _settings.HooksDisabledDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
             Path.TrimEndingDirectorySeparator(x), realRootKey));
-        _settings.HooksEnabledDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
-            Path.TrimEndingDirectorySeparator(x), realRootKey));
-
-        if (enabled != HookPolicy.DefaultEnabled(provenance))
-        {
-            if (enabled) (_settings.HooksEnabledDirs ??= new()).Add(realRootKey);
-            else (_settings.HooksDisabledDirs ??= new()).Add(realRootKey);
-        }
-
+        if (!enabled) (_settings.HooksDisabledDirs ??= new()).Add(realRootKey);
         if (_settings.HooksDisabledDirs is { Count: 0 }) _settings.HooksDisabledDirs = null;
-        if (_settings.HooksEnabledDirs is { Count: 0 }) _settings.HooksEnabledDirs = null;
     }
 
     private void RemoveConfigDir(ClaudeConfigDir d)
     {
-        // Un-declare it (if it was added) and hide it by real path, so an auto-discovered dir stays gone
-        // across refreshes and a later self-report can't resurrect it. The primary has no Remove button.
-        _settings.DeclaredConfigDirs?.RemoveAll(x => ClaudeConfigDir.SameRoot(x, d.Root));
+        // Un-declare it; the primary has no Remove button. Membership is explicit, so that's all it takes to
+        // drop it from the set.
+        _settings.DeclaredConfigDirs?.RemoveAll(x => ClaudeConfigDir.SameRoot(x, d.Root) || ClaudeConfigDir.SameRoot(x, d.RealRoot));
+        if (_settings.DeclaredConfigDirs is { Count: 0 }) _settings.DeclaredConfigDirs = null;
 
-        var hidden = _settings.HiddenConfigDirs ??= new();
-        if (!hidden.Any(x => ClaudeConfigDir.SameRoot(x, d.RealRoot)))
-            hidden.Add(d.RealRoot);
-
-        // Strip our hooks from the dir we're dropping (once it's hidden it leaves the set, so ReconcileAll
-        // can't reach it) and clear its hooks overrides so a later re-add starts clean.
-        SetConfigDirHooksState(d.RealRoot, d.Provenance, HookPolicy.DefaultEnabled(d.Provenance));
+        // Strip our hooks from the dir we're dropping (once it leaves the set ReconcileAll can't reach it) and
+        // clear its hooks override so a later re-add starts clean.
+        SetConfigDirHooksState(d.RealRoot, enabled: true);
         _ = System.Threading.Tasks.Task.Run(() => Perch.Avalonia.Services.HookInstaller.RemoveFromDir(d));
         PersistConfigDirs();
     }
 
-    // The add/edit transaction: a modal collects the directory (add only), its label, and whether Perch's
-    // hooks are installed there — only Save commits. The primary is always hooked (toggle locked on);
-    // everything else is a real on/off, defaulting on for a directory you add and off for an auto-discovered
-    // one (you can still turn it on — Perch just won't hook a guessed directory silently).
-    private async System.Threading.Tasks.Task AddOrEditConfigDir(ClaudeConfigDir? existing)
+    // The add/edit transaction: a modal collects the directory (add only — prefilled with suggestedPath when
+    // adding a scan suggestion), its label, and whether Perch's hooks
+    // are installed there — only Save commits. The primary is always hooked (toggle locked on); everything
+    // else is a real on/off, defaulting on.
+    private async System.Threading.Tasks.Task AddOrEditConfigDir(ClaudeConfigDir? existing, string? suggestedPath = null)
     {
-        // A new dir becomes a declared dir (default on); an edited dir keeps its provenance.
-        var prov = existing?.Provenance ?? ConfigDirProvenance.Declared;
-        bool hooksEditable = prov != ConfigDirProvenance.Primary;
-        bool hooksEnabled = existing is null
-            ? HookPolicy.DefaultEnabled(prov)
-            : HookPolicy.IsEnabled(prov, existing.RealRoot, HooksDisabledList, HooksEnabledList);
-        string hooksNote = prov switch
-        {
-            ConfigDirProvenance.Primary =>
-                "The primary directory is always hooked — the accept-edits badge, session control and auto-start depend on it.",
-            ConfigDirProvenance.Convention =>
-                "Auto-discovered directories aren't hooked by default. Turn this on to install Perch's hooks (accept-edits badge, session control, auto-start) here.",
-            _ =>
-                "Perch's hooks power the accept-edits badge, session control and auto-start for sessions in this directory.",
-        };
+        bool isPrimary = existing?.Provenance == ConfigDirProvenance.Primary;
+        bool hooksEnabled = existing is null ||
+            HookPolicy.IsEnabled(existing.Provenance, existing.RealRoot, HooksDisabledList);
+        string hooksNote = isPrimary
+            ? "The primary directory is always hooked — the accept-edits badge, session control and auto-start depend on it."
+            : "Perch's hooks power the accept-edits badge, session control and auto-start for sessions in this directory.";
 
         var dlg = new ConfigDirDialog(existing, existing is null ? null : CurrentConfigDirLabel(existing),
-            hooksEnabled, hooksEditable, hooksNote);
+            hooksEnabled, hooksEditable: !isPrimary, hooksNote, suggestedPath);
         if (!await dlg.ShowDialog<bool>(this)) return;
 
         if (existing is null)
@@ -2310,17 +2354,13 @@ internal sealed partial class SettingsWindow : Window
             if (!list.Any(d => ClaudeConfigDir.SameRoot(d, path)))
                 list.Add(path);
 
-            // Adding a dir un-hides it — re-adding one you previously removed brings it back (including a hidden
-            // entry recorded with a stray trailing space, which names the same folder on Windows).
             var real = Path.TrimEndingDirectorySeparator(ClaudeConfigSet.ResolveReal(path));
-            _settings.HiddenConfigDirs?.RemoveAll(x => ClaudeConfigDir.SameRoot(x, real));
-            if (_settings.HiddenConfigDirs is { Count: 0 }) _settings.HiddenConfigDirs = null;
-            SetConfigDirHooksState(real, prov, dlg.HooksEnabled);
+            SetConfigDirHooksState(real, dlg.HooksEnabled);
             SetConfigDirLabel(real, dlg.DirLabel);
         }
         else
         {
-            if (hooksEditable) SetConfigDirHooksState(existing.RealRoot, prov, dlg.HooksEnabled);
+            if (!isPrimary) SetConfigDirHooksState(existing.RealRoot, dlg.HooksEnabled);
             SetConfigDirLabel(existing.RealRoot, dlg.DirLabel);
         }
         PersistConfigDirs();
@@ -2336,9 +2376,9 @@ internal sealed partial class SettingsWindow : Window
         // and this page reflect the change without a restart).
         ClaudeConfigSet.ConfigureFromSettings(
             () => _settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
-            () => _settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
-            () => _settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+            () => _settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>());
         RebuildConfigDirsList();
+        RebuildConfigDirSuggestions();
     }
 
 

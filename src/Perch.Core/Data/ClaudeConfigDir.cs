@@ -50,10 +50,9 @@ internal sealed record ClaudeConfigDir
         : Provenance == ConfigDirProvenance.Primary ? ""
         : Label;
 
-    /// <summary>How this dir earned its place in the set — used for labelling and as the input to the hook
-    /// install policy (see <see cref="ConfigDirProvenance"/>). It carries <b>no</b> "read-only" meaning:
-    /// every config dir is a valid target for a deliberate write (e.g. applying a status line). Automatic
-    /// hook installs have their own separate policy in <c>HookInstaller</c>.</summary>
+    /// <summary>How this dir earned its place in the set — used for labelling and by the hook install policy
+    /// (the primary is always hooked; see <c>HookPolicy</c>). It carries <b>no</b> "read-only" meaning: every
+    /// config dir is a valid target for a deliberate write (e.g. applying a status line).</summary>
     public ConfigDirProvenance Provenance { get; init; } = ConfigDirProvenance.Primary;
 
     public ClaudeConfigDir(string root, string? realRoot = null, string? slug = null)
@@ -111,7 +110,9 @@ internal sealed record ClaudeConfigDir
     public static bool SameRoot(string? a, string? b) =>
         a is not null && b is not null && PathComparer.Equals(RootKey(a), RootKey(b));
 
-    private static string RootKey(string path)
+    /// <summary>The comparison key behind <see cref="SameRoot"/>; hash it with <see cref="PathComparer"/> to
+    /// build a set that matches the same way (e.g. the hidden list, which may hold a trailing-space entry).</summary>
+    public static string RootKey(string path)
     {
         var key = Path.TrimEndingDirectorySeparator(path);
         if (!OperatingSystem.IsWindows()) return key;
@@ -135,9 +136,9 @@ internal sealed record ClaudeConfigDir
 
 /// <summary>
 /// How a <see cref="ClaudeConfigDir"/> entered the set. A labelling/provenance signal — <b>not</b> a
-/// permission: any config dir can be a deliberate write target. It is only the input to the separate
-/// automatic-hook-install policy (<c>HookInstaller</c>), which by default does not wire itself into a dir
-/// found by the convention scan alone.
+/// permission: any config dir can be a deliberate write target. Membership is explicit: the primary plus
+/// the dirs the user added (a scan only ever <i>suggests</i> candidates — see
+/// <see cref="ClaudeConfigDiscovery.Suggest"/>).
 /// </summary>
 internal enum ConfigDirProvenance
 {
@@ -145,8 +146,4 @@ internal enum ConfigDirProvenance
     Primary,
     /// <summary>Explicitly listed by the user in settings.</summary>
     Declared,
-    /// <summary>A running session's hook reported this dir (a <c>.configdir</c> marker was seen).</summary>
-    SelfReported,
-    /// <summary>Matched only by the convention scan (a sibling <c>~/.claude*</c> or a scheme manifest).</summary>
-    Convention,
 }

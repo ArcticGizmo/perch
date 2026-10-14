@@ -639,18 +639,22 @@ public partial class App : Application
                     // mode is no longer "on login" — e.g. the settings file was edited while Perch was shut.
                     SyncLoginItem(settings.StartMode);
 
-                    // Feed the user-declared config dirs into discovery (Layer 1) before wiring hooks, so
-                    // declared dirs enter the set and become hook-install targets this launch.
+                    // Config dirs are explicit-only now: a settings file from before that declares, once, the
+                    // dirs the old auto-discovery showed, so an update drops nothing. Not while pinned — the
+                    // scan is off there, and migrating an empty scan would drop them.
+                    if (!settings.ConfigDirsExplicit && !ClaudeConfigSet.IsPinned
+                        && ConfigDirMigration.Apply(settings, ClaudeConfigSet.Suggestions(asOldDiscovery: true)))
+                        settings.Save();
+
+                    // Feed the user-declared config dirs into the set (Layer 1) before wiring hooks, so
+                    // declared dirs become hook-install targets this launch.
                     ClaudeConfigSet.ConfigureFromSettings(
                         () => settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
-                        () => settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
-                        () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+                        () => settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>());
 
-                    // Which dirs the user turned hooks off / on for (read live on every reconcile).
+                    // Which dirs the user turned hooks off for (read live on every reconcile).
                     HookInstaller.DisabledRealRootsProvider =
                         () => settings.HooksDisabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
-                    HookInstaller.EnabledRealRootsProvider =
-                        () => settings.HooksEnabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
 
                     HookInstaller.Install();
                     await MigrateOffPlugin();

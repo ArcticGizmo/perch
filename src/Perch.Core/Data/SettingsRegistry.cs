@@ -421,15 +421,15 @@ internal static class SettingsRegistry
 
         Info("config-dirs", "Config directories",
             "Extra Claude Code config directories (CLAUDE_CONFIG_DIR roots) Perch watches alongside " +
-            "~/.claude, so sessions and transcripts in each are found and attributed. Rename each dir's " +
-            "label (shown on session rows) or remove ones you don't want.",
+            "~/.claude, so sessions and transcripts in each are found and attributed. Add them yourself, or " +
+            "scan for likely ones; rename each dir's label (shown on session rows) or remove ones you don't want.",
             SettingSurface.Integrations, SettingKind.List,
             ["config", "dir", "directory", "directories", "claude", "org", "multi", "env", "environment",
              "workspace", "CLAUDE_CONFIG_DIR", "declared", "label", "labels", "rename", "name", "display",
-             "chip", "hide", "remove", "suppress", "hook", "hooks"], PreviewTarget.None,
+             "chip", "hide", "remove", "hook", "hooks", "scan", "suggest", "discover", "add"], PreviewTarget.None,
             nameof(AppSettings.DeclaredConfigDirs), nameof(AppSettings.ConfigDirLabels),
             nameof(AppSettings.HiddenConfigDirs), nameof(AppSettings.HooksDisabledDirs),
-            nameof(AppSettings.HooksEnabledDirs)),
+            nameof(AppSettings.HooksEnabledDirs), nameof(AppSettings.ConfigDirsExplicit)),
 
         Info("account-rules", "Account guardrails",
             "Warn when a session runs on the wrong Claude account. Declare that everything under a directory " +

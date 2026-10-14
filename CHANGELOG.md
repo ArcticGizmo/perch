@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Config directories are yours to pick now: Perch no longer adds them on its own, and "Scan for directories" suggests likely ones instead
+- Directories Perch had already found are kept on update, hooks and all, so nothing quietly disappears
+- Removing a config directory removes it (it used to linger if its path had picked up a trailing space)
+
 ---
 
 ## [v0.5.33] - 2026-10-14

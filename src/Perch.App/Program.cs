@@ -210,8 +210,9 @@ internal static class Program
     // OS login registration, and the managed hook block in ~/.claude/settings.json (plus the stable
     // perch-hook copy). Each step is independent and swallowed — a cleanup that can't finish must never
     // leave the caller's uninstall looking failed.
-    // Diagnostic dump of the discovered config-dir set. Wires the declared roots from settings, forces a
-    // refresh, then lists each dir with its provenance and real path (link-resolved). Read-only.
+    // Diagnostic dump of the config-dir set. Wires the declared roots from settings, forces a refresh, then
+    // lists each dir with its provenance and real path (link-resolved), and what a scan would suggest adding.
+    // Read-only.
     private static int DumpConfigDirs()
     {
         AttachParentConsole();
@@ -220,8 +221,7 @@ internal static class Program
             var settings = Perch.Data.AppSettings.Load();
             Perch.Data.ClaudeConfigSet.ConfigureFromSettings(
                 () => settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
-                () => settings.ConfigDirLabels ?? (IReadOnlyList<Perch.Data.ConfigDirLabel>)Array.Empty<Perch.Data.ConfigDirLabel>(),
-                () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+                () => settings.ConfigDirLabels ?? (IReadOnlyList<Perch.Data.ConfigDirLabel>)Array.Empty<Perch.Data.ConfigDirLabel>());
         }
         catch { }
 
@@ -231,6 +231,13 @@ internal static class Program
         {
             var real = dir.Root == dir.RealRoot ? "" : $"  -> {dir.RealRoot}";
             Console.WriteLine($"  [{dir.Provenance,-12}] {dir.Label,-16} {dir.Root}{real}");
+        }
+        var suggestions = Perch.Data.ClaudeConfigSet.Suggestions();
+        if (suggestions.Count > 0)
+        {
+            Console.WriteLine("Suggested (not added):");
+            foreach (var s in suggestions)
+                Console.WriteLine($"  [{s.Source,-17}] {s.Label,-16} {s.Root}");
         }
         return 0;
     }

@@ -809,9 +809,9 @@ internal sealed class SessionMonitor : IDisposable
                 && File.Exists(Path.Combine(owner.SessionsDir, $"{sessionId}.notify"));
 
             // Self-reported config dir (M3/M4). Read whenever the set is multi-dir: it both disambiguates a
-            // SHARED sessions/ (where the folder can't say which dir ran the session) and promotes a
-            // convention-only dir to writable under the safe-write policy (NoteSelfReport). In the common
-            // single-dir case there's nothing to attribute, so the reads are skipped entirely.
+            // SHARED sessions/ (where the folder can't say which dir ran the session) and records a dir that
+            // isn't in the set yet as a scan suggestion (NoteSelfReport). In the common single-dir case
+            // there's nothing to attribute, so the reads are skipped entirely.
             string? reportedConfigDir = null, reportedSlug = null;
             if (!string.IsNullOrEmpty(sessionId) && ClaudeConfigSet.Instance.IsMulti)
             {
@@ -819,7 +819,7 @@ internal sealed class SessionMonitor : IDisposable
                 if (reportedConfigDir is null)
                     reportedSlug = ReadMarker(Path.Combine(owner.SessionsDir, $"{sessionId}.slug"));
 
-                // A self-report is proof the dir is real and Perch-worthy: make it sticky + writable.
+                // A self-report is proof the dir is real: remember it so the scan can suggest adding it.
                 if (reportedConfigDir is not null)
                     ClaudeConfigSet.NoteSelfReport(reportedConfigDir);
             }

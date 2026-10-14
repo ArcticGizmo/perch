@@ -17,6 +17,12 @@ one scheme's directory convention**. This plan keeps that PR's good mechanisms (
 a hook-written self-report sidecar, per-owner writes) and fixes its two weaknesses: **declaration is
 the backbone, not a directory-layout guess**, and **the value model carries no org**.
 
+> **Superseded in part (2026-10): membership is explicit-only.** The convention scan and session self-reports
+> no longer add dirs to the set; the set is the primary plus declared roots. The scan now powers Settings →
+> Config directories → *Scan for directories*, which only suggests (`ClaudeConfigDiscovery.Suggest`). The
+> `Convention`/`SelfReported` provenances, the hidden list and the hooks opt-in list are gone; a one-time
+> `ConfigDirMigration` declared whatever the old discovery showed. See `docs/explicit-config-dirs-testing.md`.
+
 ---
 
 ## Architecture: three decoupled layers
