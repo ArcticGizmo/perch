@@ -9,4 +9,12 @@ namespace Perch.Platform;
 public interface IDoNotDisturb
 {
     bool IsActive { get; }
+
+    /// <summary>Whether this platform can switch Do Not Disturb on and off (<see cref="TrySetActive"/>). Gates
+    /// the overlay header's DND button.</summary>
+    bool CanToggle { get; }
+
+    /// <summary>Turns Do Not Disturb on or off. Best-effort: returns false if the OS refused or the platform
+    /// can't do it, and never throws. May block on a cross-process call, so keep it off the UI thread.</summary>
+    bool TrySetActive(bool active);
 }

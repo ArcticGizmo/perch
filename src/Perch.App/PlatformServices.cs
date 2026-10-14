@@ -61,6 +61,7 @@ internal static class PlatformServices
     public static bool Supports(Perch.Data.PlatformFeature feature) => feature switch
     {
         Perch.Data.PlatformFeature.EdgeReservation => EdgeReservation.IsSupported,
+        Perch.Data.PlatformFeature.DoNotDisturbToggle => DoNotDisturb.CanToggle,
         _ => true,
     };
 

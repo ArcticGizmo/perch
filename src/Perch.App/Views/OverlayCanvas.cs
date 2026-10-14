@@ -1698,7 +1698,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, Todos, FeedHead, FeedMore }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, Todos, FeedHead, FeedMore, Dnd }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -2097,11 +2097,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             double uy = (HeaderHeight - IconBoxH) / 2;
             _updateIconRect = new Rect(ux, uy, IconBoxW, IconBoxH);
             DrawUpdateIcon(ctx, _updateIconRect, _hoveredUpdateIcon);
+            clusterLeft = ux;
         }
         else
         {
             _updateIconRect = default;
         }
+
+        // Do Not Disturb button (opt-in): the cluster's leftmost glyph, so it never shifts the fixed ones.
+        DrawDndButton(ctx, clusterLeft);
     }
 
     // The update badge: a filled perch-orange disc with a white "download" arrow (a down arrow over a
@@ -4126,6 +4130,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
+        bool overDnd = OverDndButton(p);
+        if (overDnd != _hoveredDnd) { _hoveredDnd = overDnd; InvalidateVisual(); }
+
         bool overFooter = ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p);
         if (overFooter != _hoveredFooter) { _hoveredFooter = overFooter; InvalidateVisual(); }
 
@@ -4171,7 +4178,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Clickable only over an account's collapse/expand target — its name (expanded) or its chip (collapsed).
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         Cursor = overResize ? ResizeCursor
-            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
                || overRoost || overRecent || overUsageToggle || overGitHub || overTodos || overFeeds)
             ? HandCursor : Cursor.Default;
@@ -4202,6 +4209,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            OverDndButton(p)                          ? (TipKind.Dnd, -1) :
             ShowFullPanel && _roostRect.Width > 0
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             OverRecentButton(p)                       ? (TipKind.Recent, -1) :
@@ -4255,6 +4263,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
+            case TipKind.Dnd:  ShowDndTooltip();          break;
         }
     }
 
@@ -4292,7 +4301,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
@@ -4303,6 +4312,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
+        _hoveredDnd = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
         _hoveredMediaButton = -1;
@@ -4572,6 +4582,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p))
         {
             UpdateRequested?.Invoke();
+            return;
+        }
+
+        // Do Not Disturb button (header): ask the app to flip the OS state. Shown optimistically straight away;
+        // the app's poll corrects it if the OS didn't follow.
+        if (OverDndButton(p))
+        {
+            SetDndActive(!_dndOn);
+            DndToggleRequested?.Invoke(_dndOn);
             return;
         }
 

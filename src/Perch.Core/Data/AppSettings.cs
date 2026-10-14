@@ -717,6 +717,11 @@ internal sealed class AppSettings
     // spring back open on a new post. A missing key keeps it on.
     public bool CloseFeedInDoNotDisturb { get; set; } = true;
 
+    // Whether the overlay header carries a Do Not Disturb button (right-hand cluster) that shows the OS DND
+    // state and flips it with one click. Windows-only (see IDoNotDisturb.CanToggle). Off by default; a missing
+    // key keeps it off.
+    public bool ShowDndButton { get; set; }
+
     // How many friends the roster shows at once (most-recently-active first); the rest fold into a "+N more"
     // line. Default 3 to keep the region compact in the narrow overlay.
     public int MaxFriendsShown { get; set; } = 3;

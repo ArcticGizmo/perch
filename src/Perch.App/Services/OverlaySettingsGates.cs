@@ -46,6 +46,8 @@ internal static class OverlaySettingsGates
         c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
         c.SetShowArtifacts(s.ShowArtifacts);
         c.SetShowRoostButton(s.ShowRoostButton);
+        // A settings file carried over from Windows mustn't put a dead button on a head that can't toggle DND.
+        c.SetShowDndButton(s.ShowDndButton && PlatformServices.DoNotDisturb.CanToggle);
         c.SetShowMarkdown(s.ShowMarkdown);
         c.SetShowIdeStatusIcons(s.ShowIdeStatusIcons);
         c.SetServiceStatusEnabled(s.ShowServiceStatus);
