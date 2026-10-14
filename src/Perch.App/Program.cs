@@ -74,6 +74,14 @@ internal static class Program
             return Services.StatuslineCli.Run(args);
         }
 
+        // `perch artifact publish <file>` publishes a page as a claude.ai artifact through a background claude session
+        // and prints the link — the bundled skill's way out of a headless session that has no Artifact tool.
+        if (args.Length > 0 && string.Equals(args[0], "artifact", StringComparison.OrdinalIgnoreCase))
+        {
+            AttachParentConsole();
+            return Services.ArtifactCli.Run(args);
+        }
+
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))

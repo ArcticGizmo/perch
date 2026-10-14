@@ -28,9 +28,11 @@ public interface ISessionLauncher
     /// can't drive over stream-json (e.g. <c>auth login</c> / <c>auth logout</c>, whose browser flow needs a
     /// real terminal). Returns true if a terminal was launched; false when none could be found (or the platform
     /// doesn't implement this yet). Best-effort; never throws. <paramref name="configDir"/> as for
-    /// <see cref="Reopen"/> (so <c>auth login</c> signs in the right config dir).
+    /// <see cref="Reopen"/> (so <c>auth login</c> signs in the right config dir). <paramref name="prompt"/>, when set,
+    /// starts the interactive session with that opening prompt — for tools the headless <c>-p</c> sessions Perch drives
+    /// don't get (e.g. publishing an artifact). It must pass <see cref="Perch.Data.ClaudeCli.IsSafePrompt"/>; false otherwise.
     /// </summary>
-    bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null);
+    bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null, string? prompt = null);
 
     /// <summary>
     /// Opens a plain interactive terminal in <paramref name="cwd"/> (no command run) with the user's preferred

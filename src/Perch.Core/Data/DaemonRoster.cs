@@ -36,7 +36,8 @@ public record DaemonWorker(
 /// Reads the daemon supervisor's worker roster (<c>~/.claude/daemon/roster.json</c>), best-effort.
 /// The file is rewritten live by the daemon, so it's opened shared and any parse hiccup yields an
 /// empty list rather than an exception. Workers whose pid is no longer alive are dropped — a killed
-/// daemon leaves the roster behind untouched, and the pid probe is the only tell.
+/// daemon leaves the roster behind untouched, and the pid probe is the only tell. So are Perch's own
+/// artifact-publishing workers (<see cref="PublishLedger"/>), which belong under their session's row.
 /// </summary>
 public static class DaemonRosterReader
 {
@@ -56,7 +57,11 @@ public static class DaemonRosterReader
             using (var reader = new StreamReader(fs))
                 json = reader.ReadToEnd();
 
-            return Parse(json, probe);
+            // A worker Perch started to publish an artifact is shown under the session it's for instead
+            // (PublishLedger), not as a daemon worker the user dispatched.
+            var publishing = PublishLedger.Pending().Select(p => p.ShortId).ToHashSet(StringComparer.Ordinal);
+            var workers = Parse(json, probe);
+            return publishing.Count == 0 ? workers : workers.Where(w => !publishing.Contains(w.ShortId)).ToList();
         }
         catch
         {

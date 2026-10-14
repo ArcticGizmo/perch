@@ -47,7 +47,7 @@ internal sealed record ComposerAction(string Glyph, string Tooltip, Action<Contr
 /// (<see cref="LiveLookup"/>) or controlled by another Perch (<see cref="SessionLock.HeldByOther"/>); the
 /// controller pins the id and writes the lock before the process starts.</para>
 /// </summary>
-internal sealed partial class SessionWindow : Window
+internal sealed partial class SessionWindow : Window, IArtifactPublisher
 {
     private static readonly string[] Modes = ["default", "auto", "plan", "acceptEdits", "bypassPermissions"];
 
@@ -2037,6 +2037,58 @@ internal sealed partial class SessionWindow : Window
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
+    }
+
+    // "Publish as artifact…" on a file reference. The Artifact tool doesn't exist in the headless -p session this
+    // window drives, but does in a background one, so ArtifactPublisher runs the publish in `claude --bg` off the UI
+    // thread and the link comes back here: opened in the browser and copied. Same account as the auth hand-off.
+    private bool _publishing;
+
+    public void PublishArtifact(string absPath)
+    {
+        if (_publishing) { Conv.AddNote("already publishing an artifact — one at a time"); return; }
+        _publishing = true;
+        var configDir = _session is { } s ? s.ConfigDir : LaunchConfigDir(_cwd);
+        var leaf = PathLeaf.Of(absPath);
+        Conv.AddNote($"publishing {leaf} as an artifact in the background…");
+        var cwd = _cwd;
+        var parent = SessionId;
+        Task.Run(() => ArtifactPublisher.PublishAsync(cwd, absPath, configDir, parent)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            _publishing = false;
+            if (_closed) return;
+            var outcome = t.IsCompletedSuccessfully ? t.Result : new ArtifactPublishOutcome(null, t.Exception?.GetBaseException().Message);
+            if (outcome.Artifact is { } a)
+            {
+                Clipboard?.SetTextAsync(a.Url);
+                PlatformServices.UrlOpener.Open(a.Url);
+                Conv.AddNote($"{(a.Updated ? "updated" : "published")} {leaf} as a private artifact — opened and copied: {a.Url}");
+            }
+            else if (outcome.BackgroundId is { } bg)
+                Conv.AddNote($"couldn't publish {leaf}: {outcome.Error} — `claude attach {bg}` shows what happened",
+                    NoteKind.Error);
+            else
+            {
+                Conv.AddNote($"couldn't publish {leaf} in the background ({outcome.Error}) — handing it to a terminal",
+                    NoteKind.Error);
+                PublishInTerminal(absPath, configDir);
+            }
+        }));
+    }
+
+    // The fallback: a fresh interactive claude in a terminal, opened with the publish prompt. When no terminal can take
+    // it either, the prompt goes to the clipboard.
+    private void PublishInTerminal(string absPath, string? configDir)
+    {
+        var prompt = ArtifactPublish.Prompt(_cwd, absPath);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, "", TerminalApp.Auto, configDir, prompt))
+        {
+            Conv.AddNote($"opened a terminal to publish {PathLeaf.Of(absPath)} as an artifact — the link lands there");
+            return;
+        }
+        Clipboard?.SetTextAsync(prompt);
+        Conv.AddNote("couldn't open a terminal to publish it — run claude here and paste the prompt (copied)",
+            NoteKind.Error);
     }
 
     // ── Auto-compaction modal (/autocompact) ──────────────────────────────────────

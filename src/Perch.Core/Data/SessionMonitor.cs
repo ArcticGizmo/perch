@@ -140,6 +140,7 @@ internal sealed class SessionMonitor : IDisposable
     private readonly Dictionary<string, DateTime> _completionSettleAt = new();
 
     private readonly SubAgentReader _subAgents = new();
+    private IReadOnlyList<PendingPublish> _pendingPublishes = [];
     private readonly TranscriptReader _transcripts = new();
     private readonly MarkdownFilesReader _markdown = new();
     private readonly GitStatsService _gitStats = new();
@@ -263,6 +264,9 @@ internal sealed class SessionMonitor : IDisposable
 
         var sessions = new List<ClaudeSession>();
         var now = Clock.Now;
+
+        // Artifact publishes Perch is running on sessions' behalf: read once, attached per session below.
+        _pendingPublishes = PublishLedger.Pending();
 
         // Scan every distinct sessions/ dir in the set, tagging each session with its owning config dir.
         _sessionConfigDir.Clear();
@@ -887,7 +891,14 @@ internal sealed class SessionMonitor : IDisposable
 
             // Web Artifacts published to claude.ai over the session's lifetime. Read from the transcript
             // and cached by mtime, so an unchanged transcript costs a stat, not a parse.
-            var artifacts = _transcripts.GetArtifacts(sessionId, cwd);
+            // Plus any Perch published for it through a background session (PublishLedger), whose result is in that
+            // session's transcript, not this one.
+            var artifacts = PublishLedger.Merge(_transcripts.GetArtifacts(sessionId, cwd), PublishLedger.PublishedFor(sessionId));
+
+            // A publish Perch is running for this session shows as a child row. Added only here, for display, after
+            // the status gates above: it isn't the session's own work, so it mustn't hold Running or fire "done".
+            if (PublishLedger.PendingRowsFor(_pendingPublishes, sessionId) is { Count: > 0 } publishing)
+                subAgents = [.. subAgents, .. publishing];
 
             // The native task checklist Claude works through (TaskCreate/TaskUpdate), reconstructed from
             // the transcript and cached by mtime. Surfaced as a progress count + hover list in the overlay.
