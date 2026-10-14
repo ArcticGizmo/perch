@@ -516,10 +516,11 @@ internal static class StatuslineScript
         }
 
         // account/org for the session's config dir, straight off its .claude.json oauthAccount — a file
-        // read, no subprocess, no Perch. Mirrors Perch.Data.ClaudeJsonReader: honour CLAUDE_CONFIG_DIR
-        // (else ~/.claude), preferring the file INSIDE the dir but falling back to the parent's
-        // ~/.claude.json — the default dir keeps its real login one level up. Signed out / unreadable
-        // yields an all-empty, signed_in:false object so {{^account.signed_in}} and |default still work.
+        // read, no subprocess, no Perch. Mirrors Perch.Data.ClaudeJsonReader: with CLAUDE_CONFIG_DIR set,
+        // Claude reads the file INSIDE that dir; unset, it reads the legacy ~/.claude.json, so that comes
+        // first (an inside ~/.claude/.claude.json can hold a divergent login). Each falls back to the
+        // other. Signed out / unreadable yields an all-empty, signed_in:false object so
+        // {{^account.signed_in}} and |default still work.
         function readSignIn(claudeJsonPath) {
           try {
             if (!existsSync(claudeJsonPath)) return null;
@@ -538,12 +539,12 @@ internal static class StatuslineScript
         function readAccount() {
           const env = (process.env.CLAUDE_CONFIG_DIR || '').trim();
           const dir = env || join(homedir(), '.claude');
-          const inside = readSignIn(join(dir, '.claude.json'));
-          if (inside) return inside;
           const parent = dirname(dir);
-          if (parent && parent !== dir) {
-            const up = readSignIn(join(parent, '.claude.json'));
-            if (up) return up;
+          const inside = join(dir, '.claude.json');
+          const up = parent && parent !== dir ? join(parent, '.claude.json') : null;
+          for (const f of env ? [inside, up] : [up, inside]) {
+            const s = f ? readSignIn(f) : null;
+            if (s) return s;
           }
           return { email: '', org: '', org_uuid: '', signed_in: false, personal: false };
         }

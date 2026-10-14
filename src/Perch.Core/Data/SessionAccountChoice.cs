@@ -38,13 +38,14 @@ internal sealed record AccountChoiceSet(
     public bool ShowSelector => Restricted || Options.Count > 1;
 
     /// <summary>The <c>CLAUDE_CONFIG_DIR</c> to inject for <paramref name="choice"/>, or <c>null</c> to inherit
-    /// Perch's environment. Inherit only when the account is the <see cref="Primary"/> and no guardrail governs
-    /// the folder — that preserves the historical no-injection default (the ambient env already resolves to the
-    /// primary); everything else is pinned explicitly.</summary>
+    /// Perch's environment. The <see cref="Primary"/> always inherits, guardrail or not: the ambient env already
+    /// resolves to it, and pinning the default <c>~/.claude</c> explicitly would move Claude's <c>.claude.json</c>
+    /// lookup off the legacy <c>~/.claude.json</c> onto a second, divergent copy inside the dir (the same reason
+    /// <see cref="TranscriptLocator.ResumeConfigRoot"/> never pins the primary). Every other account is pinned.</summary>
     public string? InjectRootFor(AccountChoice? choice)
     {
         if (choice is null) return null;
-        if (!Restricted && Primary is { } p && ClaudeConfigDir.PathComparer.Equals(choice.Dir.RealRoot, p.Dir.RealRoot))
+        if (Primary is { } p && ClaudeConfigDir.PathComparer.Equals(choice.Dir.RealRoot, p.Dir.RealRoot))
             return null;
         return choice.Dir.Root;
     }

@@ -203,6 +203,50 @@ public class ClaudeJsonReaderTests : IDisposable
     }
 
     [Fact]
+    public void ReadSignIn_DefaultDir_PrefersLegacyParent_OverADivergentInsideCopy()
+    {
+        // The default ~/.claude after a session ran with CLAUDE_CONFIG_DIR=~/.claude spelled out: the inside copy
+        // grew a login of its own, but unpinned sessions still read ~/.claude.json, so that is the live account.
+        var root = Path.Combine(_dir, ".claude");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, ".claude.json"),
+            """{ "oauthAccount": { "organizationUuid": "stale", "organizationName": "Org B" } }""");
+        File.WriteAllText(Path.Combine(_dir, ".claude.json"),
+            """{ "oauthAccount": { "organizationUuid": "u1", "organizationName": "Org A" } }""");
+
+        var s = ClaudeJsonReader.ReadSignIn(new ClaudeConfigDir(root), parentFirst: true);
+
+        Assert.Equal("u1", s.Org!.Uuid);
+    }
+
+    [Fact]
+    public void ReadSignIn_DefaultDir_FallsBackInside_WhenLegacyParentSignedOut()
+    {
+        var root = Path.Combine(_dir, ".claude");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, ".claude.json"),
+            """{ "oauthAccount": { "organizationUuid": "u1", "organizationName": "Org A" } }""");
+        File.WriteAllText(Path.Combine(_dir, ".claude.json"), """{ "numStartups": 3 }""");
+
+        var s = ClaudeJsonReader.ReadSignIn(new ClaudeConfigDir(root), parentFirst: true);
+
+        Assert.Equal("u1", s.Org!.Uuid);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Users\me\.claude", @"C:\Users\me", false, true)]
+    [InlineData(@"C:\Users\me\.claude\", @"C:\Users\me\", false, true)]    // trailing separators
+    [InlineData(@"C:\Users\ME\.CLAUDE", @"C:\Users\me", false, true)]      // case-insensitive on Windows
+    [InlineData(@"C:\Users\me\.claude", @"C:\Users\me", true, false)]      // a pinned Perch passes the pin on
+    [InlineData(@"C:\Users\me\.claude-envs\envs\acme", @"C:\Users\me", false, false)]
+    [InlineData(@"C:\Users\me\.claude-work", @"C:\Users\me", false, false)]
+    public void IsUnpinnedDefault_OnlyTheHomeClaudeDir(string root, string home, bool pinned, bool expected)
+    {
+        if (!OperatingSystem.IsWindows()) return;   // Windows-shaped paths and case rules
+        Assert.Equal(expected, ClaudeJsonReader.IsUnpinnedDefault(root, home, pinned));
+    }
+
+    [Fact]
     public void OrgEquality_IsByUuid_NameIsDisplayOnly()
     {
         // Same uuid, different display name (a rename) => the same org.

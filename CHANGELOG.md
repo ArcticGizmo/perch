@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.35] - 2026-10-14
+
+- Your default account shows the org `/status` shows (it had found a second opinion)
+- Sessions on your default account no longer pin its config directory
+- Statusline account reads the same org as `/status`
+
+---
+
 ## [v0.5.34] - 2026-10-14
 
 - Config directories are only ever ones you added

@@ -43,26 +43,34 @@ internal static class ClaudeJsonReader
 
     /// <summary>Reads the full sign-in snapshot for a config dir, resolving the right <c>.claude.json</c>.</summary>
     /// <remarks>
-    /// Claude Code writes <c>.claude.json</c> <b>inside</b> a <c>CLAUDE_CONFIG_DIR</c>, but the <b>default</b>
-    /// <c>~/.claude</c> keeps the real config at the legacy <c>~/.claude.json</c> in the parent (home) dir
-    /// and may leave an account-less stub inside. So take the inside file when it is signed in, otherwise
-    /// fall back to the parent's file.
+    /// Claude Code reads <c>.claude.json</c> <b>inside</b> a <c>CLAUDE_CONFIG_DIR</c>, but with the variable unset
+    /// (how sessions reach the <b>default</b> <c>~/.claude</c>) it reads the legacy <c>~/.claude.json</c> in the
+    /// parent (home) dir. The inside copy there is usually an account-less stub, but a session launched with
+    /// <c>CLAUDE_CONFIG_DIR=~/.claude</c> spelled out turns it into a full, divergent config with its own login —
+    /// which must not outrank the file unpinned sessions actually use. So the default dir reads the parent's file
+    /// first and every other dir reads its own first, each falling back to the other when it isn't signed in.
     /// </remarks>
-    public static ClaudeSignIn ReadSignIn(ClaudeConfigDir dir)
-    {
-        var inside = ReadSignIn(dir.ClaudeJsonFile);
-        if (inside.State != SignInState.NotSignedIn)
-            return inside;
+    public static ClaudeSignIn ReadSignIn(ClaudeConfigDir dir) =>
+        ReadSignIn(dir, parentFirst: IsUnpinnedDefault(dir.Root, ClaudeConfigSet.Home, ClaudeConfigSet.IsPinned));
 
+    /// <summary><see cref="ReadSignIn(ClaudeConfigDir)"/> with the file order chosen by the caller (test seam).</summary>
+    internal static ClaudeSignIn ReadSignIn(ClaudeConfigDir dir, bool parentFirst)
+    {
         var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(dir.Root));
-        if (!string.IsNullOrEmpty(parent))
-        {
-            var up = ReadSignIn(Path.Combine(parent, ".claude.json"));
-            if (up.State != SignInState.NotSignedIn)
-                return up;
-        }
-        return inside; // None
+        var parentFile = string.IsNullOrEmpty(parent) ? null : Path.Combine(parent, ".claude.json");
+
+        var (first, second) = parentFirst ? (parentFile, dir.ClaudeJsonFile) : (dir.ClaudeJsonFile, parentFile);
+        var a = first is null ? ClaudeSignIn.None : ReadSignIn(first);
+        if (a.State != SignInState.NotSignedIn)
+            return a;
+        return second is null ? ClaudeSignIn.None : ReadSignIn(second);
     }
+
+    /// <summary>Whether <paramref name="root"/> is the default <c>~/.claude</c> reached with <c>CLAUDE_CONFIG_DIR</c>
+    /// unset — the one dir whose sessions read the legacy <c>~/.claude.json</c>. Under a pinned Perch the pin is
+    /// inherited by every session it starts, so even <c>~/.claude</c> then reads its inside file.</summary>
+    internal static bool IsUnpinnedDefault(string root, string home, bool pinned) =>
+        !pinned && !string.IsNullOrEmpty(home) && ClaudeConfigDir.SameRoot(root, Path.Combine(home, ".claude"));
 
     /// <summary>Reads the full sign-in snapshot from a <c>.claude.json</c> path;
     /// <see cref="ClaudeSignIn.None"/> when logged out / unreadable.</summary>
