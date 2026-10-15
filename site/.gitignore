@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.astro/
+
+# Copied in from the repo root by scripts/sync.mjs on every build; the root files are the source of truth.
+src/content/docs/changelog.md
+src/content/docs/privacy.md
+public/install.ps1
+public/favicon.png
+src/assets/logo.png

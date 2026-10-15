@@ -13,6 +13,8 @@ Perch is a **Windows and macOS** menu-bar / system-tray app that watches your ac
 
 Already know you want it? [Skip the details and install it ▼](#Installing)
 
+📖 Full documentation: **[arcticgizmo.github.io/perch](https://arcticgizmo.github.io/perch/)**
+
 ### At a glance
 
 <table>

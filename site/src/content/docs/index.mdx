@@ -1,0 +1,98 @@
+---
+title: Perch
+description: Keep an eye on every Claude Code session from one floating panel.
+template: splash
+hero:
+  tagline: Keep an eye on every Claude Code session from one floating panel, without alt-tabbing through a dozen terminals.
+  image:
+    file: ../../assets/screens/overlay.png
+    alt: The Perch overlay panel listing sessions in different states, with usage bars at the top.
+  actions:
+    - text: Install
+      link: /perch/getting-started/install/
+      icon: right-arrow
+    - text: What's new
+      link: /perch/changelog/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/ArcticGizmo/perch
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import sessionDark from '../../assets/screens/session-window-dark.png';
+import sessionLight from '../../assets/screens/session-window-light.png';
+import roostDark from '../../assets/screens/roost-dark.png';
+import roostLight from '../../assets/screens/roost-light.png';
+import stats from '../../assets/screens/stats.png';
+
+Perch is a **Windows and macOS** tray app that watches your Claude Code sessions and shows what each one is
+doing at a glance. When a session finishes, stops on a permission prompt, or otherwise needs you, you'll know.
+
+## Four states, colour-coded
+
+| State | Meaning |
+| --- | --- |
+| **Running** | Actively working, with the current tool call and a live timer. |
+| **Idle** | Open, but not doing anything. |
+| **Awaiting input** | Stopped on a permission prompt or a question, waiting for you. |
+| **Needs attention** | Finished and waiting to be acknowledged. The panel flashes and a notification fires. |
+
+Click a row to jump to that session's terminal.
+
+## What it does
+
+<CardGrid>
+  <Card title="One panel for every session" icon="list-format">
+    Status dots, the current tool, elapsed time, nested sub-agents and permission-mode badges. Drag it anywhere,
+    shrink it to a slim strip, or dock it to a screen edge.
+  </Card>
+  <Card title="Usage at a glance" icon="seti:graphql">
+    Session (5-hour), weekly and monthly-spend bars per account, coloured by whether you're on pace for the
+    window.
+  </Card>
+  <Card title="Get pinged" icon="information">
+    Desktop toasts, system chimes and optional push to your phone via ntfy, with Quiet mode (and, on
+    Windows, a Do Not Disturb button) for when you'd rather not hear about it.
+  </Card>
+  <Card title="Talk to sessions directly" icon="comment">
+    Start and drive Claude Code sessions in Perch's own window: answer permission prompts, send replies, @-mention
+    files, run slash commands.
+  </Card>
+  <Card title="Stats & history" icon="document">
+    Sessions, active time, tokens and estimated cost by project, branch, tool and model. Read and search any past
+    transcript.
+  </Card>
+  <Card title="Make it yours" icon="pencil">
+    Built-in light and dark themes, a theme designer, a reorderable panel and a searchable settings catalogue with
+    a live preview.
+  </Card>
+</CardGrid>
+
+## A closer look
+
+### The session window
+
+Answer prompts, reply and review tool output without going back to the terminal.
+
+<Image src={sessionDark} alt="A Perch session window with a permission prompt waiting for approval." class="light:sl-hidden" />
+<Image src={sessionLight} alt="A Perch session window with a permission prompt waiting for approval." class="dark:sl-hidden" />
+
+### Roost
+
+Every session side by side in one window, grouped into tabs, with the ones that need you sorted to the top.
+
+<Image src={roostDark} alt="The Roost window showing six sessions in a grid with a status rail on the left." class="light:sl-hidden" />
+<Image src={roostLight} alt="The Roost window showing six sessions in a grid with a status rail on the left." class="dark:sl-hidden" />
+
+### Stats
+
+<Image src={stats} alt="The Perch stats dashboard for today: sessions, active time, tokens, cost and breakdowns." width="560" />
+
+## How it works
+
+Perch reads Claude Code's own files under `~/.claude/` and wires a few hooks into Claude Code's settings for
+you (no plugin to install). Your session contents never leave your machine. The only network calls are update
+checks and the features you turn on. See [Privacy](/perch/privacy/) for the full list.

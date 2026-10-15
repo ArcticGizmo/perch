@@ -13,7 +13,7 @@ name: CI
 # run. Root-level *.md only: fixture .md files under tests/ must still trigger one.
 on:
   pull_request:
-    paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**']
+    paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**', 'site/**']
   workflow_dispatch:
 
 # Read-only: nothing here writes to the repo. Every action is pinned to a commit SHA (the version is in the

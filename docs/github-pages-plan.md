@@ -1,6 +1,9 @@
 # GitHub Pages documentation site — plan
 
-**Status:** plan only; open questions resolved (see the decisions log at the end). Branch `github-pages-site`.
+**Status:** P0 built (site, `pages.yml`, README link) and P5 half-done (`install.ps1` is published on Pages,
+but the docs still point at the raw URL until the content-type check in `docs/github-pages-testing.md` passes).
+Not yet deployed: needs Settings → Pages → Source: GitHub Actions, then a merge to `main`. Branch
+`github-pages-site`.
 
 **Goal:** a public documentation site for Perch at `arcticgizmo.github.io/perch`. It should cover what Perch
 is, how to install it, a tour of every user-facing feature, a full settings reference and the release history.

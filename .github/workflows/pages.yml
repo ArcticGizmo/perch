@@ -1,0 +1,84 @@
+name: Pages
+
+# Builds the documentation site in site/ (Astro Starlight) and deploys it to GitHub Pages at
+# https://arcticgizmo.github.io/perch/. See docs/github-pages-plan.md.
+#
+# The site also publishes copies of root files (CHANGELOG.md, PRIVACY.md, install.ps1, landing-icon.png), made by
+# site/scripts/sync.mjs at build time, so a change to any of them redeploys too.
+#
+# Needs repo Settings -> Pages -> Source: GitHub Actions. The github-pages environment only accepts deploys from
+# main, so workflow_dispatch on another branch builds but can't deploy.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'CHANGELOG.md'
+      - 'PRIVACY.md'
+      - 'install.ps1'
+      - 'landing-icon.png'
+      - '.github/workflows/pages.yml'
+  # A pull request touching the site builds it (no deploy), so a broken page fails on the PR, not on main.
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'CHANGELOG.md'
+      - 'PRIVACY.md'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Every action is pinned to a commit SHA (the version is in the trailing comment); Dependabot proposes bumps.
+permissions:
+  contents: read
+
+# A newer push supersedes a deploy still in progress.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Install
+        run: npm ci --no-fund --no-audit
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
