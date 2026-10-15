@@ -6,6 +6,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using QRCoder;
@@ -34,7 +35,9 @@ public sealed class QrWindow : Window
     private Button? _copyButton;
     private DispatcherTimer? _copiedTimer;
 
-    public QrWindow(string title, string url)
+    // near: the window the QR was asked for from (a session window, the overlay). The card centres on *that*
+    // window's monitor. Without one, CenterScreen picks the primary.
+    public QrWindow(string title, string url, Window? near = null)
     {
         _url = url;
 
@@ -51,6 +54,26 @@ public sealed class QrWindow : Window
         Deactivated += (_, _) => Close();
 
         Content = BuildCard(title, url);
+
+        if (near?.Screens.ScreenFromWindow(near) is { } screen)
+        {
+            // CenterScreen centres on the screen under the window's current Position, so starting it on the
+            // target monitor is normally enough. Opened re-centres if it landed elsewhere anyway. That only
+            // runs once the size is known, so it's the fallback, not the main path (it would visibly jump).
+            Position = screen.WorkingArea.TopLeft;
+            Opened += (_, _) => CentreOn(screen);
+        }
+    }
+
+    private void CentreOn(Screen screen)
+    {
+        double scale = RenderScaling <= 0 ? 1 : RenderScaling;
+        int w = (int)(Bounds.Width * scale), h = (int)(Bounds.Height * scale);
+        var area = screen.WorkingArea;
+        var centre = new PixelPoint(Position.X + w / 2, Position.Y + h / 2);
+        if (area.Contains(centre)) return;   // CenterScreen already put it on the right monitor
+        Position = new PixelPoint(area.X + Math.Max(0, (area.Width - w) / 2),
+                                  area.Y + Math.Max(0, (area.Height - h) / 2));
     }
 
     private Control BuildCard(string title, string url)

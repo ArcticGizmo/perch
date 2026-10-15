@@ -22,12 +22,19 @@
 /// stream from one that has opened the device and gone quiet. Treat it as a detail for the tooltip, not as
 /// the presence test — <see cref="MicSnapshot.InUse"/> is the presence test.</param>
 /// <param name="Since">When this app most recently opened the mic, when the platform records it.</param>
+/// <param name="CallWindow">The native handle of the app's window that was in the foreground when the app was
+/// first seen taking the mic, or 0 when that wasn't observed. This is the "which window is the call" answer an
+/// app with several windows in one process (the Teams hub and its meeting window) can't otherwise give: you
+/// press Join in the meeting window, so it's the one in front at that moment. Handed to
+/// <see cref="IWindowActivator.FocusAppWindowForProcess"/> as its preferred window. See
+/// <see cref="Perch.Data.MicCallWindowTracker"/>.</param>
 public sealed record MicUser(
     string Identity,
     string DisplayName,
     int ProcessId,
     bool IsStreaming,
-    DateTimeOffset? Since);
+    DateTimeOffset? Since,
+    long CallWindow = 0);
 
 /// <summary>
 /// A point-in-time picture of microphone use across the machine. Immutable; the monitor swaps a whole new

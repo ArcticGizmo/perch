@@ -342,10 +342,6 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     /// <summary>A file reference's "View diff" was picked (absolute path). The app opens the git tree on it.</summary>
     public event Action<string>? ViewFileDiffRequested;
 
-    /// <summary>Show a QR code for a URL (title, url) — /remote-control's claude.ai session link. The app owns
-    /// the QR window, so it handles this.</summary>
-    public event Action<string, string>? ShowQrRequested;
-
     /// <summary>The composer toolbar's "…" overflow was clicked (the anchor control) — the app opens a menu to
     /// activate features whose glyph isn't showing yet (remote control, notifications, git history).</summary>
     public event Action<Control>? ComposerOverflowRequested;
@@ -904,7 +900,6 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         session.Conversation.StateChanged += OnStateForAlert;
         session.TitleChanged += RefreshBar;
         session.Ended += OnSessionEnded;
-        session.RemoteControlChanged += OnRemoteControlChanged;   // pop the QR when remote control turns on
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
@@ -932,7 +927,6 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         s.Conversation.StateChanged -= OnStateForAlert;
         s.TitleChanged -= RefreshBar;
         s.Ended -= OnSessionEnded;
-        s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
         s.Conversation.BackgroundTaskChanged -= OnBackgroundTaskChanged;
         s.Woke -= OnSessionWoke;
@@ -2068,8 +2062,10 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     // /remote-control (/rc) → connect this session to the mobile app / claude.ai. Unlike most built-ins this
     // is NOT a stream-json slash command (it isn't advertised); it's the CLI's `remote_control` *control
     // request*, the same one the IDE integrations use (found by protocol spike — docs/session-control-poc.md).
-    // Perch sends it in-process, then the ack's session URL pops a QR (OnRemoteControlChanged). Already on:
-    // just re-show the QR from the stored URL rather than re-enabling.
+    // Perch sends it in-process, and the ack's session URL lands as a thread note (PerchSession.OnRemoteControl).
+    // It's a toggle: a second /rc turns it off. Enabling deliberately doesn't pop the QR. Scanning it is the
+    // rare case, and the link in the note opens the session on any device that's already signed in. The QR
+    // is on demand from the remote-control glyph's menu.
     private void ToggleRemoteControl()
     {
         if (_session is not { IsRunning: true } s)
@@ -2077,18 +2073,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             Conv.AddNote("start or resume the session before enabling remote control", NoteKind.Error);
             return;
         }
-        if (s is { RemoteControlEnabled: true, RemoteControlUrl: { Length: > 0 } url })
-            ShowQrRequested?.Invoke("Remote control", url);
-        else
-            s.RequestRemoteControl(true);
-    }
-
-    // The remote_control ack landed (UI thread): on enable, pop the QR for the claude.ai session link. The
-    // note ("remote control on — <url>") is already in the thread from PerchSession; this adds the QR.
-    private void OnRemoteControlChanged(RemoteControlEvent ev)
-    {
-        if (ev.SessionUrl is { Length: > 0 } url)
-            ShowQrRequested?.Invoke("Remote control", url);
+        s.RequestRemoteControl(!s.RemoteControlEnabled);
     }
 
     // /login, /logout → shell out to `claude auth …` in a terminal: the OAuth flow opens a browser and prompts

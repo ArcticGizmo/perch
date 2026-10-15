@@ -39,6 +39,13 @@ public interface IWindowActivator
     /// Z-order wins, which is the app's most recently used window.
     /// </para>
     /// <para>
+    /// <paramref name="preferredWindow"/>, when non-zero, is a native window handle the caller already
+    /// knows to be the right one (<see cref="MicUser.CallWindow"/>). It wins over both rules above, but only
+    /// while it still exists and still belongs to one of the candidate processes. A handle can outlive its
+    /// window and be reused, so it's never trusted blindly. Platforms that can't target a single window
+    /// ignore it.
+    /// </para>
+    /// <para>
     /// A window sitting on another virtual desktop / Space is a normal case here, not an error: the user is
     /// working elsewhere, which is the whole point of the affordance. Implementations are expected to
     /// activate it anyway and let the OS follow (on Windows, foregrounding such a window switches desktop).
@@ -47,5 +54,5 @@ public interface IWindowActivator
     /// go to — the caller is expected to tell the user rather than leave a click that does nothing.
     /// Best-effort; never throws.
     /// </summary>
-    bool FocusAppWindowForProcess(int pid, string? titleHint = null);
+    bool FocusAppWindowForProcess(int pid, string? titleHint = null, long preferredWindow = 0);
 }

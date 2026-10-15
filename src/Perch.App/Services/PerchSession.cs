@@ -478,8 +478,9 @@ internal sealed class PerchSession : IDisposable
         c.RequestRemoteControl(enabled);
     }
 
-    // The CLI's remote_control ack (UI thread): update state, drop a note, and fan out to the window (which
-    // pops the QR on enable). An error ack surfaces as an error note and leaves state unchanged.
+    // The CLI's remote_control ack (UI thread): update state, drop a note, and fan out to listeners. The QR is
+    // on demand only (the remote-control glyph's menu), so the note says where it is, and that /rc again turns
+    // it off. An error ack surfaces as an error note and leaves state unchanged.
     private void OnRemoteControl(RemoteControlEvent ev)
     {
         if (ev.Error is { Length: > 0 } err)
@@ -490,7 +491,8 @@ internal sealed class PerchSession : IDisposable
         {
             RemoteControlEnabled = true;
             RemoteControlUrl = url;
-            Conversation.AddNote($"remote control on — {url}");
+            Conversation.AddNote(
+                $"remote control on — {url} (QR code: the remote-control icon's menu; /rc again turns it off)");
         }
         else
         {

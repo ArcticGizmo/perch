@@ -461,6 +461,10 @@ internal static class HeadlessRenderer
         RenderDockedColumn(collapsed: true,  HAnchor.Right, Path.Combine(outDir, "overlay_docked_collapsed_1x.png"), 96);
         RenderDockedColumn(collapsed: false, HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_1x.png"), 96);
         RenderDockedColumn(collapsed: true,  HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_collapsed_1x.png"), 96);
+        // Collapsed + attention: the column stays collapsed and the session tiles carry it (chase border on,
+        // needs-you tiles washed + badged). Then a short column, where the tiles overflow into a "+N" tile.
+        RenderDockedColumn(collapsed: true,  HAnchor.Right, Path.Combine(outDir, "overlay_docked_collapsed_attention_1x.png"), 96, attention: true);
+        RenderDockedColumn(collapsed: true,  HAnchor.Right, Path.Combine(outDir, "overlay_docked_collapsed_overflow_1x.png"), 96, heightDip: 330);
         RenderDockedColumn(collapsed: false, HAnchor.Right, Path.Combine(outDir, "overlay_docked_wide_1x.png"), 96, widthDip: 460);
 
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
@@ -1245,7 +1249,8 @@ internal static class HeadlessRenderer
     // Renders a docked column: a canvas put into Docked mode, arranged inside a fixed-height host so the
     // full-height flush column paints (the live window is sized to the work area). collapsed → the narrow
     // status-count strip; otherwise the full 280px panel.
-    private static void RenderDockedColumn(bool collapsed, HAnchor side, string path, double dpi, double? widthDip = null)
+    private static void RenderDockedColumn(bool collapsed, HAnchor side, string path, double dpi, double? widthDip = null,
+        bool attention = false, double heightDip = 900)
     {
         var canvas = new OverlayCanvas();
         canvas.Update(SampleData.Sessions());
@@ -1257,10 +1262,11 @@ internal static class HeadlessRenderer
         if (widthDip is { } wd) canvas.SetDockedWidth(wd);
         canvas.SetOverlayMode(OverlayPresentationMode.Docked);
         if (collapsed) canvas.ToggleDockedCollapsed();
+        if (attention) canvas.TriggerAttention();
 
         var host = new Panel
         {
-            Width = collapsed ? 56 : (widthDip ?? 280), Height = 900, // taller than content, so the bottom toggle tab shows
+            Width = collapsed ? 56 : (widthDip ?? 280), Height = heightDip, // taller than content, so the bottom toggle tab shows
             Background = new SolidColorBrush(Color.FromRgb(18, 18, 24)), // the desktop behind the column
             Children = { canvas },
         };

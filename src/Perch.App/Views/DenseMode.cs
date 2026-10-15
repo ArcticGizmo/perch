@@ -154,9 +154,14 @@ internal sealed class DenseController : IDisposable
         new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top, OffsetY = DenseTopGapDefault };
 
     // Height (DIP) of the closed dense strip: the icon plus one row per non-zero status.
-    public double StripHeightDip()
+    public double StripHeightDip() => StripHeightFor(StatusCounts().Count(c => c.count > 0));
+
+    // The strip's height with every status showing — the most the counts can ever take. The collapsed docked
+    // column starts its session tiles below this, so a status appearing or clearing never shifts them.
+    public double MaxStripHeightDip() => StripHeightFor(StatusCounts().Length);
+
+    private static double StripHeightFor(int visible)
     {
-        int visible = StatusCounts().Count(c => c.count > 0);
         double h = DenseTopPad + DenseIconSize;
         if (visible > 0) h += DenseGap + visible * DenseRowHeight;
         return h + DenseBottomPad;

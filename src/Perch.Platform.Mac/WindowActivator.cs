@@ -73,11 +73,11 @@ public sealed class WindowActivator : IWindowActivator
     // app-level foregrounding brings its most recently used window forward (switching Space if that window
     // lives on another one).
     //
-    // titleHint is ignored: picking a specific window needs per-app AppleScript or the Accessibility API,
-    // which is the same follow-up as the per-tab terminal precision noted in the class remarks. App-level is
-    // the honest best-effort here, and it lands on the right window whenever the call window was the last
-    // one used in that app — which for a call in progress it almost always is.
-    public bool FocusAppWindowForProcess(int pid, string? titleHint = null)
+    // titleHint and preferredWindow are ignored: picking a specific window needs per-app AppleScript or the
+    // Accessibility API, which is the same follow-up as the per-tab terminal precision noted in the class
+    // remarks. App-level is the honest best-effort here, and it lands on the right window whenever the call
+    // window was the last one used in that app. (The Mac mic monitor is a stub, so CallWindow is always 0.)
+    public bool FocusAppWindowForProcess(int pid, string? titleHint = null, long preferredWindow = 0)
     {
         try
         {
