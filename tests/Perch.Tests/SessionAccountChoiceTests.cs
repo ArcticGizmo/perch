@@ -180,4 +180,64 @@ public class SessionAccountChoiceTests
         Assert.Equal(2, set.Options.Count);   // behaves like "no governing rule"
         Assert.Null(set.InjectRootFor(set.Default));   // default primary still inherits
     }
+
+    // ── ResumeAccountChoice: switching an existing session's account ──────────────────────────────────────────────
+
+    [Fact]
+    public void Resume_OffersOnlyDirsThatCanReadTheTranscript()
+    {
+        var acme = SignedIn(@"C:\Users\me\.claude", "acme");
+        var contoso = SignedIn(@"C:\Users\me\.claude-contoso", "contoso");
+        var other = SignedIn(@"C:\Users\me\.claude-other", "other");   // its own projects/
+
+        var set = ResumeAccountChoice.Resolve(@"C:\anywhere", new[] { acme.Dir, contoso.Dir }, current: acme.Dir,
+            new[] { acme, contoso, other }, rules: null);
+
+        Assert.Equal(new[] { acme, contoso }, set.Options);
+        Assert.Equal(acme, set.Current);
+        Assert.True(set.IsCurrent(acme));
+        Assert.True(set.CanSwitch);
+    }
+
+    [Fact]
+    public void Resume_TwoDirsOnTheSameAccount_HaveNothingToSwitchTo()
+    {
+        var a = SignedIn(@"C:\Users\me\.claude", "acme");
+        var b = SignedIn(@"C:\Users\me\.claude-work", "acme");
+
+        var set = ResumeAccountChoice.Resolve(@"C:\anywhere", new[] { a.Dir, b.Dir }, current: b.Dir,
+            new[] { a, b }, rules: null);
+
+        Assert.Single(set.Options);
+        Assert.True(set.IsCurrent(set.Options[0]));   // same account, matched by key not dir
+        Assert.False(set.CanSwitch);
+    }
+
+    [Fact]
+    public void Resume_UnshareableTranscript_HasNothingToSwitchTo()
+    {
+        var acme = SignedIn(@"C:\Users\me\.claude", "acme");
+        var contoso = SignedIn(@"C:\Users\me\.claude-contoso", "contoso");
+
+        Assert.False(ResumeAccountChoice.Resolve(@"C:\anywhere", new[] { contoso.Dir }, contoso.Dir,
+            new[] { acme, contoso }, rules: null).CanSwitch);
+        Assert.Same(ResumeAccountSet.None, ResumeAccountChoice.Resolve(@"C:\anywhere", [], null, new[] { acme }, null));
+    }
+
+    [Fact]
+    public void Resume_GuardrailRestrictsTheSwitch()
+    {
+        if (!Win) return;
+        var acme = SignedIn(@"C:\Users\me\.claude", "acme-uuid");
+        var contoso = SignedIn(@"C:\Users\me\.claude-contoso", "contoso-uuid");
+        var other = SignedIn(@"C:\Users\me\.claude-other", "other-uuid");
+        var rules = new[] { Rule(@"C:\work\acme", "acme-uuid", "contoso-uuid") };
+
+        var set = ResumeAccountChoice.Resolve(@"C:\work\acme\repo", new[] { acme.Dir, contoso.Dir, other.Dir },
+            current: other.Dir, new[] { acme, contoso, other }, rules);
+
+        Assert.Equal(new[] { acme, contoso }, set.Options);   // `other` can read it but isn't allowed here
+        Assert.Equal(other, set.Current);
+        Assert.True(set.CanSwitch);                           // …so moving off it is offered
+    }
 }

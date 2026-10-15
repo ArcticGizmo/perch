@@ -202,6 +202,51 @@ public sealed class ResumeConfigDirTests : IDisposable
     }
 
     [Fact]
+    public void Shared_projects_makes_the_session_resumable_under_every_dir_that_shares_it()
+    {
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        var other = MakeDir("other");   // its own projects/: can't read the transcript
+        ShareProjects(primary, work);
+        var path = SeedTranscript(primary, "s-shared");
+        ClaudeConfigSet.SetForTesting(new[] { primary, work, other });
+
+        Assert.Equal(new[] { primary, work }, TranscriptLocator.ResumableDirs("s-shared", Cwd));
+        Assert.Equal(new[] { primary, work }, TranscriptLocator.ResumableDirs("s-shared", "", path));   // known path
+    }
+
+    [Fact]
+    public void Unshared_projects_resumes_only_under_the_owner()
+    {
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        SeedTranscript(work, "s-own");
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+
+        Assert.Equal(new[] { work }, TranscriptLocator.ResumableDirs("s-own", Cwd));
+        Assert.Empty(TranscriptLocator.ResumableDirs("nope", Cwd));
+    }
+
+    [Fact]
+    public void Switching_accounts_is_remembering_one_so_the_next_resume_uses_it()
+    {
+        // What the account menus do: remember the picked dir, then resume as usual.
+        var primary = MakeDir("primary");
+        var work = MakeDir("work");
+        ShareProjects(primary, work);
+        var path = SeedTranscript(primary, "s-switch");
+        ClaudeConfigSet.SetForTesting(new[] { primary, work });
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-switch", Cwd));
+
+        SessionAccounts.Remember("s-switch", work.Root);
+        Assert.Equal(work.Root, TranscriptLocator.ResumeConfigRoot("s-switch", Cwd));
+        Assert.Equal(work, TranscriptLocator.ResumeDirFor("s-switch", path).Dir);
+
+        SessionAccounts.Remember("s-switch", TranscriptLocator.InjectRoot(primary));   // back to the primary
+        Assert.Null(TranscriptLocator.ResumeConfigRoot("s-switch", Cwd));
+    }
+
+    [Fact]
     public void An_unknown_session_inherits()
     {
         ClaudeConfigSet.SetForTesting(new[] { MakeDir("primary"), MakeDir("work") });

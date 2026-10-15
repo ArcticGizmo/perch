@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.40] - 2026-10-15
+
+- `/resume <id>` jumps straight to that session; other text pre-fills the search
+- `/resume` picker shows every project's sessions on Tab
+- Switch a session's account when config dirs share `projects/` (one conversation, two employers)
+- Footer account chip switches a running session (restarts under the new account)
+
+---
+
 ## [v0.5.39] - 2026-10-15
 
 - Documentation site at arcticgizmo.github.io/perch

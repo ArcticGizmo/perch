@@ -2426,6 +2426,26 @@ internal static class HeadlessRenderer
         CaptureUsage(Theming.SessionPalette.For(dark: true), "session_usage_1x.png", usage);
         CaptureUsage(Theming.SessionPalette.For(dark: false), "session_usage_light_1x.png", usage);
 
+        // The /resume overlay: this project's sessions, one resumable under two accounts (its row carries the account
+        // chip), then the same with every project shown.
+        var resumeNow = DateTime.Now;
+        var resumeRows = new List<Perch.Data.HistoryEntry>
+        {
+            new("11111111-0000-4000-8000-000000000001", "perch", cwd, "", resumeNow.AddMinutes(-40), false, 2_400_000, "Resume account switch"),
+            new("11111111-0000-4000-8000-000000000002", "perch", cwd, "", resumeNow.AddHours(-5), false, 640_000),
+            new("11111111-0000-4000-8000-000000000003", "acme-api", @"C:\work\acme-api", "", resumeNow.AddDays(-1), false, 1_100_000, "Billing webhook retries"),
+        };
+        var acmeAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude"),
+            new Perch.Data.Org("acme") { Name = "Acme Corp" });
+        var personalAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude-personal"),
+            null, "me@example.com");
+        var resumeAccounts = new Dictionary<string, Perch.Data.ResumeAccountSet>
+        {
+            [resumeRows[0].SessionId] = new(new[] { acmeAccount, personalAccount }, acmeAccount),
+        };
+        CaptureResume(Theming.SessionPalette.For(dark: true), "session_resume_1x.png", resumeRows, resumeAccounts, allProjects: false);
+        CaptureResume(Theming.SessionPalette.For(dark: false), "session_resume_all_light_1x.png", resumeRows, resumeAccounts, allProjects: true);
+
         // The sign-in banner above the composer: amber while the process's access token and the account's login are
         // close, red once the access token has lapsed.
         {
@@ -2540,6 +2560,24 @@ internal static class HeadlessRenderer
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, prompt, events);
             w.ShowUsageOverlayForRender(info);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureResume(Theming.SessionPalette palette, string file, IReadOnlyList<Perch.Data.HistoryEntry> rows,
+            IReadOnlyDictionary<string, Perch.Data.ResumeAccountSet> accounts, bool allProjects)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.ShowResumeOverlayForRender(rows, accounts, allProjects);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
