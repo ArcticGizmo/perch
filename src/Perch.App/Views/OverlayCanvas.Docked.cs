@@ -515,7 +515,12 @@ public sealed partial class OverlayCanvas
         OverlayDraw.Panel(ctx, rect, BgFillBrush, null, DockTileRadius);
         if (needsYou) OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(color, 0.15 + 0.25 * pulse), null, DockTileRadius);
         if (hovered) OverlayDraw.Panel(ctx, rect, RowHoverBrush, null, DockTileRadius);
-        OverlayDraw.Panel(ctx, rect, null, OverlayDraw.Pen(OverlayDraw.Brush(color), needsYou ? 2 : 1.5), DockTileRadius);
+        // Running is the normal, nothing-to-do state, so its ring is a quiet hint of green. Only a session
+        // that needs you should pull the eye.
+        var ring = s.Status == SessionStatus.Running
+            ? OverlayDraw.Pen(OverlayDraw.Brush(color, 0.4), 1)
+            : OverlayDraw.Pen(OverlayDraw.Brush(color), needsYou ? 2 : 1.5);
+        OverlayDraw.Panel(ctx, rect, null, ring, DockTileRadius);
 
         string name = s.DisplayName ?? "";
         if (!_dockInitials.TryGetValue(name, out var initials))
