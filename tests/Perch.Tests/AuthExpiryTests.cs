@@ -118,13 +118,13 @@ public class AuthExpiryTests
     public void Banner_UsesTheProcessAccessToken_NotTheAccountsRefreshedOne()
     {
         // A terminal session refreshed the account's token, but this process still holds the one it started with.
-        var process = new AuthExpiry(Now.AddMinutes(12), Now.AddDays(20));
+        var process = new AuthExpiry(Now.AddMinutes(3), Now.AddDays(20));
         var account = new AuthExpiry(Now.AddHours(8), Now.AddDays(20));
 
         var (text, level) = AuthExpiryRules.Banner(process, account, running: true, dormant: false, Now);
 
         Assert.Equal(AuthExpiryLevel.Soon, level);
-        Assert.Contains("expires in 12 min", text);
+        Assert.Contains("expires in 3 min", text);
     }
 
     [Fact]
@@ -135,7 +135,21 @@ public class AuthExpiryTests
         var (text, level) = AuthExpiryRules.Banner(process, AuthExpiry.None, running: true, dormant: false, Now);
 
         Assert.Equal(AuthExpiryLevel.Expired, level);
-        Assert.Contains("Resume", text);
+        Assert.Contains("Restart", text);
+    }
+
+    [Fact]
+    public void OffersRestart_OnlyForTheRunningProcessAccessToken()
+    {
+        var soon = new AuthExpiry(Now.AddMinutes(3), Now.AddDays(20));
+        var lapsed = new AuthExpiry(Now.AddMinutes(-5), Now.AddDays(20));
+        var resting = new AuthExpiry(Now + AuthExpiryRules.SessionAccessSoon + TimeSpan.FromHours(1), Now.AddHours(1));
+
+        Assert.True(AuthExpiryRules.OffersRestart(soon, running: true, Now));
+        Assert.True(AuthExpiryRules.OffersRestart(lapsed, running: true, Now));
+        Assert.False(AuthExpiryRules.OffersRestart(lapsed, running: false, Now));    // dormant/ended: nothing to restart
+        Assert.False(AuthExpiryRules.OffersRestart(resting, running: true, Now));    // only the login is close: /login, not restart
+        Assert.False(AuthExpiryRules.OffersRestart(AuthExpiry.None, running: true, Now));
     }
 
     [Fact]

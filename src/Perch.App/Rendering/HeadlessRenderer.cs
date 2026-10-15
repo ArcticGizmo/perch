@@ -2425,11 +2425,11 @@ internal static class HeadlessRenderer
         {
             var at = DateTime.Now;
             CaptureAuthBanner(Theming.SessionPalette.For(dark: true), "session_auth_soon_1x.png",
-                new Perch.Data.AuthExpiry(at.AddMinutes(18), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
+                new Perch.Data.AuthExpiry(at.AddMinutes(3), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
             CaptureAuthBanner(Theming.SessionPalette.For(dark: true), "session_auth_expired_1x.png",
                 new Perch.Data.AuthExpiry(at.AddMinutes(-40), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddDays(20)));
             CaptureAuthBanner(Theming.SessionPalette.For(dark: false), "session_auth_soon_light_1x.png",
-                new Perch.Data.AuthExpiry(at.AddMinutes(18), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
+                new Perch.Data.AuthExpiry(at.AddMinutes(3), at.AddDays(20)), new Perch.Data.AuthExpiry(at.AddHours(7), at.AddHours(30)));
         }
 
         // The Ctrl+F find bar: a query washing the matching messages/tool cards, the current one outlined.

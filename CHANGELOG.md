@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.37] - 2026-10-15
+
+- Restart session, tucked in a ▾ beside End session
+- Same conversation, fresh process (turning it off and on again, formalised)
+- Restart button on the session's sign-in expiry warning
+- Sign-in warning waits until 5 minutes out, when Claude would refresh
+
+---
+
 ## [v0.5.36] - 2026-10-15
 
 - Optional Do Not Disturb button in the overlay header (a sleeping bell)

@@ -135,7 +135,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private int _autoCompactThreshold = 80;
     private bool _autoCompactArmed = true;
     private readonly ModeGlyph _modeGlyph;
-    private readonly SessionButton _interruptButton, _resumeButton, _endButton, _moreButton;
+    private readonly SessionButton _interruptButton, _resumeButton, _endButton, _endMenuButton, _moreButton;
+    private readonly StackPanel _endGroup;   // End session + its ▾ dropdown, as one split button
 
     // Centre: launcher or thread
     private readonly Panel _center;
@@ -497,8 +498,23 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _resumeButton.Click += () => StartSession();
         // Always present while a session runs: the one way to stop the process. Closing the window merely
         // hides this view, so the two intents can't be confused.
-        _endButton = new SessionButton(_p, "End session", SessionButtonKind.Quiet, compact: true) { IsVisible = false };
+        _endButton = new SessionButton(_p, "End session", SessionButtonKind.Quiet, compact: true);
         _endButton.Click += async () => await ConfirmEndAsync();
+        // Its ▾ half drops down the other ways to stop this process (Restart). The two halves share one outline: the
+        // seam's corners are squared and the ▾ drops its left edge so the border isn't doubled.
+        _endMenuButton = new SessionButton(_p, "▾", SessionButtonKind.Quiet, compact: true)
+        {
+            Padding = new Thickness(7, 6), BorderThickness = new Thickness(0, 1, 1, 1),
+            [ToolTip.TipProperty] = "More ways to stop this session",
+        };
+        _endMenuButton.Click += ShowEndMenu;
+        var endRadius = SessionPalette.ButtonRadius;
+        _endMenuButton.CornerRadius = new CornerRadius(0, endRadius.TopRight, endRadius.BottomRight, 0);
+        _endGroup = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, IsVisible = false,
+            Children = { _endButton, _endMenuButton },
+        };
         _moreButton = new SessionButton(_p, "⋯", SessionButtonKind.Quiet, compact: true);
         _moreButton.Click += ShowMoreMenu;
 
@@ -506,7 +522,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         var barRight = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 10, HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { _statusText, _interruptButton, _resumeButton, _endButton, _moreButton },
+            Children = { _statusText, _interruptButton, _resumeButton, _endGroup, _moreButton },
         };
         var bar = new DockPanel { Children = { barRight, barLeft } };
         barRight[DockPanel.DockProperty] = Dock.Right;
@@ -860,7 +876,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _zoom.Attach(this);
         Content = _zoom;
         // Its readout + level picker sits in the bar, just left of End session.
-        barRight.Children.Insert(barRight.Children.IndexOf(_endButton), new ZoomButton(_p, _zoom));
+        barRight.Children.Insert(barRight.Children.IndexOf(_endGroup), new ZoomButton(_p, _zoom));
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         // Focus changes can turn a pending prompt into a "background" one (or acknowledge it), so re-evaluate.
@@ -893,6 +909,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         session.Woke += OnSessionWoke;
+        session.Restarted += OnSessionRestarted;
         session.ProcessAuthChanged += RefreshAuthBanner;
         StartAuthBannerTimer();
         // A dormant session resumes its own id on the first send, whichever window it's viewed in.
@@ -919,6 +936,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         s.Conversation.Changed -= OnConversationChangedForChanges;
         s.Conversation.BackgroundTaskChanged -= OnBackgroundTaskChanged;
         s.Woke -= OnSessionWoke;
+        s.Restarted -= OnSessionRestarted;
         s.ProcessAuthChanged -= RefreshAuthBanner;
         StopAuthBannerTimer();
         _authBanner.IsVisible = false;
@@ -940,13 +958,17 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         bool running = _session is { IsRunning: true };
         bool dormant = _session is { IsDormant: true };
+        bool restarting = _session is { IsRestarting: true };
         _composer.IsEnabled = running || dormant;
         _composer.PlaceholderText = running ? "Reply, or type / for a command"
             : dormant ? "Reply to pick this session back up"
+            : restarting ? "Restarting the session…"
             : "Session ended — Resume to pick it back up";
         _dormantNote.IsVisible = dormant;
-        // A dormant one can be ended too: it's how a Perch session that isn't running stops coming back.
-        _endButton.IsVisible = running || dormant;
+        // A dormant one can be ended too: it's how a Perch session that isn't running stops coming back. One mid-restart
+        // can be ended as well (that cancels the restart). Only a running process has anything to restart.
+        _endGroup.IsVisible = running || dormant || restarting;
+        SetEndMenuVisible(running);
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
         _thread.CanStopTasks = running || _renderLive;   // a background task's Stop needs the live process
         HideToast();
@@ -1660,7 +1682,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             }
             return;
         }
-        if (_session is not { IsRunning: true } live) return;
+        if (_session is not { } live || !(live.IsRunning || live.IsRestarting)) return;
         bool ok = await ConfirmDialog.ShowAsync(this, "End this session?",
             "Stops the Claude process and closes this window. The conversation stays on disk and can be resumed " +
             "later — from the launcher, the overlay, or `claude --resume`. (Closing the window with × instead just " +
@@ -1670,6 +1692,49 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // whole context and burn tokens). The app owns the PerchSession, so End() finishes the process in the
         // background regardless of this view closing.
         if (ok) { live.EndByUser(); Close(); }
+    }
+
+    // The End session button squares its right corners only while its ▾ half sits beside it.
+    private void SetEndMenuVisible(bool visible)
+    {
+        _endMenuButton.IsVisible = visible;
+        var r = SessionPalette.ButtonRadius;
+        _endButton.CornerRadius = visible ? new CornerRadius(r.TopLeft, 0, 0, r.BottomLeft) : r;
+    }
+
+    private void ShowEndMenu()
+    {
+        var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
+        var restart = new MenuItem { Header = "Restart session", IsEnabled = _session is { IsRunning: true } };
+        restart.Click += async (_, _) => await ConfirmRestartAsync(_endButton);
+        flyout.Items.Add(restart);
+        flyout.ShowAt(_endGroup);
+    }
+
+    /// <summary>Restarts the viewed session's process in place (<see cref="PerchSession.Restart"/>). Asks first only
+    /// when the restart would cut work off — a turn in flight or a background task still running; an idle session
+    /// just restarts, so the sign-in banner's button is one click.</summary>
+    private async System.Threading.Tasks.Task ConfirmRestartAsync(Control anchor)
+    {
+        if (_session is not { IsRunning: true } live) return;
+        var conv = live.Conversation;
+        bool busy = conv.TurnActive || conv.PendingPermission is not null || conv.BackgroundTasks.RunningCount > 0;
+        if (busy && !await ConfirmDialog.ShowAsync(this, "Restart this session?",
+                "Stops the Claude process and starts it again on the same conversation. The turn in progress and any " +
+                "background tasks are stopped.",
+                "Restart", "Keep running", anchor: anchor))
+            return;
+        if (!ReferenceEquals(_session, live) || !live.IsRunning) return;   // it moved on while the dialog was up
+        live.Restart();
+    }
+
+    // A restart began (the process is stopping) or finished (a new one is up, or it failed and the session ended).
+    private void OnSessionRestarted(PerchSession session)
+    {
+        if (!ReferenceEquals(session, _session)) return;
+        ApplyRunState();
+        RefreshBar();
+        if (session.IsRunning && IsActive) _composer.Focus();
     }
 
     private void SendPrompt()
@@ -3907,7 +3972,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // A render-only session has no process, so pose it as a live one.
         _composer.IsEnabled = true;
         _composer.PlaceholderText = "Reply, or type / for a command";
-        _endButton.IsVisible = true;
+        _endGroup.IsVisible = true;
+        SetEndMenuVisible(true);
         _resumeButton.IsVisible = false;
         // The sample cwd isn't a real repo, and the live branch read is async anyway — seed a fixed status so
         // the bar's branch chip is captured. Bump the generation so the in-flight (null) load from ShowThread
