@@ -1698,7 +1698,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, Todos, FeedHead, FeedMore, Dnd }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -3999,14 +3999,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // Docked collapsed: the rows aren't shown, so only the bottom expand button is interactive — skip all
-        // the row/glyph hit-testing (which would otherwise leave stale hover/tooltip artifacts and clickable
-        // dead rows over the empty column).
+        // Docked collapsed: the rows aren't shown. Only the bottom expand button and the session tiles are
+        // interactive, so skip all the row/glyph hit-testing (which would otherwise leave stale hover/tooltip
+        // artifacts and clickable dead rows over the column).
         if (_docked && _dockCollapsed)
         {
             bool overToggle = _dockToggleRect.Contains(p);
             if (overToggle != _hoveredDockToggle) { _hoveredDockToggle = overToggle; InvalidateVisual(); }
-            Cursor = overToggle ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            int tile = HitTestDockTile(p);
+            if (tile != _hoveredDockTile) { _hoveredDockTile = tile; InvalidateVisual(); }
+            Cursor = overToggle || tile >= 0 ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            ArmDwell(tile >= 0 ? TipKind.DockTile : TipKind.None, tile);
             base.OnPointerMoved(e);
             return;
         }
@@ -4223,6 +4226,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             InUsageStrip(p)                           ? (TipKind.Usage, UsageSetIndexAt(p)) :
                                                         (TipKind.None, -1);
 
+        ArmDwell(kind, row);
+    }
+
+    // (Re)arms the dwell timer for a tooltip target, or hides the current tip when the target changed.
+    // A no-op while the cursor stays on the same target.
+    private void ArmDwell(TipKind kind, int row)
+    {
         if (kind == _tipKind && row == _tipRow) return;
         _tipKind = kind;
         _tipRow = row;
@@ -4264,6 +4274,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
             case TipKind.Dnd:  ShowDndTooltip();          break;
+            case TipKind.DockTile: ShowDockTileTooltip(_tipRow); break;
         }
     }
 
@@ -4318,6 +4329,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredMediaButton = -1;
         _hoveredMicLabel = false;
         _hoveredGitHub = false;
+        if (_hoveredDockTile != -1) { _hoveredDockTile = -1; changed = true; }
         if (_hoverResizeEdge != ResizeEdge.None) { _hoverResizeEdge = ResizeEdge.None; changed = true; }
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
@@ -4557,11 +4569,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // expand/collapse). Mirrors the WinForms MouseUp click chain.
     private void RouteClick(Point p)
     {
-        // Docked collapsed: only the bottom toggle handle (or the top icon band) re-expands the column;
-        // nothing else is clickable, since the rows aren't shown.
+        // Docked collapsed: the bottom toggle handle (or the top icon band) re-expands the column, and a
+        // session tile focuses its session (the "+N" overflow tile expands). Nothing else is clickable.
         if (_docked && _dockCollapsed)
         {
             if (_dockToggleRect.Contains(p) || p.Y < HeaderHeight) ToggleDockedCollapsed();
+            else if (HitTestDockTile(p) is var tile && tile >= 0)
+            {
+                if (_dockTiles[tile].Session is { } s) SessionActivated?.Invoke(s);
+                else ToggleDockedCollapsed();
+            }
             return;
         }
 
@@ -5319,12 +5336,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // Docked is deliberately left alone: expanding a collapsed column re-reserves the screen edge and
+        // reflows every maximised window. The collapsed column surfaces the session itself instead, as a
+        // highlighted tile (DrawDockTiles), under the same chase border.
         if (_denseCtl.IsDense) _denseCtl.OpenPopup();
-        else if (_docked)
-        {
-            // Surface the session by expanding the docked column (mirrors expanding a collapsed float).
-            if (_dockCollapsed) { _dockCollapsed = false; UpdateTickTimer(); ApplyDockedGeometry(); }
-        }
+        else if (_docked) { }
         else if (!_expanded && _rows.Count > 0)
         {
             _expanded = true;

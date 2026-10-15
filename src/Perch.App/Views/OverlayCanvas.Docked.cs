@@ -16,8 +16,9 @@ namespace Perch.Avalonia.Views;
 /// (<see cref="OverlayPresentationMode"/>); Ctrl+Shift+W (<see cref="ToggleDockedCollapsed"/>) toggles the
 /// column between a narrow collapsed strip (status counts, reusing the dense-strip art) and the full 280px
 /// panel. Only the side (left/right) is user-configurable for now; the width is fixed and the column spans
-/// the monitor's work area. The richer per-element collapsed rendering is future work — see
-/// docs/reserve-edge-plan.md.
+/// the monitor's work area. The collapsed column also shows a tile per session (<see cref="DrawDockTiles"/>),
+/// which is how it surfaces attention without expanding. The richer per-element collapsed rendering is
+/// future work — see docs/reserve-edge-plan.md.
 /// </summary>
 public sealed partial class OverlayCanvas
 {
@@ -401,7 +402,7 @@ public sealed partial class OverlayCanvas
 
     // ── Painting (collapsed strip; the expanded panel reuses the main Draw path) ──
     // The collapsed docked column: a full-height flush background with the dense strip's status-count art at
-    // the top. (The richer per-element collapsed rendering is future work — see the class remarks.)
+    // the top, then one tile per session in the space below (DrawDockTiles).
     private double DrawDockedStrip(DrawingContext? ctx, double width)
     {
         double h = ctx != null ? Bounds.Height : _denseCtl.StripHeightDip();
@@ -411,10 +412,156 @@ public sealed partial class OverlayCanvas
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, 0); DrawChaseBorder(ctx, pr, ChaseColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, 0);
             _denseCtl.PaintStrip(ctx, width);
+            DrawDockTiles(ctx, width, h);
             DrawDockToggleHandle(ctx, width, h, expanded: false);
             DrawInstanceBorder(ctx, width, h);
         }
         return h;
+    }
+
+    // ── Session tiles (collapsed column) ─────────────────────────────────────────
+    // The collapsed column is full height but only its top holds the status counts, so the rest shows one
+    // tile per session: a rounded square ringed in the session's status colour, carrying a two-letter
+    // monogram (SessionInitials). Sessions that need you sort first, take a status-coloured wash and wear a
+    // corner badge (↩ done, ? input, ! api error). This is how a collapsed column surfaces attention:
+    // TriggerAttention no longer expands it, since that re-reserves the edge and reflows every maximised
+    // window. The wash breathes while the chase border runs (its timer drives the repaints) and holds steady
+    // afterwards, so it needs no timer of its own. Click focuses the session, and hovering names it.
+    // When there are more sessions than fit, the last slot becomes a "+N" tile that expands the column.
+    private const double DockTileSize = 36, DockTilePitch = 44, DockTileRadius = 9;
+    private const double DockToggleR = 16, DockToggleBottomPad = 12;
+
+    // Captured at paint for hit-testing and the tooltip. Session is null for the "+N" overflow tile, and
+    // Hidden is how many sessions it stands for.
+    private readonly List<(Rect Rect, ClaudeSession? Session, int Hidden)> _dockTiles = [];
+    private int _hoveredDockTile = -1;
+
+    // Display name → monogram, so the paint path doesn't rebuild the same short strings every frame.
+    private readonly Dictionary<string, string> _dockInitials = new(StringComparer.Ordinal);
+
+    private static bool NeedsYou(ClaudeSession s) =>
+        s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError;
+
+    private static Color StatusColorOf(ClaudeSession s) => s.Status switch
+    {
+        SessionStatus.Running        => RunningColor,
+        SessionStatus.NeedsAttention => AttentionColor,
+        SessionStatus.AwaitingInput  => AwaitingColor,
+        SessionStatus.ApiError       => ApiErrorColor,
+        _                            => IdleColor,
+    };
+
+    private void DrawDockTiles(DrawingContext ctx, double width, double h)
+    {
+        _dockTiles.Clear();
+
+        // Between the status counts (plus a hairline separator) and the expand handle at the bottom.
+        double top = _denseCtl.StripHeightDip() + 10;
+        double bottom = h - 2 * DockToggleR - DockToggleBottomPad - 12;
+        int capacity = (int)Math.Floor((bottom - top) / DockTilePitch);
+        if (capacity <= 0 || _countedSessions.Count == 0) return;
+
+        ctx.DrawLine(BorderPen, new Point(10, top - 5), new Point(width - 10, top - 5));
+
+        var ordered = _countedSessions
+            .OrderBy(s => NeedsYou(s) ? 0 : s.Status == SessionStatus.Running ? 1 : 2)
+            .ThenBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        int shown = ordered.Count <= capacity ? ordered.Count : capacity - 1;
+
+        double cx = width / 2;
+        double y = top;
+        double pulse = _attentionFlash ? Pulse.Intensity() : 0.5;
+        for (int i = 0; i < shown; i++, y += DockTilePitch)
+        {
+            var s = ordered[i];
+            var rect = new Rect(cx - DockTileSize / 2, y, DockTileSize, DockTileSize);
+            _dockTiles.Add((rect, s, 0));
+            DrawDockTile(ctx, rect, s, hovered: _hoveredDockTile == _dockTiles.Count - 1, pulse);
+        }
+
+        if (shown < ordered.Count)
+        {
+            int hidden = ordered.Count - shown;
+            var rect = new Rect(cx - DockTileSize / 2, y, DockTileSize, DockTileSize);
+            _dockTiles.Add((rect, null, hidden));
+            bool hovered = _hoveredDockTile == _dockTiles.Count - 1;
+            OverlayDraw.Panel(ctx, rect, hovered ? RowHoverBrush : BgFillBrush, BorderPen, DockTileRadius);
+            var more = OverlayDraw.Text($"+{hidden}", 12, MutedBrush, FontWeight.Bold);
+            OverlayDraw.TextLeftMid(ctx, more, rect.Center.X - more.Width / 2, rect.Center.Y);
+        }
+    }
+
+    private void DrawDockTile(DrawingContext ctx, Rect rect, ClaudeSession s, bool hovered, double pulse)
+    {
+        var color = StatusColorOf(s);
+        bool needsYou = NeedsYou(s);
+
+        OverlayDraw.Panel(ctx, rect, BgFillBrush, null, DockTileRadius);
+        if (needsYou) OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(color, 0.15 + 0.25 * pulse), null, DockTileRadius);
+        if (hovered) OverlayDraw.Panel(ctx, rect, RowHoverBrush, null, DockTileRadius);
+        OverlayDraw.Panel(ctx, rect, null, OverlayDraw.Pen(OverlayDraw.Brush(color), needsYou ? 2 : 1.5), DockTileRadius);
+
+        string name = s.DisplayName ?? "";
+        if (!_dockInitials.TryGetValue(name, out var initials))
+            _dockInitials[name] = initials = SessionInitials.For(name);
+        var label = OverlayDraw.Text(initials, 12,
+            s.Status == SessionStatus.Idle ? MutedBrush : FgBrush, FontWeight.Bold);
+        OverlayDraw.TextLeftMid(ctx, label, rect.Center.X - label.Width / 2, rect.Center.Y);
+
+        string? badge = s.Status switch
+        {
+            SessionStatus.NeedsAttention => "↩",
+            SessionStatus.AwaitingInput  => "?",
+            SessionStatus.ApiError       => "!",
+            _                            => null,
+        };
+        if (badge is null) return;
+        const double br = 7;
+        var c = new Point(rect.Right - 2, rect.Top + 2);
+        var colorBrush = OverlayDraw.Brush(color);
+        ctx.DrawEllipse(BgFillBrush, OverlayDraw.Pen(colorBrush, 1.5), c, br, br);
+        var glyph = OverlayDraw.Text(badge, 9, colorBrush, FontWeight.Bold);
+        OverlayDraw.TextLeftMid(ctx, glyph, c.X - glyph.Width / 2, c.Y);
+    }
+
+    private int HitTestDockTile(Point p)
+    {
+        for (int i = 0; i < _dockTiles.Count; i++)
+            if (_dockTiles[i].Rect.Contains(p)) return i;
+        return -1;
+    }
+
+    // Names the hovered tile's session and its status, opening toward the screen rather than off its edge.
+    private void ShowDockTileTooltip(int index)
+    {
+        if (index < 0 || index >= _dockTiles.Count) return;
+        var (rect, s, hidden) = _dockTiles[index];
+        var lines = new List<OverlayTooltip.Line>();
+        if (s is null)
+        {
+            lines.Add(new($"{hidden} more session{(hidden == 1 ? "" : "s")}", OverlayTooltip.FgColor, true));
+            lines.Add(new("Click to expand", OverlayTooltip.MutedColor, false));
+        }
+        else
+        {
+            string status = s.Status switch
+            {
+                SessionStatus.Running        => "running",
+                SessionStatus.NeedsAttention => "done, your turn",
+                SessionStatus.AwaitingInput  => "waiting on your input",
+                SessionStatus.ApiError       => s.ApiFailure is { Status: > 0 } f ? $"api error {f.Status}" : "api error",
+                _                            => "idle",
+            };
+            lines.Add(new(s.DisplayName ?? "", OverlayTooltip.FgColor, true));
+            lines.Add(new(status, s.Status == SessionStatus.Idle ? OverlayTooltip.MutedColor : StatusColorOf(s), false));
+            lines.Add(new("Click to focus", OverlayTooltip.MutedColor, false));
+        }
+
+        if (_dockSide == HAnchor.Left)
+            Tooltip().ShowLines(lines, ToScreen(Bounds.Width + 6, rect.Top));
+        else
+            Tooltip().ShowLines(lines, ToScreen(0, rect.Top), placeLeft: true);
     }
 
     // The bottom toggle handle — a round button centred at the bottom of the column, above the taskbar. It
@@ -424,9 +571,9 @@ public sealed partial class OverlayCanvas
     // collapsed strip a big, obvious click target. Drawn in both states from DrawDockedStrip / the Draw path.
     internal void DrawDockToggleHandle(DrawingContext ctx, double width, double h, bool expanded)
     {
-        const double r = 16;
+        const double r = DockToggleR;
         double cx = width / 2;
-        double cy = h - r - 12;
+        double cy = h - r - DockToggleBottomPad;
         _dockToggleRect = new Rect(cx - r - 4, cy - r - 4, 2 * r + 8, 2 * r + 8); // a little padding for easy clicking
 
         ctx.DrawEllipse(BgFillBrush, BorderPen, new Point(cx, cy), r, r);
