@@ -20,21 +20,44 @@ public class DrawWordsTests
         Assert.Contains(o.Easy, DrawWords.Words(DrawDifficulty.Easy));
         Assert.Contains(o.Medium, DrawWords.Words(DrawDifficulty.Medium));
         Assert.Contains(o.Hard, DrawWords.Words(DrawDifficulty.Hard));
+        Assert.Contains(o.ExtraHard, DrawWords.Words(DrawDifficulty.ExtraHard));
         Assert.Equal(o.Easy, o.For(DrawDifficulty.Easy));
         Assert.Equal(o.Hard, o.For(DrawDifficulty.Hard));
+        Assert.Equal(o.ExtraHard, o.For(DrawDifficulty.ExtraHard));
     }
 
     [Fact]
-    public void EveryWordIsNonEmpty()
+    public void TiersCoverEveryDifficultyInChipOrder() =>
+        Assert.Equal(Enum.GetValues<DrawDifficulty>(), DrawWords.Tiers);
+
+    [Fact]
+    public void EveryTierHasAHealthyBank()
     {
-        foreach (var d in new[] { DrawDifficulty.Easy, DrawDifficulty.Medium, DrawDifficulty.Hard })
-            Assert.All(DrawWords.Words(d), w => Assert.False(string.IsNullOrWhiteSpace(w)));
+        foreach (var d in DrawWords.Tiers)
+            Assert.True(DrawWords.Words(d).Count >= 80, $"{d} has only {DrawWords.Words(d).Count} words");
+    }
+
+    [Fact]
+    public void EveryWordIsLowercaseLettersAndSingleSpaces()
+    {
+        // Keeps the letter hint honest and the guess match unambiguous (no punctuation the guesser can't see).
+        foreach (var d in DrawWords.Tiers)
+            Assert.All(DrawWords.Words(d), w => Assert.Matches("^[a-z]+( [a-z]+)*$", w));
+    }
+
+    [Fact]
+    public void NoWordAppearsTwiceAcrossTheBank()
+    {
+        // Compared normalised, so "yo yo" and "yoyo" would also count as a clash.
+        var dupes = DrawWords.Tiers.SelectMany(DrawWords.Words)
+            .GroupBy(DrawGuessing.Normalize).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        Assert.Empty(dupes);
     }
 
     [Fact]
     public void EveryWordAndItsHintFitTheServersLengthLimit()
     {
-        foreach (var d in new[] { DrawDifficulty.Easy, DrawDifficulty.Medium, DrawDifficulty.Hard })
+        foreach (var d in DrawWords.Tiers)
             Assert.All(DrawWords.Words(d), w =>
             {
                 Assert.InRange(w.Length, 1, DrawWords.MaxWordLength);
@@ -82,7 +105,17 @@ public class DrawScoringTests
     [InlineData(DrawDifficulty.Easy, 10)]
     [InlineData(DrawDifficulty.Medium, 20)]
     [InlineData(DrawDifficulty.Hard, 30)]
+    [InlineData(DrawDifficulty.ExtraHard, 40)]
     public void BaseByDifficulty(DrawDifficulty d, int expected) => Assert.Equal(expected, DrawScoring.Base(d));
+
+    [Fact]
+    public void ExtraHardFirstGuessEarns40AndDrawer27()
+    {
+        var (guesser, drawer) = DrawScoring.Points(DrawDifficulty.ExtraHard, attempts: 1);
+        Assert.Equal(40, guesser);
+        Assert.Equal(27, drawer);
+        Assert.Equal(20, DrawScoring.Points(DrawDifficulty.ExtraHard, 100).Guesser);
+    }
 
     [Fact]
     public void FirstGuessEarnsFullBaseAndDrawerTwoThirds()

@@ -19,8 +19,8 @@ secret.
 4. On solve/give-up the **roles swap** and the ex-guesser draws the next round. The game runs indefinitely
    until someone abandons it.
 
-**Scoring** (Draw Something-style): base by difficulty (Easy 10 / Med 20 / Hard 30); the guesser earns the base
-minus 2 per extra guess (floored at half base); the drawer earns ⅔ base (7/13/20) when guessed. Running total
+**Scoring** (Draw Something-style): base by difficulty (Easy 10 / Med 20 / Hard 30 / Extra hard 40); the guesser earns the base
+minus 2 per extra guess (floored at half base); the drawer earns ⅔ base (7/13/20/27) when guessed. Running total
 per player. **Online-only** — a bot can neither draw nor guess a freehand sketch, so there's no vs-computer mode.
 
 **Word secrecy is deliberately NOT enforced** (user's call — "it's for fun"). The word rides as a plain,
@@ -35,7 +35,7 @@ is a `Connect4Disc`), so Draw is a **parallel stack** mirroring the Connect 4 bl
 `docs/connect4-plan.md`), not a reuse of its types.
 
 ### Pure engine (`src/Perch.Core/Games/`, net10.0, no Avalonia/IO)
-- `DrawWords.cs` — `DrawDifficulty` enum + three curated word banks + `OfferWords(seed|Random)` → one word per
+- `DrawWords.cs` — `DrawDifficulty` enum + four curated word banks (Extra hard added 2026-10-15, migration `20261015120000_draw_extra_hard.sql`) + `OfferWords(seed|Random)` → one word per
   tier. The word travels with the round, so the bank is never mirrored server-side.
 - `DrawGuessing.cs` — `Normalize` (lower + strip non-alphanumeric), `IsCorrect`, `LetterHint` (per-token counts,
   e.g. "ice cream" → "3 5"). `Normalize` is mirrored in the `submit_draw_guess` SQL.

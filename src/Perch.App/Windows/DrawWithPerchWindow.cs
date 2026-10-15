@@ -276,7 +276,7 @@ internal sealed class DrawBoard : Control
     private DispatcherTimer? _timer;
 
     // Hit-rects, laid out per screen.
-    private readonly Rect[] _wordChips = new Rect[3];
+    private readonly Rect[] _wordChips = new Rect[4];
     private readonly Rect[] _swatches = new Rect[12];
     private readonly Rect[] _sizes = new Rect[3];
     private Rect _eraserBtn, _undoBtn, _clearBtn, _submitBtn, _guessBtn, _giveUpBtn, _guessField, _nextBtn, _topRightBtn, _nudgeBtn;
@@ -519,7 +519,7 @@ internal sealed class DrawBoard : Control
         switch (_screen)
         {
             case Screen.WordPick:
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < _wordChips.Length; i++)
                     if (_wordChips[i].Contains(p)) { ChooseWord((DrawDifficulty)i); e.Handled = true; return; }
                 break;
 
@@ -687,8 +687,8 @@ internal sealed class DrawBoard : Control
             case Screen.WordPick:
             {
                 const double w = 360, h = 64, gap = 16;
-                double x = (BoardW - w) / 2, y = 190;
-                for (int i = 0; i < 3; i++) { _wordChips[i] = new Rect(x, y, w, h); y += h + gap; }
+                double x = (BoardW - w) / 2, y = 170;
+                for (int i = 0; i < _wordChips.Length; i++) { _wordChips[i] = new Rect(x, y, w, h); y += h + gap; }
                 break;
             }
             case Screen.Draw:
@@ -800,14 +800,14 @@ internal sealed class DrawBoard : Control
 
     private void DrawWordPick(DrawingContext ctx)
     {
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < _wordChips.Length; i++)
         {
             var d = (DrawDifficulty)i;
             var chip = _wordChips[i];
             var accent = DifficultyBrush(d);
             OverlayDraw.Panel(ctx, chip, Palette.ButtonBgBrush, new Pen(accent, 2), 14);
 
-            var tier = OverlayDraw.Text(d.ToString().ToUpperInvariant(), 12, accent, FontWeight.Bold);
+            var tier = OverlayDraw.Text(d.Label().ToUpperInvariant(), 12, accent, FontWeight.Bold);
             ctx.DrawText(tier, new Point(chip.X + 18, chip.Y + 12));
 
             var word = OverlayDraw.Text(_offer.For(d), 22, Palette.FgBrush, FontWeight.SemiBold);
@@ -1037,14 +1037,15 @@ internal sealed class DrawBoard : Control
     {
         DrawDifficulty.Easy => Palette.RunningBrush,
         DrawDifficulty.Medium => Palette.AwaitingBrush,
-        _ => Palette.ErrorBrush,
+        DrawDifficulty.Hard => Palette.ErrorBrush,
+        _ => Palette.SubAgentBrush,
     };
 
     // ── Headless snapshot poses (timers don't tick under the render harness) ──
     internal void SnapshotWordPick(Guid meId, Profile opponent)
     {
         EnterCompose(meId, opponent);
-        _offer = new DrawWords.Offer("cat", "ice cream", "gravity");
+        _offer = new DrawWords.Offer("cat", "ice cream", "gravity", "impostor syndrome");
         _screen = Screen.WordPick;
         LayoutScreen();
     }

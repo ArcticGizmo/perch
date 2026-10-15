@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.39] - 2026-10-15
+
+- Documentation site at arcticgizmo.github.io/perch
+- First-run walkthrough of the Quick Start, plus a page per feature
+- README leads with alerts (the thing Perch is actually for)
+
+---
+
 ## [v0.5.38] - 2026-10-15
 
 - Mic button jumps to the meeting, not the Teams window you last touched
