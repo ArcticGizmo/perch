@@ -5,11 +5,14 @@ column. Expanding re-reserved the screen edge and reflowed every maximised windo
 below the status counts now shows **one tile per session**:
 
 - a rounded square ringed in the status colour, with a two-letter monogram of the project name;
-- sessions that need you (done / input / api error) sort to the top, get a status-coloured wash and a corner
-  badge: `↩` done, `?` input, `!` api error;
+- tiles keep the **expanded panel's order** (interactive, then background, each by name) and **never move
+  because a status changed**. A tile only shifts when a session starts or ends;
+- sessions that need you get a status-coloured wash and a corner badge, **in place**: `↩` done, `?` input,
+  `!` api error;
 - the wash **breathes while the attention chase border runs** (~10s), then holds steady until handled;
 - **click** a tile to focus that session, and **hover** for its full name + status;
-- when they don't all fit, the last slot is a **"+N"** tile, and clicking it expands the column.
+- when they don't all fit, the last slot is a **"+N"** tile, and clicking it expands the column. If a hidden
+  session needs you, the "+N" tile takes its wash and ring, and its tooltip names it.
 
 Floating mode and dense mode are unchanged: they still pop open on attention.
 
@@ -46,13 +49,15 @@ Create a file called scratch-test.txt containing "hello", then stop.
 
 | # | Steps | Before (main) | After |
 | --- | --- | --- | --- |
-| 1 | Column collapsed, maximised window beside it. Send the "done" prompt and switch away. | The column **expands** to the full panel. The maximised window **shrinks/reflows**. | The column **stays collapsed** and nothing reflows. The session's tile jumps to the top with an orange wash + `↩` badge, breathing under the chase border. |
+| 1 | Column collapsed, maximised window beside it. Note where each tile sits. Send the "done" prompt and switch away. | The column **expands** to the full panel. The maximised window **shrinks/reflows**. | The column **stays collapsed** and nothing reflows. The session's tile **stays in its slot** and gets an orange wash + `↩` badge, breathing under the chase border. No other tile moves. |
 | 2 | Wait ~10s after 1. | The chase stops, and the panel stays expanded. | The chase stops. The tile keeps a **steady** wash + badge until you handle it. |
 | 3 | Click the highlighted tile. | (n/a) | Focuses that session's terminal / Perch window. |
 | 4 | Hover a tile for ~1s. | (n/a) | A tooltip opens **toward the screen** (left of a right-docked column, right of a left-docked one) with the name, status and "Click to focus". |
-| 5 | Run the permission prompt and leave it waiting. | Expands. | Tile at the top, yellow wash, `?` badge. |
+| 5 | Run the permission prompt and leave it waiting. | Expands. | Same slot, yellow wash, `?` badge. |
 | 6 | Open enough sessions that they can't all fit (or use a short screen). | (n/a) | The last slot reads `+N`. Hover says "N more sessions". Clicking it expands the column. |
-| 7 | Handle the session (reply / approve). | Panel stays open. | Its tile drops back down (green while running, grey once idle). |
+| 6b | As 6, and make a session that's past the cut need you (its name sorts late). | (n/a) | The `+N` tile takes that session's wash + ring, and its tooltip lists "<name>: needs you". |
+| 7 | Handle the session (reply / approve). | Panel stays open. | The wash + badge clear, and the tile stays put (green while running, grey once idle). |
+| 7b | Start a new session, then end one. | (n/a) | Tiles shift only now, to make room / close the gap, in name order. The expanded panel's rows move the same way. |
 | 8 | Repeat 1 with the column **expanded**. | Chase border on the panel. | Same: the expanded behaviour is unchanged. |
 | 9 | Repeat 1 in **Floating** mode, collapsed. | The panel expands. | The panel expands (unchanged). |
 | 10 | Windows "Show animations" **off** (reduce motion), then repeat 1. | (n/a) | The tile wash is steady from the start (no breathing). |

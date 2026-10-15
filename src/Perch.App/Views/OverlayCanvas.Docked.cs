@@ -422,12 +422,13 @@ public sealed partial class OverlayCanvas
     // ── Session tiles (collapsed column) ─────────────────────────────────────────
     // The collapsed column is full height but only its top holds the status counts, so the rest shows one
     // tile per session: a rounded square ringed in the session's status colour, carrying a two-letter
-    // monogram (SessionInitials). Sessions that need you sort first, take a status-coloured wash and wear a
-    // corner badge (↩ done, ? input, ! api error). This is how a collapsed column surfaces attention:
+    // monogram (SessionInitials). Tiles keep the panel's order and never re-sort on a status change. Sessions
+    // that need you take a status-coloured wash and wear a corner badge (↩ done, ? input, ! api error). This is how a collapsed column surfaces attention:
     // TriggerAttention no longer expands it, since that re-reserves the edge and reflows every maximised
     // window. The wash breathes while the chase border runs (its timer drives the repaints) and holds steady
     // afterwards, so it needs no timer of its own. Click focuses the session, and hovering names it.
-    // When there are more sessions than fit, the last slot becomes a "+N" tile that expands the column.
+    // When there are more sessions than fit, the last slot becomes a "+N" tile that expands the column. It
+    // takes the wash of any hidden session that needs you.
     private const double DockTileSize = 36, DockTilePitch = 44, DockTileRadius = 9;
     private const double DockToggleR = 16, DockToggleBottomPad = 12;
 
@@ -438,6 +439,14 @@ public sealed partial class OverlayCanvas
 
     // Display name → monogram, so the paint path doesn't rebuild the same short strings every frame.
     private readonly Dictionary<string, string> _dockInitials = new(StringComparer.Ordinal);
+
+    // The expanded panel's order (interactive sessions, then background ones, each by name), not by status.
+    // A tile only moves when a session starts or ends, never because its status changed, so you can learn
+    // where each project sits.
+    private List<ClaudeSession> DockTileOrder() => _countedSessions
+        .OrderBy(s => s.IsBackground)
+        .ThenBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     private static bool NeedsYou(ClaudeSession s) =>
         s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError;
@@ -463,10 +472,7 @@ public sealed partial class OverlayCanvas
 
         ctx.DrawLine(BorderPen, new Point(10, top - 5), new Point(width - 10, top - 5));
 
-        var ordered = _countedSessions
-            .OrderBy(s => NeedsYou(s) ? 0 : s.Status == SessionStatus.Running ? 1 : 2)
-            .ThenBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var ordered = DockTileOrder();
         int shown = ordered.Count <= capacity ? ordered.Count : capacity - 1;
 
         double cx = width / 2;
@@ -486,8 +492,17 @@ public sealed partial class OverlayCanvas
             var rect = new Rect(cx - DockTileSize / 2, y, DockTileSize, DockTileSize);
             _dockTiles.Add((rect, null, hidden));
             bool hovered = _hoveredDockTile == _dockTiles.Count - 1;
-            OverlayDraw.Panel(ctx, rect, hovered ? RowHoverBrush : BgFillBrush, BorderPen, DockTileRadius);
-            var more = OverlayDraw.Text($"+{hidden}", 12, MutedBrush, FontWeight.Bold);
+
+            // With a fixed order, a session that needs you can sit past the cut. The "+N" tile then takes its
+            // wash and ring, so the attention is never hidden.
+            var waiting = ordered.Skip(shown).FirstOrDefault(NeedsYou);
+            OverlayDraw.Panel(ctx, rect, BgFillBrush, null, DockTileRadius);
+            if (waiting is not null)
+                OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(StatusColorOf(waiting), 0.15 + 0.25 * pulse), null, DockTileRadius);
+            if (hovered) OverlayDraw.Panel(ctx, rect, RowHoverBrush, null, DockTileRadius);
+            OverlayDraw.Panel(ctx, rect, null,
+                waiting is null ? BorderPen : OverlayDraw.Pen(OverlayDraw.Brush(StatusColorOf(waiting)), 2), DockTileRadius);
+            var more = OverlayDraw.Text($"+{hidden}", 12, waiting is null ? MutedBrush : FgBrush, FontWeight.Bold);
             OverlayDraw.TextLeftMid(ctx, more, rect.Center.X - more.Width / 2, rect.Center.Y);
         }
     }
@@ -541,6 +556,10 @@ public sealed partial class OverlayCanvas
         if (s is null)
         {
             lines.Add(new($"{hidden} more session{(hidden == 1 ? "" : "s")}", OverlayTooltip.FgColor, true));
+            // The sessions behind "+N" are the tail of the order the tiles are painted in.
+            var order = DockTileOrder();
+            foreach (var w in order.Skip(order.Count - hidden).Where(NeedsYou))
+                lines.Add(new($"{w.DisplayName}: needs you", StatusColorOf(w), false));
             lines.Add(new("Click to expand", OverlayTooltip.MutedColor, false));
         }
         else
