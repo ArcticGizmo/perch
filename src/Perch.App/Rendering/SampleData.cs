@@ -184,7 +184,7 @@ internal static class SampleData
     /// <summary>A larger estate (seven orgs) with a real spread of healthy / watch / near-limit readings, for
     /// eyeballing the multi-org strip: the first two are Active (full bars), the rest are known-but-idle
     /// (compact chips by default) — the mixed view the overlay shows at startup. Exercises the chip wrap, the
-    /// label-free mini-bars, the pace ticks, and the fresh-window "safe zone" (the "redux" account: barely any
+    /// label-free mini-bars, the pace ticks, and the fresh-window "safe zone" (the "hooli" account: barely any
     /// time elapsed and barely any usage → green, not yellow).</summary>
     public static IReadOnlyList<OrgUsage> OrgUsagesMany()
     {
@@ -199,7 +199,7 @@ internal static class SampleData
         };
         (string name, UsageInfo u)[] orgs =
         [
-            ("redux",     U(0,  0,  0,  null, 0m,  0.4, 0.3)),   // fresh window, ~no usage → safe-zone green
+            ("hooli",     U(0,  0,  0,  null, 0m,  0.4, 0.3)),   // fresh window, ~no usage → safe-zone green
             ("initrode",  U(62, 34, 45, 12m, 80m,  3.5, 2.8)),
             ("cyberdyne", U(18, 51, 22, null, 50m, 1.5, 4.2)),
             ("acme",      U(88, 72, 61, 44m, 60m,  2.7, 4.6)),

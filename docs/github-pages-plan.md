@@ -67,6 +67,11 @@ published.
   `site/`) turns the JSON into one table per `SettingSurface`. Perch.Core is already
   `InternalsVisibleTo("perch")`, so the verb can read the internal registry directly. Nothing new needs to be
   made public.
+- **Screenshots must be rendered hermetically.** Run `render` with `PERCH_DEV=0` (no "Perch - DEV" label or
+  pink border) and `CLAUDE_CONFIG_DIR` pointed at an empty directory named `work`. Otherwise the renderer pins
+  the config set to whatever `CLAUDE_CONFIG_DIR` the shell inherited, and real config-dir labels and org names
+  leak into the overlay and launcher. Found 2026-10-15, when the first renders showed the maintainer's own
+  account names. CI is clean by default, but local runs from a Claude Code session are not.
 - **Screenshots:** CI runs `perch render` and copies a **curated allowlist** of PNGs (`site/screenshots.txt`)
   into the site's assets. The allowlist keeps debug/bench renders and anything secret out, and gives each
   image a stable published name, so a renamed render fails the build rather than silently dropping an image.

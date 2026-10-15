@@ -4,12 +4,22 @@
 </p>
 
 <p align="center">
-<strong>Keep an eye on every Claude Code session from one floating panel.</strong>
+<strong>Know the moment a Claude Code session needs you, and get straight back to it.</strong>
 </p>
 
 <br>
 
-Perch is a **Windows and macOS** menu-bar / system-tray app that watches your active Claude Code sessions and surfaces what each one is doing — at a glance, without alt-tabbing through a dozen terminals. When a session finishes, gets stuck on a permission prompt, or needs you, you'll know.
+Running several Claude Code sessions at once means a lot of checking. Is that one finished? Is this one stuck on
+a permission prompt? Perch does the checking for you. It's a **Windows and macOS** tray app that watches every
+session in the background and **alerts you** when one finishes, stops to ask you something, or hits an error.
+
+Then it gets you back in with one click, wherever the session lives:
+
+- **Back to the terminal**: Perch brings forward the exact window the session is running in.
+- **Back to your IDE**: for a session in VS Code, Cursor or a JetBrains IDE's terminal, it brings the IDE forward
+  (Windows).
+- **Or never leave Perch**: start and run sessions in Perch's own window. Approve prompts, reply and review
+  changes there, or watch every session side by side in **Roost**.
 
 Already know you want it? [Skip the details and install it ▼](#Installing)
 
@@ -24,14 +34,14 @@ Already know you want it? [Skip the details and install it ▼](#Installing)
 </td>
 <td valign="top">
 
-- **One panel for every session** — see who's **running**, **idle**, **awaiting input**, or **needs attention**, each with a colour-coded dot and a live count in the header.
-- **Live activity** — the current tool call and an elapsed timer tick by under each running session.
-- **Sub-agents, too** — `Task` runs show up as nested rows under their parent.
-- **Click to jump** — click any row to focus that session's terminal and clear its alert.
-- **Usage at the top** — optional **Session** (5-hour) and **Weekly** rate-limit bars, colour-coded with reset times.
-- **Permission badges** — Plan / Accept Edits / Auto / Bypass shown per session (with the plugin installed).
-- **Get pinged** — desktop toasts, system chimes, and optional push-to-phone when a session is done or waiting.
-- **Stays out of the way** — drag it anywhere, expand/collapse the list, or shrink it to a slim edge-docked strip.
+- **See what needs you**: every session in one floating panel, marked **running**, **idle**, **waiting on
+  you** or **done**, with counts in the header. The panel flashes when something changes.
+- **Get told, wherever you are**: desktop toasts, chimes, and optional push to your phone. When your machine is
+  locked, Perch can push every alert so nothing waits on you unseen.
+- **Jump straight back**: click a row or a notification to land in that session's terminal or IDE.
+- **Or answer from Perch**: approve a permission prompt, reply or run a slash command without leaving the app.
+- **Stay ahead of your limits**: 5-hour, weekly and spend bars per account, coloured by whether you're on pace.
+- **Quiet when you need it**: Quiet mode silences the fun stuff; a header button toggles Windows Do Not Disturb.
 
 </td>
 </tr>
@@ -39,73 +49,74 @@ Already know you want it? [Skip the details and install it ▼](#Installing)
 
 ## How it works
 
-Perch reads Claude Code's own session files under `~/.claude/` and updates in near real time. Each session shows one of four states:
+Perch reads Claude Code's own files under `~/.claude/` and updates in near real time. It also adds a few hooks
+to Claude Code's settings for you, pointing them at its own small `perch-hook` program. There's no plugin to
+install; Perch keeps the hooks current across updates and removes them when you uninstall.
 
-- **Running** — actively executing (with the latest tool call and a runtime timer)
-- **Idle** — open but not doing anything
-- **Awaiting Input** — stopped on a permission prompt or question and waiting for you
-- **Needs Attention** — finished recently and waiting to be acknowledged (the panel flashes and a notification fires)
+Every session is in one of four states:
 
-Click the header to expand it into per-session rows; click a row to focus that session's terminal; drag the header to reposition it.
+| State | What it means |
+| --- | --- |
+| **Running** | Working, with the current tool call and a timer under it. |
+| **Idle** | Open, but not doing anything. |
+| **Waiting on you** | Stopped on a permission prompt or a question. |
+| **Done** | Finished, and not yet acknowledged. The panel flashes and a notification fires. |
 
-## Features
+Your session contents never leave your machine. See [PRIVACY.md](PRIVACY.md) for the network features you can
+turn on.
 
-### Overlay panel
+## What Perch does
 
-- Always-on-top panel listing every active session with a colour-coded status dot and header counts.
-- Per-session rows show the session's name (folder or `/rename`), its live status, the current tool call, and an elapsed timer.
-- Nested rows for running **sub-agents** (`Task` tool runs).
-- **Click a row to focus** the terminal running that session and acknowledge any pending alert.
-- **Right-click a row** for quick actions: view history, toggle push notifications, acknowledge alert.
-- **Drag** to reposition; the panel remembers where you put it.
-- **Expand / collapse** the session list by clicking the header; it auto-collapses when the last session ends and flashes open when one needs you.
-- **Dense mode** — shrink the panel to a slim strip docked to a screen edge that expands on hover.
+### 1. Tells you when a session needs you
 
-### Usage & rate limits
+- **The panel**: an always-on-top list of every session with a status dot, the current tool, a timer, and nested
+  rows for running sub-agents. Badges show each session's permission mode (Plan, Accept edits, Auto, Bypass).
+  It opens itself when something needs you.
+- **Notifications**: desktop toasts and system chimes when a session finishes or starts waiting, each type with
+  its own toggle and a test button.
+- **Push to your phone** via [ntfy](https://ntfy.sh), per session. With the **away override**, a locked
+  workstation pushes every session's alerts, so nothing sits waiting while you're away from your desk.
+- **Usage and limits**: 5-hour, weekly and monthly-spend bars for each account, with reset times and a marker
+  showing where you'd be at a steady pace. Perch only calls the usage endpoint when the bars are on.
+- **On your terms**: drag the panel anywhere, shrink it to a slim strip, dock it to a screen edge, reorder its
+  sections, or turn on Quiet mode.
 
-- Optional **Session (5-hour)** and **Weekly (7-day)** usage bars, colour-coded from green to red as you approach your limit.
-- Percentage labels and **reset-time** counters.
-- An **expected-rate marker** shows where your usage _should_ be for how far into the window you are.
-- Hover for a detailed tooltip; bars dim when the data is stale.
-- Pulls the same account usage Claude Code's `/usage` command shows — and when the feature is off, it never makes the call.
+### 2. Takes you straight back to it
 
-### Notifications
+- **Click a row or a notification** to bring forward the exact terminal window the session is running in.
+- **IDE sessions** (Windows): if the session runs in VS Code, Cursor or a JetBrains IDE's terminal, the click
+  brings the IDE forward. Perch can show the IDE's icon in place of the status dot, so you can see where each
+  session lives.
+- **Right-click a row** to open its history, toggle phone push for it, or acknowledge it.
+- On macOS, focusing the exact Terminal window needs the one-time **Automation** permission; without it, Perch
+  brings the terminal app forward.
 
-- **Desktop toasts** when a session finishes or starts awaiting input — click one to jump straight to that terminal.
-- **System chimes** for done / waiting, honouring your Windows sound scheme.
-- **Push to your phone** via [ntfy](https://ntfy.sh) — opt in per session, with an optional "Open session" button for sessions controlled from claude.ai.
-- **Away override** — when your workstation is locked, push _any_ session's alerts so you never miss one while you're AFK.
-- Independent on/off toggles for every notification type, each with a test button.
+### 3. Or runs the session for you
 
-### Stats & history
+Perch can start and drive Claude Code sessions itself, so the answer to "it needs you" can happen without
+switching apps:
 
-- **Stats dashboard** — sessions, active time, prompts, tool calls, sub-agent runs, streaks, busiest day, and longest session, scoped to **Today / 7 days / 30 days / All time**.
-- **Tokens & cost** — input/output/cache token totals plus an optional estimated API cost, broken down by model.
-- **Breakdowns** — by project, by tool, by model, by branch, plus an hourly-activity histogram and a daily-trend chart.
-- Optional **"Today" line in the tray menu** for a quick daily glance.
-- **History viewer** — read any session transcript in a clean **Readable** view (markdown, expandable tool calls, clickable image links) or a **Raw** event timeline, with live follow-along while a session runs.
+- **Session window**: start a session from the panel (pick the folder and account), or run `perch` in a
+  terminal. Approve or deny permission prompts, reply, @-mention files, attach images and run slash commands. Tool
+  calls show as readable cards, sub-agents get their own tabs, and a changed-files panel tracks what the session
+  touched.
+- **Roost**: every session side by side in one window, grouped into tabs, with the ones that need you sorted to
+  the top. Answer a prompt right in its tile.
+- **Pick up where you left off**: restart a session, or resume one from the Recent list, including sessions
+  cut off by a shutdown or restart.
 
-### Quick links
+### And the rest
 
-- A strip of app icons below the usage bars for one-click launching (e.g. Slack, GitKraken).
-- Click to focus the app if it's already running, or launch it if not.
-- Fully customisable — add, edit, enable/disable links, with presets for well-known apps.
+- **Stats**: sessions, active time, prompts, tool calls, tokens and estimated cost, by project, branch, tool and
+  model, for today, 7 days, 30 days or all time.
+- **History and search**: read any past transcript, or search across all of them.
+- **Themes**: built-in light and dark themes, plus a designer for making your own.
+- **Multiple accounts**: watch several Claude config directories at once, with a warning if a session is
+  running under the wrong account.
+- **Quick links, to-dos and GitHub alerts** in the panel, a Markdown viewer for a session's docs, a statusline
+  designer, and achievements.
 
-### Live session state
-
-Perch wires a few hooks into Claude Code for you — no plugin to install. On launch it points
-`~/.claude/settings.json` at its own fast `perch-hook` binary, keeps it current across updates, heals
-stale entries, and removes them cleanly on uninstall. That unlocks:
-
-- **Permission-mode badges** in the overlay (Plan / Accept Edits / Auto / Bypass).
-- **Auto-start** — launch Perch automatically when you open your first session (and optionally close it after the last one ends).
-
-### The little things
-
-- Lives in the system tray; left-click opens Settings, right-click for the full menu.
-- Dark theme throughout, high-DPI aware.
-- Heavy work runs off the UI thread, so the panel never freezes.
-- Tolerant of partial/malformed session files — it never crashes on bad data.
+The [documentation site](https://arcticgizmo.github.io/perch/) covers each of these in detail.
 
 ## Installing
 

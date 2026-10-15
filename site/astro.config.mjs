@@ -10,7 +10,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Perch',
-      description: 'Keep an eye on every Claude Code session from one floating panel.',
+      description: 'Know the moment a Claude Code session needs you, and get straight back to it.',
       logo: { src: './src/assets/logo.png' },
       favicon: '/favicon.png',
       customCss: ['./src/styles/custom.css'],
@@ -22,8 +22,14 @@ export default defineConfig({
           label: 'Getting started',
           items: [
             { label: 'Install', slug: 'getting-started/install' },
+            { label: 'First run', slug: 'getting-started/first-run' },
             { label: 'Updating', slug: 'getting-started/updating' },
           ],
+        },
+        {
+          // One page per feature; order comes from each page's `sidebar.order` frontmatter.
+          label: 'Features',
+          items: [{ autogenerate: { directory: 'features' } }],
         },
         {
           label: 'Help',
