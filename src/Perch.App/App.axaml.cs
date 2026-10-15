@@ -1648,10 +1648,12 @@ public partial class App : Application
     // Electron/WebView2 app) is a windowless media child process — FocusAppWindowForProcess widens the
     // search to the app's other processes, and a window parked on another virtual desktop is the normal case
     // here rather than a problem: foregrounding it makes Windows switch desktop, which is the whole point.
+    // CallWindow picks the call's own window out of an app with several (the Teams meeting, not its hub).
     private void JumpToMicApp()
     {
         if (_micHost?.Microphone.Current?.Primary is not { } holder || holder.ProcessId <= 0) return;
-        if (PlatformServices.WindowActivator.FocusAppWindowForProcess(holder.ProcessId)) return;
+        if (PlatformServices.WindowActivator.FocusAppWindowForProcess(
+                holder.ProcessId, preferredWindow: holder.CallWindow)) return;
 
         // Same reasoning as FocusSession: a click that silently does nothing reads as Perch being broken,
         // and the strip gives no hint that the app has no window to go to.

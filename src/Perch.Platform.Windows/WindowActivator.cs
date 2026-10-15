@@ -197,7 +197,12 @@ public sealed class WindowActivator : IWindowActivator
     // Unlike FocusTerminalForProcess this requires a *titled, visible* window: we're looking for a real app
     // window a user would recognise, not a 0×0 pseudo-console, and every titleless helper window in the
     // candidate processes would otherwise be a candidate.
-    public bool FocusAppWindowForProcess(int pid, string? titleHint = null)
+    //
+    // preferredWindow beats all of that when it's still valid. Same-executable siblings make every window of
+    // the app tie on depth, so for Teams (hub + meeting window in one ms-teams.exe) Z-order alone picks
+    // whichever the user touched last. The mic monitor remembers which window was in front when the call
+    // took the mic (MicUser.CallWindow), and that is the meeting window.
+    public bool FocusAppWindowForProcess(int pid, string? titleHint = null, long preferredWindow = 0)
     {
         try
         {
@@ -222,6 +227,21 @@ public sealed class WindowActivator : IWindowActivator
                     if (otherPid == pid) continue;
                     if (string.Equals(info.ExeFile, self.ExeFile, StringComparison.OrdinalIgnoreCase))
                         depthByPid.TryAdd(otherPid, 1);
+                }
+            }
+
+            // The remembered call window, provided it's still alive and still owned by one of the app's
+            // processes. Handles are recycled, so a stale one could otherwise name an unrelated window.
+            // It is focused even when minimized or hidden (FocusWindow restores/shows it). Teams minimizes
+            // the meeting window into its compact view, and that is still the call.
+            var preferred = (IntPtr)preferredWindow;
+            if (preferred != IntPtr.Zero && IsWindow(preferred))
+            {
+                GetWindowThreadProcessId(preferred, out uint ownerPid);
+                if (depthByPid.ContainsKey((int)ownerPid))
+                {
+                    FocusWindow(preferred);
+                    return true;
                 }
             }
 
@@ -379,6 +399,10 @@ public sealed class WindowActivator : IWindowActivator
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);

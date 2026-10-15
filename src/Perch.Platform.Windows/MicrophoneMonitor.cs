@@ -44,6 +44,9 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
     // installed, and re-reading version info for every process on every tick would be pure waste.
     private readonly Dictionary<string, string?> _describeCache = new(StringComparer.OrdinalIgnoreCase);
 
+    // Which window is each holder's call — see MicCallWindowTracker. Locked on itself: timer ticks can overlap.
+    private readonly MicCallWindowTracker _callWindows = new();
+
     private Timer? _timer;
     private bool _started;
 
@@ -73,6 +76,7 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
             _timer = null;
         }
         timer?.Dispose();
+        lock (_callWindows) _callWindows.Reset();
         Publish(null);
     }
 
@@ -129,6 +133,19 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
             }
         }
 
+        Dictionary<string, long> callWindows;
+        var foreground = new Lazy<(long Window, string? Path)>(ReadForeground);
+        lock (_callWindows)
+        {
+            callWindows = new Dictionary<string, long>(
+                _callWindows.Observe(
+                    holders.Select(h => h.Identity).ToList(),
+                    identity => MicApps.IdentityMatchesPath(identity, foreground.Value.Path)
+                        ? foreground.Value.Window
+                        : 0),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
         var users = holders
             .OrderByDescending(h => h.IsStreaming)             // a live stream is the interesting one
             .ThenByDescending(h => h.Since ?? DateTimeOffset.MinValue)
@@ -137,13 +154,27 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
                 DisplayName: MicApps.DisplayName(h.Identity, Describe(h.Identity, h.ProcessId)),
                 ProcessId: h.ProcessId,
                 IsStreaming: h.IsStreaming,
-                Since: h.Since))
+                Since: h.Since,
+                CallWindow: callWindows.GetValueOrDefault(h.Identity)))
             .ToList();
 
         return new MicSnapshot(users, audio.DeviceName);
     }
 
     private readonly record struct Holder(string Identity, int ProcessId, bool IsStreaming, DateTimeOffset? Since);
+
+    // The foreground window, lifted to its root owner so a dialog in front of the call window still counts as
+    // the call window, plus the path of the process that owns it, which is matched against a holder's identity.
+    // Read only when a new holder appears (the Lazy at the call site), not on every poll.
+    private static (long Window, string? Path) ReadForeground()
+    {
+        var hWnd = GetForegroundWindow();
+        if (hWnd == IntPtr.Zero) return (0, null);
+        var root = GetAncestor(hWnd, GA_ROOTOWNER);
+        if (root != IntPtr.Zero) hWnd = root;
+        GetWindowThreadProcessId(hWnd, out var pid);
+        return ((long)hWnd, ProcessPath((int)pid));
+    }
 
     // ── The privacy ledger (identity + "in use right now") ───────────────────
 
@@ -351,6 +382,16 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
     }
 
     private const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const uint GA_ROOTOWNER = 3;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(int access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
