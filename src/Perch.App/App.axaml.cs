@@ -2396,6 +2396,7 @@ public partial class App : Application
             HoldSession(s);   // live now: held like any started session
             _monitorHost?.Rescan();
         };
+        session.Restarted += _ => _monitorHost?.Rescan();   // same session, new process: refresh its row promptly
         // "End session" in its window while it's still dormant: Perch stops holding it (the overlay row and Roost pane
         // go). Once it's woken, ending it goes through HoldSession's release instead.
         session.Released += s =>
@@ -2632,6 +2633,7 @@ public partial class App : Application
             _perchSessions.Remove(s);
             _monitorHost?.Rescan();
         };
+        session.Restarted += _ => _monitorHost?.Rescan();   // same session, new process: refresh its row promptly
         HoldSession(session);   // in the ledger, so it comes back dormant if Perch closes first
         _monitorHost?.Rescan();
         return session;

@@ -1,7 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Avalonia.Views;
 using Perch.Data;
 
 namespace Perch.Avalonia.Windows;
@@ -12,11 +14,14 @@ namespace Perch.Avalonia.Windows;
 /// <c>/login</c>. The wording and thresholds live in <see cref="AuthExpiryRules.Banner"/>; this only paints it,
 /// amber while close and red once lapsed. A half-minute tick keeps the countdown current; it reads no files (the
 /// process clocks are cached on <see cref="Services.PerchSession.ProcessAuth"/>, the account's on the usage poll).
+/// While the warning is about the process's own access token it carries a Restart button
+/// (<see cref="Services.PerchSession.Restart"/>), the same action as the End session dropdown's.
 /// </summary>
 internal sealed partial class SessionWindow
 {
     private Border _authBanner = null!;
     private TextBlock _authBannerText = null!;
+    private SessionButton _authRestartButton = null!;
     private DispatcherTimer? _authBannerTimer;
 
     private Border BuildAuthBanner()
@@ -24,12 +29,22 @@ internal sealed partial class SessionWindow
         _authBannerText = new TextBlock
         {
             FontFamily = _p.Body, FontSize = 12, Foreground = _p.Text, TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = "If a restarted session still can't sign in, open Claude Code in a terminal once to refresh it.",
         };
+        // Only while the warning is about this process's own access token — the one thing a restart fixes.
+        _authRestartButton = new SessionButton(_p, "Restart", SessionButtonKind.Ghost, compact: true)
+        {
+            IsVisible = false, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = "Restart the Claude process on this same session to pick up a fresh sign-in",
+        };
+        _authRestartButton.Click += async () => await ConfirmRestartAsync(_authRestartButton);
+        _authRestartButton[DockPanel.DockProperty] = Dock.Right;
         _authBanner = new Border
         {
             IsVisible = false, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 7), Margin = new Thickness(0, 0, 0, 9), Child = _authBannerText,
-            [ToolTip.TipProperty] = "If a resumed session still can't sign in, open Claude Code in a terminal once to refresh it.",
+            Padding = new Thickness(10, 7), Margin = new Thickness(0, 0, 0, 9),
+            Child = new DockPanel { Children = { _authRestartButton, _authBannerText } },
         };
         return _authBanner;
     }
@@ -53,9 +68,10 @@ internal sealed partial class SessionWindow
         if (_closed) return;
         var s = _session;
         var account = UsageProvider?.Invoke().Auth ?? AuthExpiry.None;
-        var (text, level) = AuthExpiryRules.Banner(s?.ProcessAuth ?? AuthExpiry.None, account,
-            running: s is { IsRunning: true }, dormant: s is { IsDormant: true }, DateTime.Now);
-        PaintAuthBanner(text, level);
+        var process = s?.ProcessAuth ?? AuthExpiry.None;
+        bool running = s is { IsRunning: true };
+        var (text, level) = AuthExpiryRules.Banner(process, account, running, dormant: s is { IsDormant: true }, DateTime.Now);
+        PaintAuthBanner(text, level, AuthExpiryRules.OffersRestart(process, running, DateTime.Now));
     }
 
     /// <summary>HeadlessRenderer: pose the banner for a running session holding <paramref name="process"/>'s clocks on
@@ -64,16 +80,17 @@ internal sealed partial class SessionWindow
     {
         StopAuthBannerTimer();
         var (text, level) = AuthExpiryRules.Banner(process, account, running: true, dormant: false, DateTime.Now);
-        PaintAuthBanner(text, level);
+        PaintAuthBanner(text, level, AuthExpiryRules.OffersRestart(process, running: true, DateTime.Now));
     }
 
-    private void PaintAuthBanner(string? text, AuthExpiryLevel level)
+    private void PaintAuthBanner(string? text, AuthExpiryLevel level, bool offerRestart)
     {
         if (text is null)
         {
             _authBanner.IsVisible = false;
             return;
         }
+        _authRestartButton.IsVisible = offerRestart;
         bool expired = level == AuthExpiryLevel.Expired;
         _authBanner.Background = expired ? _p.ErrWash : _p.AwaitWash;
         _authBanner.BorderBrush = expired ? _p.Err : _p.AwaitLine;

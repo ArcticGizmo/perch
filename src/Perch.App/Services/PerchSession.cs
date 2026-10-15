@@ -36,7 +36,7 @@ internal sealed class PerchSession : IDisposable
 
     /// <summary>Known from launch (pinned or resumed id).</summary>
     public string? SessionId => _controller?.SessionId ?? Conversation.SessionId;
-    public bool IsRunning => _controller is { IsRunning: true } && !HasEnded;
+    public bool IsRunning => _controller is { IsRunning: true } && !HasEnded && !IsRestarting;
 
     /// <summary>Shown with its conversation, but no <c>claude</c> process yet: the first send <see cref="Wake"/>s it.
     /// Not running and not ended.</summary>
@@ -272,9 +272,60 @@ internal sealed class PerchSession : IDisposable
         return session;
     }
 
+    /// <summary>Between <see cref="Restart"/> stopping the old process and the new one starting: neither running nor
+    /// ended.</summary>
+    public bool IsRestarting => _restartWith is not null;
+    private SessionLaunchOptions? _restartWith;
+
+    /// <summary>A restart began or finished (UI thread). Neither <see cref="Ended"/> nor <see cref="Woke"/> fires for
+    /// one, so the app keeps holding the session and every view stays attached to this same object.</summary>
+    public event Action<PerchSession>? Restarted;
+
+    /// <summary>Stops the process and starts <c>claude --resume</c> on the same id, in place: same conversation, same
+    /// model, mode, effort and account. Its point is a fresh process — a headless one never re-reads the credentials,
+    /// so this is how a session picks up a sign-in refreshed elsewhere. A turn in flight is cut off, as with End.</summary>
+    public void Restart()
+    {
+        if (!IsRunning || SessionId is not { Length: > 0 } id) return;
+        _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, ConfigDir);
+        Conversation.AddNote($"restarting session {Shorten(id)}…");
+        Restarted?.Invoke(this);
+        _controller!.Stop();
+    }
+
+    // The old process exited for a Restart: settle its conversation, then start the new one. A failed start ends the
+    // session as an ordinary exit would.
+    private bool RelaunchAfterExit(int code, string stderrTail)
+    {
+        if (_restartWith is not { } next) return false;
+        Conversation.StateChanged -= PublishActivity;
+        Conversation.SessionEnded(code, stderrTail);
+        _controller?.Dispose();
+        _controller = null;
+        try
+        {
+            LaunchLog.Write($"perch session restart: {TranscriptLocator.DescribeResume(next.ResumeId ?? "", Cwd)}");
+            Launch(next);
+            Conversation.AddNote($"restarted session {Shorten(SessionId ?? "")}");
+        }
+        catch (Exception ex)
+        {
+            Conversation.AddNote($"couldn't restart claude: {ex.Message}", NoteKind.Error);
+            _restartWith = null;
+            HasEnded = true;
+            ExitCode = code;
+            Ended?.Invoke(this);
+            return true;
+        }
+        _restartWith = null;
+        Restarted?.Invoke(this);
+        ProcessAuthChanged?.Invoke();   // the new process's clocks are being read; drop the old process's banner now
+        return true;
+    }
+
     private void OnExited(int code, string stderrTail)
     {
-        if (HasEnded) return;
+        if (HasEnded || RelaunchAfterExit(code, stderrTail)) return;
         HasEnded = true;
         ExitCode = code;
         // Stop publishing status; the controller has already unregistered the session (and dropped its lock),
@@ -456,6 +507,7 @@ internal sealed class PerchSession : IDisposable
     public void End()
     {
         if (_controller is null) return;
+        _restartWith = null;   // an End during a restart wins: the old process's exit ends the session
         StoppedByPerch = true;
         _controller.Stop();
     }

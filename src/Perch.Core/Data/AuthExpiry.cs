@@ -69,8 +69,9 @@ internal static class AuthExpiryRules
     public static readonly TimeSpan AccountAccessSoon = TimeSpan.FromMinutes(4);
 
     /// <summary>The access token a Perch-controlled <em>session</em> loaded at spawn. Nothing refreshes it inside a
-    /// headless session, so the banner warns well ahead.</summary>
-    public static readonly TimeSpan SessionAccessSoon = TimeSpan.FromMinutes(30);
+    /// headless session; the banner warns at the point an interactive Claude Code would refresh it (~5 minutes
+    /// before expiry), which is also when a restart is worth doing.</summary>
+    public static readonly TimeSpan SessionAccessSoon = TimeSpan.FromMinutes(5);
 
     /// <summary>The refresh token — after this the account must <c>/login</c> again.</summary>
     public static readonly TimeSpan RefreshSoon = TimeSpan.FromDays(2);
@@ -107,7 +108,7 @@ internal static class AuthExpiryRules
     /// <list type="bullet">
     /// <item>the <b>access token</b> is the one the running <paramref name="process"/> loaded at spawn — nothing
     /// refreshes it inside a headless session, so it warns <see cref="SessionAccessSoon"/> ahead, and once it lapses
-    /// only a restart (End, then Resume) picks up a fresh one. A dormant session has no process yet (its wake loads
+    /// only a restart picks up a fresh one. A dormant session has no process yet (its wake loads
     /// the current credentials), so it gets no access line.</item>
     /// <item>the <b>login</b> (refresh token) is the <paramref name="account"/>'s, as on disk now — that's what a
     /// restart would load — falling back to the process's when the account clock is unknown.</item>
@@ -126,10 +127,10 @@ internal static class AuthExpiryRules
             var l = Level(access, now, SessionAccessSoon);
             if (l == AuthExpiryLevel.Expired)
                 lines.Add($"This session's sign-in expired at {access:t}, and Perch sessions can't refresh it — prompts will "
-                        + "fail until it restarts. End the session, then Resume it to pick up a fresh sign-in.");
+                        + "fail until it restarts. Restart the session to pick up a fresh sign-in.");
             else if (l == AuthExpiryLevel.Soon)
                 lines.Add($"This session's sign-in expires in {Long(access - now)} ({access:t}), and Perch sessions can't "
-                        + "refresh it. After that, End the session and Resume it to pick up a fresh sign-in.");
+                        + "refresh it. Restart the session to pick up a fresh sign-in.");
             if (l > level) level = l;
         }
 
@@ -148,6 +149,11 @@ internal static class AuthExpiryRules
 
         return (lines.Count == 0 ? null : string.Join('\n', lines), level);
     }
+
+    /// <summary>Whether the banner offers its Restart button: only when it's warning about the running process's own
+    /// access token, which a restart replaces. A login that needs <c>/login</c> isn't fixed by restarting.</summary>
+    public static bool OffersRestart(AuthExpiry process, bool running, DateTime now) =>
+        running && process.AccessExpiresAt is { } access && Level(access, now, SessionAccessSoon) != AuthExpiryLevel.Normal;
 
     /// <summary>A sentence-friendly span for tooltips and the banner: <c>12 min</c>, <c>5 h 20 min</c>, <c>3 days</c>.</summary>
     public static string Long(TimeSpan remaining)
