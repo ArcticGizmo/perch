@@ -2350,7 +2350,6 @@ public partial class App : Application
         // File references in the session UI: open a Markdown file in the viewer, or a file's diff in the tree.
         w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
         w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
-        w.ShowQrRequested += ShowQrCode;   // /remote-control → QR for the claude.ai session link
         w.ComposerOverflowRequested += anchor => ShowComposerOverflowMenu(anchor, w);   // "…" activate menu
         // A background session needing a decision (permission / question / plan) raises a desktop toast.
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
@@ -2556,7 +2555,7 @@ public partial class App : Application
         {
             var capUrl = url;
             var qr = new MenuItem { Header = "Show QR code" };
-            qr.Click += (_, _) => ShowQrCode("Remote control", capUrl);
+            qr.Click += (_, _) => ShowQrCode("Remote control", capUrl, TopLevel.GetTopLevel(anchor) as Window);
             menu.Items.Add(qr);
         }
         var stop = new MenuItem { Header = "Stop remote control" };
@@ -2914,16 +2913,18 @@ public partial class App : Application
     private void ShowQrCode(ClaudeSession session)
     {
         if (string.IsNullOrEmpty(session.BridgeSessionId)) return;
-        ShowQrCode(session.DisplayName, $"https://claude.ai/code/{session.BridgeSessionId}");
+        ShowQrCode(session.DisplayName, $"https://claude.ai/code/{session.BridgeSessionId}", _overlay);
     }
 
-    // Shows a QR for an arbitrary title + URL — used by a rich session window's /remote-control, which gets
-    // the canonical claude.ai session URL straight from the CLI's remote_control ack.
-    private void ShowQrCode(string title, string url)
+    // Shows a QR for an arbitrary title + URL — used by a rich session window's remote-control glyph, which
+    // has the canonical claude.ai session URL straight from the CLI's remote_control ack. The card is centred
+    // on the monitor of the window it was asked for from (the session window, or the overlay). Unowned, it
+    // would land on the primary monitor.
+    private void ShowQrCode(string title, string url, Window? near)
     {
         if (string.IsNullOrEmpty(url)) return;
         _qrWindow?.Close();
-        _qrWindow = new QrWindow(title, url);
+        _qrWindow = new QrWindow(title, url, near);
         _qrWindow.Closed += (_, _) => _qrWindow = null;
         _qrWindow.Show();
         _qrWindow.Activate();
