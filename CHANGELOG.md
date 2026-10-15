@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.38] - 2026-10-15
+
+- Mic button jumps to the meeting, not the Teams window you last touched
+- Turning on remote control skips the QR code (it's in the icon's menu, for the rare scan)
+- `/rc` again turns remote control off
+- QR code opens on the session's monitor, not the main one
+- Collapsed docked column stays collapsed when a session needs you (your windows stay put)
+- Collapsed docked column shows a tile per session; click one to focus it
+- Tiles flag what needs you in place, without shuffling
+- Running tiles dimmed, idle ones barely there
+
+---
+
 ## [v0.5.37] - 2026-10-15
 
 - Restart session, tucked in a ▾ beside End session
