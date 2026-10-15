@@ -254,13 +254,15 @@ public sealed partial class SupabaseSocialClient
     {
         DrawDifficulty.Easy => "easy",
         DrawDifficulty.Medium => "medium",
-        _ => "hard",
+        DrawDifficulty.Hard => "hard",
+        _ => "extra_hard",
     };
 
     private static DrawDifficulty ParseDiff(string? s) => s switch
     {
         "easy" => DrawDifficulty.Easy,
         "hard" => DrawDifficulty.Hard,
+        "extra_hard" => DrawDifficulty.ExtraHard,
         _ => DrawDifficulty.Medium,
     };
 

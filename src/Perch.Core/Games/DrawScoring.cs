@@ -10,12 +10,13 @@ namespace Perch.Games;
 /// </summary>
 public static class DrawScoring
 {
-    /// <summary>The base point value of a word by difficulty — Easy 10, Medium 20, Hard 30.</summary>
+    /// <summary>The base point value of a word by difficulty — Easy 10, Medium 20, Hard 30, Extra hard 40.</summary>
     public static int Base(DrawDifficulty difficulty) => difficulty switch
     {
         DrawDifficulty.Easy => 10,
         DrawDifficulty.Medium => 20,
-        _ => 30,
+        DrawDifficulty.Hard => 30,
+        _ => 40,
     };
 
     /// <summary>Points awarded for a solved round. <paramref name="attempts"/> is how many guesses the guesser
