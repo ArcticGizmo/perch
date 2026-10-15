@@ -465,8 +465,10 @@ public sealed partial class OverlayCanvas
     {
         _dockTiles.Clear();
 
-        // Between the status counts (plus a hairline separator) and the expand handle at the bottom.
-        double top = _denseCtl.StripHeightDip() + 10;
+        // Between the status counts (plus a hairline separator) and the expand handle at the bottom. The counts
+        // only list statuses that have sessions, so the tiles start below room for all of them. Otherwise
+        // every tile would shift whenever a status appeared or cleared.
+        double top = _denseCtl.MaxStripHeightDip() + 10;
         double bottom = h - 2 * DockToggleR - DockToggleBottomPad - 12;
         int capacity = (int)Math.Floor((bottom - top) / DockTilePitch);
         if (capacity <= 0 || _countedSessions.Count == 0) return;
