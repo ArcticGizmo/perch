@@ -531,6 +531,14 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.CloseFeedInDoNotDisturb),
             s => s.CloseFeedInDoNotDisturb, (s, v) => s.CloseFeedInDoNotDisturb = v),
 
+        // Windows-only: there's no way to switch macOS Focus from a plain app, so the button is hidden there.
+        Toggle("dnd-button", "Do Not Disturb button",
+            "A sleeping-bell button on the right of the overlay header: lit while Windows Do Not Disturb is on, and one click turns it on or off.",
+            SettingSurface.Notifications, ["dnd", "do not disturb", "focus", "quiet", "notifications", "mute", "silence", "header", "button", "bell", "sleep"],
+            PreviewTarget.None, nameof(AppSettings.ShowDndButton),
+            s => s.ShowDndButton, (s, v) => s.ShowDndButton = v)
+            with { Requires = PlatformFeature.DoNotDisturbToggle },
+
         Stepper("social-max-friends", "Friends shown at once",
             "How many friends the roster shows before the rest fold into a \"+N more\" line (most recent first).",
             SettingSurface.Social, ["friends", "count", "rows", "shown", "roster", "social", "limit"],

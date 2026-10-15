@@ -161,6 +161,16 @@ public class SettingsRegistryTests
         Assert.Equal(PlatformFeature.EdgeReservation, overlayMode.Requires);
     }
 
+    // The header's DND button flips the OS state, which only Windows can do from a plain app.
+    [Fact]
+    public void DndButtonRequiresDoNotDisturbToggle()
+    {
+        var dnd = SettingsRegistry.All.Single(d => d.Id == "dnd-button");
+        Assert.Equal(PlatformFeature.DoNotDisturbToggle, dnd.Requires);
+        Assert.DoesNotContain(SettingsRegistry.Available(f => f != PlatformFeature.DoNotDisturbToggle),
+            d => d.Id == "dnd-button");
+    }
+
     [Fact]
     public void AvailableHidesSettingsThisPlatformCannotSupport()
     {
@@ -171,7 +181,7 @@ public class SettingsRegistryTests
         var available = SettingsRegistry.Available(NoEdgeReservation).ToList();
         Assert.DoesNotContain(available, d => d.Id == "overlay-mode");
         // Nothing else is collateral damage: only the EdgeReservation-gated entries drop out.
-        Assert.Equal(SettingsRegistry.All.Count(d => d.Requires == PlatformFeature.None), available.Count);
+        Assert.Equal(SettingsRegistry.All.Count(d => d.Requires != PlatformFeature.EdgeReservation), available.Count);
 
         // Search runs through the same gate, so a hidden setting can't be found by typing its name either.
         Assert.DoesNotContain(SettingsRegistry.Search("overlay mode", NoEdgeReservation), d => d.Id == "overlay-mode");

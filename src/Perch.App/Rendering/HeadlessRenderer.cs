@@ -141,7 +141,24 @@ internal static class HeadlessRenderer
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1.5x.png"), 144);
 
+        // Do Not Disturb header button: off (muted outline), on (accent fill), hovered, and next to the update
+        // badge so the cluster spacing reads right. Rendered wide: at the default width the sample's header runs
+        // past the bitmap's right edge, which is where the cluster sits.
+        canvas.SetFloatingWidth(460);
+        canvas.SetShowDndButton(true);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_with_update_1.5x.png"), 144);
         canvas.SetUpdateAvailable(false);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_off_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_off_1.5x.png"), 144);
+        canvas.SetDndActive(true);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_on_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_on_1.5x.png"), 144);
+        canvas.HoverDndForRender(true);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_dnd_on_hover_1.5x.png"), 144);
+        canvas.HoverDndForRender(false);
+        canvas.SetDndActive(false);
+        canvas.SetShowDndButton(false);
+        canvas.SetFloatingWidth(null);
 
         // Account guardrail mismatch (Layer 2, M2): a rule binds C:\src\perch to "Acme Corp", but the stub org
         // provider reports that dir is signed into Contoso — so that session wears the pulsing red mismatch

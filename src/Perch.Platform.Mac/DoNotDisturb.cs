@@ -11,4 +11,9 @@ namespace Perch.Platform.Mac;
 public sealed class MacDoNotDisturb : IDoNotDisturb
 {
     public bool IsActive => false;   // TODO(mac): read Focus / Do Not Disturb state
+
+    // macOS has no public API to switch Focus on or off (Shortcuts can, but not from a plain app), so the
+    // header's DND button is simply not offered here.
+    public bool CanToggle => false;
+    public bool TrySetActive(bool active) => false;
 }

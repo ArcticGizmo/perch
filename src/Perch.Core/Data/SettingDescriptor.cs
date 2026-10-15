@@ -86,6 +86,10 @@ internal enum PlatformFeature
     /// <summary>Needs <c>IEdgeReservation</c> to actually reserve screen edge space — Windows only, which is
     /// why Docked mode isn't offered on macOS. See <c>docs/macos-docked-mode-investigation.md</c>.</summary>
     EdgeReservation,
+
+    /// <summary>Needs <c>IDoNotDisturb.CanToggle</c> to switch the OS Do Not Disturb on and off — Windows only,
+    /// which is why the header's DND button isn't offered on macOS.</summary>
+    DoNotDisturbToggle,
 }
 
 /// <summary>

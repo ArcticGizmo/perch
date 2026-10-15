@@ -536,6 +536,7 @@ public partial class App : Application
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
             _overlay.Canvas.UpdateRequested += () => StartUpdate();
+            _overlay.Canvas.DndToggleRequested += OnDndToggleRequested;
             // Secret: press and hold the brand mark (~700ms) to open the little arcade chooser (Invaders /
             // Crossing / Wordle). Once discovered, ArcadeUnlocked flips on and is persisted so the header's
             // right-click menu can offer a quick shortcut thereafter.
@@ -1080,6 +1081,8 @@ public partial class App : Application
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
+        // The header's Do Not Disturb button: poll the OS state only while it's shown.
+        ApplyDndButton(s);
 
         // Desktop basketball follows the effective toggle, so Quiet mode packs the hoop away and brings
         // it back at expiry like the other playful features.
@@ -1225,6 +1228,50 @@ public partial class App : Application
     }
 
     private bool DndSuppressing => _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
+
+    // ── Do Not Disturb header button ─────────────────────────────────────────────────────────────────────
+    // While the button is shown, a 5s poll mirrors the OS state onto it (DND is also flipped from the Action
+    // Center, a schedule or a Focus session, so the button can't just remember its own clicks). IsActive is a
+    // registry read, cheap enough for the UI thread, like CheckDnd.
+    private DispatcherTimer? _dndButtonPoll;
+
+    private void ApplyDndButton(AppSettings s)
+    {
+        bool show = s.ShowDndButton && PlatformServices.DoNotDisturb.CanToggle;
+        if (show)
+        {
+            if (_dndButtonPoll is null)
+            {
+                _dndButtonPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                _dndButtonPoll.Tick += (_, _) => RefreshDndButton();
+            }
+            _dndButtonPoll.Start();
+            RefreshDndButton();
+        }
+        else _dndButtonPoll?.Stop();
+    }
+
+    private void RefreshDndButton()
+    {
+        bool on;
+        try { on = PlatformServices.DoNotDisturb.IsActive; } catch { on = false; }
+        _overlay?.Canvas.SetDndActive(on);
+    }
+
+    // The header button was clicked: flip the OS state (a cross-process COM call, so off the UI thread), then
+    // re-read it so a refusal snaps the button back, and let the Social auto-close react straight away rather
+    // than on the next roster tick.
+    private void OnDndToggleRequested(bool on)
+    {
+        Task.Run(() => PlatformServices.DoNotDisturb.TrySetActive(on)).ContinueWith(t =>
+        {
+            if (!t.Result)
+                _notifier?.Show("Do Not Disturb", "Windows didn't accept the change. Try the bell in the notification centre.",
+                    ToastLevel.Info, null, null);
+            // The shell persists the new profile asynchronously; give it a moment before reading it back.
+            DispatcherTimer.RunOnce(() => { RefreshDndButton(); CheckDnd(); }, TimeSpan.FromMilliseconds(600));
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
 
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the
     // next tick): a quiet desktop toast, gated by the master notifications switch and NotifyOnFriendPost. Never

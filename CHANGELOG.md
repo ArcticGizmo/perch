@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.36] - 2026-10-15
+
+- Optional Do Not Disturb button in the overlay header (a sleeping bell)
+- One click toggles Windows Do Not Disturb
+- Follows Do Not Disturb set elsewhere (the bell is a light sleeper)
+- Friends feed closes on Do Not Disturb on newer Windows builds (it had been listening to the wrong room)
+
+---
+
 ## [v0.5.35] - 2026-10-14
 
 - Your default account shows the org `/status` shows (it had found a second opinion)
