@@ -125,10 +125,28 @@ internal static class TranscriptLocator
     /// the primary, and pinning it explicitly would move Claude's <c>.claude.json</c> lookup), or when the transcript
     /// can't be found or attributed. See <see cref="ResumeDir"/> for how the account is chosen.
     /// </summary>
-    public static string? ResumeConfigRoot(string sessionId, string cwd)
+    public static string? ResumeConfigRoot(string sessionId, string cwd) =>
+        ResumeDir(sessionId, cwd).Dir is { } dir ? InjectRoot(dir) : null;
+
+    /// <summary>The <c>CLAUDE_CONFIG_DIR</c> that runs a process under <paramref name="dir"/>: its root, or <c>null</c>
+    /// (inherit) for the primary — pinning the primary explicitly would move Claude's <c>.claude.json</c> lookup.</summary>
+    public static string? InjectRoot(ClaudeConfigDir dir) =>
+        ClaudeConfigDir.PathComparer.Equals(dir.RealRoot, ClaudeConfigSet.Instance.Primary.RealRoot) ? null : dir.Root;
+
+    /// <summary>
+    /// Every config dir <paramref name="sessionId"/> can be resumed under, in set order (primary first): the dir that
+    /// owns its transcript and each dir whose <c>projects/</c> is the same real folder (a junction or symlink onto it),
+    /// since <c>claude --resume</c> under any of them reads the same file. These are the accounts a resume — or a
+    /// running session's restart — may switch to. Empty when the transcript can't be found. Pass
+    /// <paramref name="transcriptPath"/> when it's already known, to skip the lookup.
+    /// </summary>
+    public static IReadOnlyList<ClaudeConfigDir> ResumableDirs(string sessionId, string cwd, string? transcriptPath = null)
     {
-        if (ResumeDir(sessionId, cwd).Dir is not { } dir) return null;
-        return ClaudeConfigDir.PathComparer.Equals(dir.RealRoot, ClaudeConfigSet.Instance.Primary.RealRoot) ? null : dir.Root;
+        if (OwningConfigDir(transcriptPath ?? Resolve(sessionId, cwd)) is not { } owner) return [];
+        var dirs = new List<ClaudeConfigDir>();
+        foreach (var dir in ClaudeConfigSet.Instance.All)
+            if (SeesTranscript(dir, owner) is not null) dirs.Add(dir);
+        return dirs;
     }
 
     /// <summary>
@@ -140,9 +158,13 @@ internal static class TranscriptLocator
     /// is taken only when its <c>projects/</c> is the same real folder as the owner's, so the CLI can find the
     /// transcript there.
     /// </summary>
-    internal static (ClaudeConfigDir? Dir, string Source) ResumeDir(string sessionId, string cwd)
+    internal static (ClaudeConfigDir? Dir, string Source) ResumeDir(string sessionId, string cwd) =>
+        ResumeDirFor(sessionId, Resolve(sessionId, cwd));
+
+    /// <summary><see cref="ResumeDir"/> for a transcript the caller has already found (a history row's path).</summary>
+    internal static (ClaudeConfigDir? Dir, string Source) ResumeDirFor(string sessionId, string? transcriptPath)
     {
-        if (OwningConfigDir(Resolve(sessionId, cwd)) is not { } owner) return (null, "no transcript");
+        if (OwningConfigDir(transcriptPath) is not { } owner) return (null, "no transcript");
         var set = ClaudeConfigSet.Instance;
         if (SeesTranscript(set.ForRoot(SessionAccounts.Recall(sessionId)), owner) is { } remembered)
             return (remembered, "remembered");

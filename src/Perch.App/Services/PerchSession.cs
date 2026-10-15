@@ -284,10 +284,15 @@ internal sealed class PerchSession : IDisposable
     /// <summary>Stops the process and starts <c>claude --resume</c> on the same id, in place: same conversation, same
     /// model, mode, effort and account. Its point is a fresh process — a headless one never re-reads the credentials,
     /// so this is how a session picks up a sign-in refreshed elsewhere. A turn in flight is cut off, as with End.</summary>
-    public void Restart()
+    public void Restart() => Restart(ConfigDir);
+
+    /// <summary><see cref="Restart()"/> under another account: the new process runs with <paramref name="configDir"/>
+    /// as <c>CLAUDE_CONFIG_DIR</c> (null = Perch's own environment, the primary). The caller makes sure that dir can
+    /// read this session's transcript (<see cref="TranscriptLocator.ResumableDirs"/>), or the resume finds nothing.</summary>
+    public void Restart(string? configDir)
     {
         if (!IsRunning || SessionId is not { Length: > 0 } id) return;
-        _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, ConfigDir);
+        _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, configDir);
         Conversation.AddNote($"restarting session {Shorten(id)}…");
         Restarted?.Invoke(this);
         _controller!.Stop();
@@ -306,6 +311,7 @@ internal sealed class PerchSession : IDisposable
         {
             LaunchLog.Write($"perch session restart: {TranscriptLocator.DescribeResume(next.ResumeId ?? "", Cwd)}");
             Launch(next);
+            ConfigDir = next.ConfigDir;
             Conversation.AddNote($"restarted session {Shorten(SessionId ?? "")}");
         }
         catch (Exception ex)

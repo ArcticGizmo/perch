@@ -105,3 +105,41 @@ internal static class SessionAccountChoice
             Restricted: true, GuardrailUnsatisfiable: false);
     }
 }
+
+/// <summary>The accounts an existing session can be resumed (or restarted) under, and the one it uses now.</summary>
+/// <param name="Options">De-duplicated accounts whose config dir can read the session's transcript, filtered by the
+/// folder's guardrail. Empty when nothing qualifies.</param>
+/// <param name="Current">The account the session runs, or would resume, under; null when unknown.</param>
+internal sealed record ResumeAccountSet(IReadOnlyList<AccountChoice> Options, AccountChoice? Current)
+{
+    public static ResumeAccountSet None { get; } = new(Array.Empty<AccountChoice>(), null);
+
+    /// <summary>Whether there's another account to move the session to.</summary>
+    public bool CanSwitch => Options.Any(o => !IsCurrent(o));
+
+    public bool IsCurrent(AccountChoice choice) => Current is { } c && c.Key == choice.Key;
+}
+
+/// <summary>Pure resolver for switching an existing session's account: the session's resumable config dirs
+/// (<see cref="TranscriptLocator.ResumableDirs"/>) × their live sign-ins × the guardrails. Only dirs that can read the
+/// transcript qualify — a <c>claude --resume</c> anywhere else finds no session.</summary>
+internal static class ResumeAccountChoice
+{
+    /// <param name="cwd">The session's working directory (selects the guardrail).</param>
+    /// <param name="resumable">The dirs that can read the transcript, primary first.</param>
+    /// <param name="current">The dir the session runs (or would resume) under.</param>
+    /// <param name="signIns">Every config dir's live sign-in (<c>SessionWindow.ReadSignIns</c>).</param>
+    /// <param name="rules">The account guardrails.</param>
+    public static ResumeAccountSet Resolve(
+        string? cwd,
+        IReadOnlyList<ClaudeConfigDir> resumable,
+        ClaudeConfigDir? current,
+        IReadOnlyList<AccountChoice> signIns,
+        IReadOnlyList<AccountRule>? rules)
+    {
+        var eligible = signIns.Where(s => resumable.Contains(s.Dir)).ToList();
+        if (eligible.Count == 0) return ResumeAccountSet.None;
+        var now = current is null ? null : signIns.FirstOrDefault(s => s.Dir.Equals(current));
+        return new ResumeAccountSet(SessionAccountChoice.Resolve(cwd, eligible, rules).Options, now);
+    }
+}

@@ -94,6 +94,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private string? _accountPickKey;    // that pick's account Key (dedup identity); valid when _accountPicked
     private int _accountGen;            // generation guard for the off-thread sign-in read
     private int _accountChipGen;        // generation guard for the footer account chip's off-thread org read
+    private ResumeAccountSet _accountSwitch = ResumeAccountSet.None;   // accounts the chip's menu can move the session to
 
     // Session bar
     private readonly TextBlock _projectText, _pathText, _idText, _statusText;
@@ -289,10 +290,21 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private StackPanel _resumeList = null!;
     private Border _resumeSpinnerRow = null!;
     private TextBlock _resumeSubtitle = null!;
-    private IReadOnlyList<HistoryEntry> _resumeAll = [];
+    private IReadOnlyList<HistoryEntry> _resumeAll = [];   // every project's sessions; the scope filters at render
     private List<HistoryEntry> _resumeShown = new();
     private int _resumeIndex;
     private bool _resumeLoaded;
+    private string _resumeProject = "";       // the cwd the overlay was opened in
+    private bool _resumeAllProjects;          // scope: false = _resumeProject only
+    private Border _resumeScopePill = null!;
+    private TextBlock _resumeScopeText = null!;
+    private TextBlock _resumeHint = null!;
+    private string? _resumeAutoPick;          // a `/resume <session-id>` argument: resumed as soon as the list loads
+    private int _resumeGen;                   // drops a load or account read from an earlier opening
+    // Multi-account only: each row's resume accounts (read off the UI thread, filled in as rows are shown), and the
+    // config dirs' sign-ins read once per opening.
+    private readonly Dictionary<string, ResumeAccountSet> _resumeAccounts = new();
+    private IReadOnlyList<AccountChoice> _resumeSignIns = [];
 
     /// <summary>Resolves a session id to its live (terminal-hosted) session, if any — the refuse-if-live
     /// guard's oracle. The app wires it to the monitor's latest roster.</summary>
@@ -472,6 +484,12 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             Children = { AccountIcon(13, _p.Muted), _accountChipText },
         }, _p.Raised2, _p.BorderSoft);
         _accountChip.IsVisible = false;
+        // Clickable only when the session's transcript is readable from another account's config dir (a shared,
+        // junctioned projects/): then it switches the session to that account (RefreshAccountChipAsync decides).
+        _accountChip.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton == MouseButton.Left && _accountSwitch.CanSwitch) ShowAccountSwitchMenu();
+        };
 
         // Informational (not clickable): how full the context window is — thermometer, a fill bar and the
         // percentage. Hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
@@ -1316,8 +1334,10 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     }
 
     // Shared row for the launcher recents and the in-window resume overlay. onChoose runs after the guards
-    // (live-check + heavy-resume confirm) pass; selected paints the keyboard-highlighted row.
-    private Control RecentRow(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose, bool selected = false)
+    // (live-check + heavy-resume confirm) pass; selected paints the keyboard-highlighted row. trailing sits just left
+    // of the time (the overlay's account chip).
+    private Control RecentRow(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose, bool selected = false,
+        Control? trailing = null)
     {
         // Three states: already controlled by Perch (multi-UI — open another window on it), live in a real
         // terminal (can't take over), or a plain resumable session on disk.
@@ -1352,8 +1372,14 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // No resume estimate here: picking a row opens it dormant, which costs nothing. The estimate shows above the
         // composer of the opened session, next to the send that would pay it (ShowDormantEstimate).
         var text = new StackPanel { Children = { name, sub }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 0, 0) };
-        var row = new DockPanel { Children = { dot, when, text } };
+        var row = new DockPanel { Children = { dot, when } };
         when[DockPanel.DockProperty] = Dock.Right;
+        if (trailing is not null)
+        {
+            trailing[DockPanel.DockProperty] = Dock.Right;
+            row.Children.Add(trailing);
+        }
+        row.Children.Add(text);
         var frame = new Border
         {
             CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(10, 9),
@@ -1658,6 +1684,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _resumeId = session.SessionId;   // "Resume" continues this very session
         ApplyRunState();
         RefreshBar();
+        RefreshAccountChipAsync();   // now names the account Resume would use, and can switch it
     }
 
     private async System.Threading.Tasks.Task ConfirmEndAsync()
@@ -1728,6 +1755,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         if (!ReferenceEquals(session, _session)) return;
         ApplyRunState();
         RefreshBar();
+        RefreshAccountChipAsync();   // a restart may have switched accounts
         if (session.IsRunning && IsActive) _composer.Focus();
     }
 
@@ -1740,9 +1768,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         CloseMention();
         _historyIndex = -1;   // a fresh send ends any history navigation
         // A bare, no-argument native command runs its Perch action instead of going to the CLI as text (only
-        // when there are no attachments — an attachment always means a real message to the model).
-        if (_pendingAttachments.Count == 0 && !text.Contains(' ')
-            && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
+        // when there are no attachments — an attachment always means a real message to the model). /resume also
+        // takes its argument natively: the CLI's own picker doesn't exist headless.
+        if (_pendingAttachments.Count == 0 && SlashCommandCatalog.CommandName(text) is { } name
+            && (!text.Contains(' ') || name == "resume")
+            && RunNativeCommand(name, text.TrimStart()[(name.Length + 1)..].Trim()))
         {
             _composer.Text = "";
             return;
@@ -2021,7 +2051,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     // Commands Perch answers with its own UI rather than sending to the CLI. Returns true when handled (the
     // caller then clears the composer and does not send). One place, so both the palette and a typed Enter
     // route the same way (docs/slash-command-group-a-plan.md, Step 0).
-    private bool RunNativeCommand(string name)
+    private bool RunNativeCommand(string name, string? arg = null)
     {
         switch (name)
         {
@@ -2029,7 +2059,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             case "effort": ShowEffortMenu(); return true;
             case "theme":  OpenSettingsRequested?.Invoke("appearance"); return true;
             case "config": OpenClaudeDesktop(); return true;
-            case "resume": ShowResumeOverlay(); return true;
+            case "resume": ShowResumeOverlay(arg); return true;
             case "login":  RunClaudeAuth("auth login");  return true;
             case "logout": RunClaudeAuth("auth logout"); return true;
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
@@ -2525,12 +2555,26 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
 
         var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true) { [DockPanel.DockProperty] = Dock.Right };
         close.Click += CloseResumeOverlay;
+        // Scope toggle: this project's sessions (the default) or every project's. Tab flips it from the search box.
+        _resumeScopeText = new TextBlock { FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = _p.Body, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
+        _resumeScopePill = Pill(_resumeScopeText, _p.Raised2, _p.BorderSoft);
+        _resumeScopePill.Margin = new Thickness(0, 0, 8, 0);
+        _resumeScopePill.Cursor = new Cursor(StandardCursorType.Hand);
+        _resumeScopePill[ToolTip.TipProperty] = "Show this project's sessions or every project's (Tab)";
+        _resumeScopePill[DockPanel.DockProperty] = Dock.Right;
+        _resumeScopePill.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            ToggleResumeScope();
+            _resumeSearch.Focus();
+        };
         var titleRow = new DockPanel
         {
             Margin = new Thickness(0, 0, 0, 12), [DockPanel.DockProperty] = Dock.Top,
             Children =
             {
                 close,
+                _resumeScopePill,
                 new StackPanel { Children =
                 {
                     new TextBlock { Text = "Resume a session", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 17, Foreground = _p.Title },
@@ -2550,12 +2594,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
                 Children =
                 {
                     titleRow, searchFrame, _resumeSpinnerRow,
-                    new TextBlock
+                    (_resumeHint = new TextBlock
                     {
-                        Text = "↑↓ select   ·   ↵ resume here   ·   ⇧↵ new window   ·   esc close",
-                        FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint,
+                        FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, TextWrapping = TextWrapping.Wrap,
                         Margin = new Thickness(2, 10, 2, 0), [DockPanel.DockProperty] = Dock.Bottom,
-                    },
+                    }),
                     new ScrollViewer
                     {
                         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -2571,19 +2614,29 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _resumeOverlay = new Panel { IsVisible = false, Children = { scrim, card } };
     }
 
-    private void ShowResumeOverlay()
+    /// <summary>Opens the overlay. <paramref name="arg"/> is <c>/resume</c>'s argument: a session id resumes that
+    /// session straight away (from any project); anything else pre-fills the search.</summary>
+    private void ShowResumeOverlay(string? arg = null)
     {
-        var project = _cwd;
+        var query = arg?.Trim() ?? "";
+        bool isId = Guid.TryParse(query, out _);
+        _resumeGen++;
+        _resumeProject = _cwd;
+        _resumeAllProjects = isId;   // an id names one session, wherever it ran
+        _resumeAutoPick = isId ? query : null;
         _resumeOverlay.IsVisible = true;
-        _resumeSearch.Text = "";
         _resumeIndex = 0;
         _resumeLoaded = false;
         _resumeAll = [];
         _resumeShown = new();
+        _resumeAccounts.Clear();
+        _resumeSignIns = [];
         _resumeList.Children.Clear();
         _resumeSpinnerRow.IsVisible = true;
-        _resumeSubtitle.Text = System.IO.Path.GetFileName(project.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : project;
-        LoadResumeList(project);
+        _resumeSearch.Text = query;
+        _resumeSearch.CaretIndex = query.Length;
+        ApplyResumeScope();
+        LoadResumeList();
         Dispatcher.UIThread.Post(() => _resumeSearch.Focus(), DispatcherPriority.Input);
     }
 
@@ -2593,20 +2646,56 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         if (CanCompose) _composer.Focus();
     }
 
-    private void LoadResumeList(string project)
+    private void ToggleResumeScope()
     {
+        _resumeAllProjects = !_resumeAllProjects;
+        _resumeIndex = 0;
+        ApplyResumeScope();
+        RenderResumeOverlay();
+    }
+
+    private void ApplyResumeScope()
+    {
+        var name = System.IO.Path.GetFileName(_resumeProject.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : _resumeProject;
+        _resumeSubtitle.Text = _resumeAllProjects ? "every project" : name;
+        _resumeScopeText.Text = _resumeAllProjects ? "All projects" : "This project";
+        _resumeHint.Text = "↑↓ select  ·  ↵ resume here  ·  ⇧↵ new window  ·  tab " +
+                           (_resumeAllProjects ? "this project" : "all projects") + "  ·  esc close";
+        _resumeSearch.PlaceholderText = _resumeAllProjects
+            ? "Search every project's sessions — name, title, folder or id"
+            : "Search this project's sessions — name, title or id";
+    }
+
+    private void LoadResumeList()
+    {
+        int gen = _resumeGen;
         var active = ActiveSessionIdsProvider?.Invoke() ?? new HashSet<string>();
-        System.Threading.Tasks.Task.Run(() => SessionHistory.ListAll(active)).ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var all = SessionHistory.ListAll(active);
+            var signIns = ClaudeConfigSet.Instance.IsMulti ? ReadSignIns() : [];
+            return (all, signIns);
+        }).ContinueWith(t =>
         {
             Dispatcher.UIThread.Post(() =>
             {
-                if (_closed || !_resumeOverlay.IsVisible) return;
+                if (_closed || !_resumeOverlay.IsVisible || gen != _resumeGen) return;
                 _resumeSpinnerRow.IsVisible = false;
                 if (!t.IsCompletedSuccessfully) { _resumeLoaded = true; RenderResumeOverlay(); return; }
-                _resumeAll = t.Result
-                    .Where(e => !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd) && SameProject(e.Cwd, project))
+                _resumeAll = t.Result.all
+                    .Where(e => !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd))
                     .ToList();
+                _resumeSignIns = t.Result.signIns;
                 _resumeLoaded = true;
+                if (_resumeAutoPick is { } id)
+                {
+                    _resumeAutoPick = null;
+                    if (_resumeAll.FirstOrDefault(e => string.Equals(e.SessionId, id, StringComparison.OrdinalIgnoreCase)) is { } hit)
+                    {
+                        _ = ChooseResume(hit, x => ResumeChosen(x, newWindow: false));
+                        return;
+                    }
+                }
                 RenderResumeOverlay();
             });
         });
@@ -2616,20 +2705,24 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         if (!_resumeOverlay.IsVisible) return;
         var query = _resumeSearch.Text?.Trim() ?? "";
-        var matches = (query.Length > 0 ? _resumeAll.Where(e => MatchesSearch(e, query)) : _resumeAll)
+        var scoped = _resumeAllProjects ? _resumeAll : _resumeAll.Where(e => SameProject(e.Cwd, _resumeProject));
+        var matches = (query.Length > 0 ? scoped.Where(e => MatchesSearch(e, query)) : scoped)
             .Take(SearchResultCap).ToList();
         _resumeShown = matches;
         if (matches.Count > 0) _resumeIndex = Math.Clamp(_resumeIndex, 0, matches.Count - 1);
 
         _resumeList.Children.Clear();
         for (int i = 0; i < matches.Count; i++)
-            _resumeList.Children.Add(RecentRow(matches[i], e => ResumeChosen(e, newWindow: false), selected: i == _resumeIndex));
+            _resumeList.Children.Add(RecentRow(matches[i], e => ResumeChosen(e, newWindow: false), selected: i == _resumeIndex,
+                trailing: ResumeAccountChip(matches[i])));
         if (matches.Count == 0 && _resumeLoaded)
             _resumeList.Children.Add(new TextBlock
             {
-                Text = query.Length > 0 ? "no sessions match that search" : "no past sessions in this project",
+                Text = query.Length > 0 ? "no sessions match that search"
+                     : _resumeAllProjects ? "no past sessions" : "no past sessions in this project — Tab shows every project",
                 FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, Margin = new Thickness(10, 6),
             });
+        EnsureResumeAccounts(matches);
 
         if (_resumeIndex >= 0 && _resumeIndex < _resumeList.Children.Count)
             Dispatcher.UIThread.Post(() =>
@@ -2647,6 +2740,83 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
+    // A row's account chip: shown only when the session can resume under more than one account (its transcript sits in
+    // a projects/ that several config dirs share). Names the account it resumes under; click picks another. Live rows
+    // get none — a running session switches from its own window's footer chip.
+    private Control? ResumeAccountChip(HistoryEntry e)
+    {
+        if (!_resumeAccounts.TryGetValue(e.SessionId, out var set) || !set.CanSwitch) return null;
+        if (e.IsActive || LiveLookup?.Invoke(e.SessionId) is { IsPerchControlled: true }) return null;
+        var label = set.Current?.Label ?? "account";
+        var chip = Pill(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                AccountIcon(11, _p.Muted),
+                new TextBlock { Text = label + "  ▾", FontSize = 11.5, FontFamily = _p.Body, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center },
+            },
+        }, _p.Raised2, _p.BorderSoft);
+        chip.Padding = new Thickness(8, 2);
+        chip.Margin = new Thickness(8, 0, 0, 0);
+        chip.Cursor = new Cursor(StandardCursorType.Hand);
+        chip[ToolTip.TipProperty] = $"Resumes under {label} — click to resume under another account";
+        chip.PointerReleased += (_, ev) =>
+        {
+            if (ev.InitialPressMouseButton != MouseButton.Left) return;
+            ev.Handled = true;   // the row's own click would resume under the current account
+            ShowResumeAccountMenu(chip, e, set);
+        };
+        return chip;
+    }
+
+    private void ShowResumeAccountMenu(Control anchor, HistoryEntry e, ResumeAccountSet set)
+    {
+        var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
+        foreach (var choice in set.Options)
+        {
+            bool current = set.IsCurrent(choice);
+            var item = new MenuItem { Header = (current ? "✓  " : "     ") + "Resume under " + choice.Label };
+            var picked = choice;
+            item.Click += async (_, _) =>
+            {
+                // Remembered, so every later resume of this session (and this one) runs under it.
+                if (!set.IsCurrent(picked)) SessionAccounts.Remember(e.SessionId, TranscriptLocator.InjectRoot(picked.Dir));
+                _resumeAccounts.Remove(e.SessionId);
+                await ChooseResume(e, x => ResumeChosen(x, newWindow: false));
+            };
+            flyout.Items.Add(item);
+        }
+        if (flyout.Items.Count > 0) flyout.ShowAt(anchor);
+    }
+
+    // Reads the resume accounts of the shown rows not yet read, off the UI thread, then re-renders with their chips.
+    // Multi-account machines only; with one config dir there's nothing to switch to.
+    private void EnsureResumeAccounts(IReadOnlyList<HistoryEntry> shown)
+    {
+        if (!ClaudeConfigSet.Instance.IsMulti || _resumeSignIns.Count < 2) return;
+        var missing = shown.Where(e => !_resumeAccounts.ContainsKey(e.SessionId)).ToList();
+        if (missing.Count == 0) return;
+        foreach (var e in missing) _resumeAccounts[e.SessionId] = ResumeAccountSet.None;   // in flight
+        int gen = _resumeGen;
+        var signIns = _resumeSignIns;
+        var rules = AccountRulesProvider?.Invoke();
+        System.Threading.Tasks.Task.Run(() => missing.Select(e => (e.SessionId, Set: ResumeAccountChoice.Resolve(e.Cwd,
+                TranscriptLocator.ResumableDirs(e.SessionId, e.Cwd, e.Path),
+                TranscriptLocator.ResumeDirFor(e.SessionId, e.Path).Dir, signIns, rules))).ToList())
+            .ContinueWith(t => Dispatcher.UIThread.Post(() =>
+            {
+                if (_closed || gen != _resumeGen || !t.IsCompletedSuccessfully) return;
+                bool any = false;
+                foreach (var (id, set) in t.Result)
+                {
+                    _resumeAccounts[id] = set;
+                    any |= set.CanSwitch;
+                }
+                if (any) RenderResumeOverlay();
+            }));
+    }
+
     private void MoveResume(int delta)
     {
         if (_resumeShown.Count == 0) return;
@@ -2660,6 +2830,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         {
             case Key.Down: MoveResume(1); e.Handled = true; break;
             case Key.Up: MoveResume(-1); e.Handled = true; break;
+            case Key.Tab: ToggleResumeScope(); e.Handled = true; break;
             case Key.Enter:
                 e.Handled = true;
                 if (_resumeShown.Count > 0 && _resumeIndex >= 0 && _resumeIndex < _resumeShown.Count)
@@ -3603,31 +3774,96 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         int gen = ++_accountChipGen;
         _dormantAccountDir = null;
+        _accountSwitch = ResumeAccountSet.None;
         if (!ClaudeConfigSet.Instance.IsMulti) { _accountChip.IsVisible = false; return; }
         var root = _session?.ConfigDir;   // null = inherited → primary account
-        var dormantId = _session is { IsDormant: true } d ? d.SessionId : null;
+        // Dormant, or ended (its Resume button wakes it the same way): it runs next under the account a resume picks.
+        var dormantId = _session is { IsDormant: true } or { HasEnded: true } ? _session.SessionId : null;
+        var sessionId = _session?.SessionId;
         var cwd = _cwd;
+        var rules = AccountRulesProvider?.Invoke();
         Task.Run(() =>
         {
             if (dormantId is not null) root = TranscriptLocator.ResumeConfigRoot(dormantId, cwd);   // as LaunchConfigDir
             var dir = (root is { Length: > 0 } r ? ClaudeConfigSet.Instance.ForRoot(r) : null)
                       ?? ClaudeConfigSet.Instance.Primary;
-            var signIn = ClaudeJsonReader.ReadSignIn(dir);
-            return (Root: root, Choice: new AccountChoice(dir, signIn.Org, signIn.Email));
+            var signIns = ReadSignIns();
+            var choice = signIns.FirstOrDefault(s => s.Dir.Equals(dir)) ?? new AccountChoice(dir, null);
+            // The other accounts this session could run under: those whose config dir reads the same transcript.
+            var switchable = sessionId is null ? ResumeAccountSet.None
+                : ResumeAccountChoice.Resolve(cwd, TranscriptLocator.ResumableDirs(sessionId, cwd), dir, signIns, rules);
+            return (Root: root, Choice: choice, Switch: switchable);
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (_closed || gen != _accountChipGen) return;
             if (!t.IsCompletedSuccessfully) { _accountChip.IsVisible = false; return; }
-            var (resolvedRoot, choice) = t.Result;
+            var (resolvedRoot, choice, switchable) = t.Result;
             if (dormantId is not null) _dormantAccountDir = resolvedRoot;
+            _accountSwitch = switchable;
             _accountChipText.Text = choice.Label;
             var email = choice.Org?.AccountEmail ?? choice.Email;
             var verb = dormantId is not null ? "Resumes under account" : "Running under account";
-            _accountChip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(email)
+            var tip = string.IsNullOrWhiteSpace(email)
                 ? $"{verb}: {choice.Label}"
                 : $"{verb}: {choice.Label} · {email}";
+            _accountChip[ToolTip.TipProperty] = switchable.CanSwitch ? tip + "\nClick to switch to another account" : tip;
+            _accountChip.Cursor = new Cursor(switchable.CanSwitch ? StandardCursorType.Hand : StandardCursorType.Arrow);
             _accountChip.IsVisible = true;
         }));
+    }
+
+    // The chip's menu: every account whose config dir can read this session's transcript, the current one ticked.
+    private void ShowAccountSwitchMenu()
+    {
+        var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        foreach (var choice in _accountSwitch.Options)
+        {
+            bool current = _accountSwitch.IsCurrent(choice);
+            var email = choice.Org?.AccountEmail ?? choice.Email;
+            var name = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
+                ? choice.Label : $"{choice.Label}  ·  {email}";
+            var item = new MenuItem { Header = (current ? "✓  " : "     ") + name, IsEnabled = !current };
+            var picked = choice;
+            item.Click += async (_, _) => await SwitchAccountAsync(picked);
+            flyout.Items.Add(item);
+        }
+        if (flyout.Items.Count > 0) flyout.ShowAt(_accountChip);
+    }
+
+    /// <summary>Moves the viewed session to <paramref name="choice"/>'s account. A running session restarts in place
+    /// under it (<see cref="PerchSession.Restart(string?)"/>, which remembers the new account at launch); one that isn't
+    /// running just remembers it, so its next wake or Resume runs there (<see cref="TranscriptLocator.ResumeDir"/>).</summary>
+    private async System.Threading.Tasks.Task SwitchAccountAsync(AccountChoice choice)
+    {
+        if (_session is not { SessionId: { Length: > 0 } id } session) return;
+        var root = TranscriptLocator.InjectRoot(choice.Dir);
+        if (!session.IsRunning)
+        {
+            if (session.IsRestarting) return;
+            SessionAccounts.Remember(id, root);
+            Conv.AddNote($"will resume under {choice.Label}");
+            RefreshAccountChipAsync();
+            return;
+        }
+
+        // Folder trust lives in each config dir's .claude.json, so the new account gets its own check.
+        bool trusted;
+        try { (_, trusted) = await ResumeGate.ReadTrustAsync(session.Cwd, () => root); }
+        catch { trusted = false; }
+        if (!trusted && !await ResumeGate.ConfirmTrustAsync(this, root, session.Cwd)) return;
+
+        var conv = session.Conversation;
+        bool busy = conv.TurnActive || conv.PendingPermission is not null || conv.BackgroundTasks.RunningCount > 0;
+        if (!await ConfirmDialog.ShowAsync(this, $"Switch to {choice.Label}?",
+                "Restarts the Claude process on the same conversation under this account. The prompt cache doesn't " +
+                "carry across accounts, so the next message re-sends the whole context." +
+                (busy ? " The turn in progress and any background tasks are stopped." : ""),
+                "Switch", "Cancel", anchor: _accountChip))
+            return;
+        if (!ReferenceEquals(_session, session) || !session.IsRunning) return;   // it moved on while a dialog was up
+        conv.AddNote($"switching to {choice.Label}…");
+        LaunchLog.Write($"perch session switch account: session={id} -> CLAUDE_CONFIG_DIR={LaunchLog.Show(root)}");
+        session.Restart(root);
     }
 
     // A small owner-drawn account glyph (head + shoulders) so the account chip doesn't lean on a font emoji.
@@ -3995,6 +4231,22 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         UsageProvider = () => info;
         ShowUsageOverlay();
+    }
+
+    /// <summary>HeadlessRenderer: open the /resume overlay over fixed rows (and their account sets) instead of the
+    /// machine's real transcripts.</summary>
+    internal void ShowResumeOverlayForRender(IReadOnlyList<HistoryEntry> entries,
+        IReadOnlyDictionary<string, ResumeAccountSet> accounts, bool allProjects)
+    {
+        ShowResumeOverlay();
+        _resumeGen++;   // drop the real load ShowResumeOverlay started
+        _resumeAllProjects = allProjects;
+        ApplyResumeScope();
+        _resumeSpinnerRow.IsVisible = false;
+        _resumeAll = entries;
+        _resumeLoaded = true;
+        foreach (var (id, set) in accounts) _resumeAccounts[id] = set;
+        RenderResumeOverlay();
     }
 
     /// <summary>HeadlessRenderer: open the Ctrl+F find bar with a query and light up its matches for a capture.</summary>
