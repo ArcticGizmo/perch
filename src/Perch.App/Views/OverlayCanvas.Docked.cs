@@ -4,6 +4,7 @@ using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
+using Perch.Avalonia.Theming;
 using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Platform;
@@ -515,18 +516,19 @@ public sealed partial class OverlayCanvas
         OverlayDraw.Panel(ctx, rect, BgFillBrush, null, DockTileRadius);
         if (needsYou) OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(color, 0.15 + 0.25 * pulse), null, DockTileRadius);
         if (hovered) OverlayDraw.Panel(ctx, rect, RowHoverBrush, null, DockTileRadius);
-        // Running is the normal, nothing-to-do state, so its ring is a quiet hint of green. Only a session
-        // that needs you should pull the eye.
-        var ring = s.Status == SessionStatus.Running
-            ? OverlayDraw.Pen(OverlayDraw.Brush(color, 0.4), 1)
-            : OverlayDraw.Pen(OverlayDraw.Brush(color), needsYou ? 2 : 1.5);
+        // Only a session that needs you should pull the eye. Running is the normal, nothing-to-do state, so
+        // its ring is a quiet green. Idle recedes further: a barely-there ring and dimmed initials.
+        bool idle = s.Status == SessionStatus.Idle;
+        var ring = needsYou                         ? OverlayDraw.Pen(OverlayDraw.Brush(color), 2)
+                 : s.Status == SessionStatus.Running ? OverlayDraw.Pen(OverlayDraw.Brush(color, 0.6), 1.25)
+                 :                                     OverlayDraw.Pen(OverlayDraw.Brush(color, 0.2), 1);
         OverlayDraw.Panel(ctx, rect, null, ring, DockTileRadius);
 
         string name = s.DisplayName ?? "";
         if (!_dockInitials.TryGetValue(name, out var initials))
             _dockInitials[name] = initials = SessionInitials.For(name);
         var label = OverlayDraw.Text(initials, 12,
-            s.Status == SessionStatus.Idle ? MutedBrush : FgBrush, FontWeight.Bold);
+            idle ? OverlayDraw.Brush(Palette.Muted, 0.55) : FgBrush, FontWeight.Bold);
         OverlayDraw.TextLeftMid(ctx, label, rect.Center.X - label.Width / 2, rect.Center.Y);
 
         string? badge = s.Status switch
