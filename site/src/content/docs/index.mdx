@@ -1,0 +1,112 @@
+---
+title: Perch
+description: Know the moment a Claude Code session needs you, and get straight back to it.
+template: splash
+hero:
+  tagline: Know the moment a Claude Code session needs you, and get straight back to it, whether it's in a terminal, your IDE, or Perch itself.
+  image:
+    file: ../../assets/screens/overlay.png
+    alt: The Perch overlay panel listing sessions in different states, with usage bars at the top.
+  actions:
+    - text: Install
+      link: /perch/getting-started/install/
+      icon: right-arrow
+    - text: What's new
+      link: /perch/changelog/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/ArcticGizmo/perch
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import sessionDark from '../../assets/screens/session-window-dark.png';
+import sessionLight from '../../assets/screens/session-window-light.png';
+import roostDark from '../../assets/screens/roost-dark.png';
+import roostLight from '../../assets/screens/roost-light.png';
+
+Running several Claude Code sessions at once means a lot of checking. Is that one finished? Is this one stuck on
+a permission prompt? Perch does the checking for you. It's a **Windows and macOS** tray app that watches every
+session in the background, **alerts you** when one needs you, and gets you back to it in one click.
+
+## 1. Know when a session needs you
+
+Every session sits in one of four states, shown in an always-on-top panel with counts in its header:
+
+| State | What it means |
+| --- | --- |
+| **Running** | Working, with the current tool call and a timer under it. |
+| **Idle** | Open, but not doing anything. |
+| **Waiting on you** | Stopped on a permission prompt or a question. |
+| **Done** | Finished, and not yet acknowledged. The panel flashes and a notification fires. |
+
+<CardGrid>
+  <Card title="Alerts wherever you are" icon="information">
+    Desktop toasts and chimes when a session finishes or starts waiting, plus optional push to your phone via
+    ntfy. Lock your machine and Perch can push every alert, so nothing sits waiting while you're away.
+  </Card>
+  <Card title="Ahead of your limits" icon="warning">
+    5-hour, weekly and monthly-spend bars for each account, coloured by whether you're on pace for the window.
+  </Card>
+</CardGrid>
+
+## 2. Jump straight back in
+
+Click a session in the panel, or click its notification, and Perch takes you to it:
+
+<CardGrid>
+  <Card title="The terminal" icon="seti:shell">
+    Perch brings forward the exact window the session is running in, not just the terminal app.
+  </Card>
+  <Card title="Your IDE" icon="seti:code-search">
+    Sessions running in VS Code, Cursor or a JetBrains IDE bring that IDE forward, and can show its icon in
+    place of the status dot. (Windows)
+  </Card>
+</CardGrid>
+
+## 3. Or run it from Perch
+
+Perch can also start and drive Claude Code sessions itself, so you can answer without switching apps at all.
+
+### The session window
+
+Approve prompts, reply, @-mention files, attach images and run slash commands. Tool calls show as readable
+cards, sub-agents get their own tabs, and a changed-files panel tracks what the session touched.
+
+<Image src={sessionDark} alt="A Perch session window with a permission prompt waiting for approval." class="light:sl-hidden" />
+<Image src={sessionLight} alt="A Perch session window with a permission prompt waiting for approval." class="dark:sl-hidden" />
+
+### Roost
+
+Every session side by side in one window, grouped into tabs, with the ones that need you sorted to the top.
+Answer a prompt right in its tile.
+
+<Image src={roostDark} alt="The Roost window showing six sessions in a grid with a status rail on the left." class="light:sl-hidden" />
+<Image src={roostLight} alt="The Roost window showing six sessions in a grid with a status rail on the left." class="dark:sl-hidden" />
+
+## And the rest
+
+<CardGrid>
+  <Card title="Stats" icon="document">
+    Sessions, active time, tokens and estimated cost by project, branch, tool and model.
+  </Card>
+  <Card title="History & search" icon="magnifier">
+    Read any past transcript, or search across all of them.
+  </Card>
+  <Card title="Make it yours" icon="pencil">
+    Light and dark themes, a theme designer, a reorderable panel, and a searchable settings catalogue with a
+    live preview.
+  </Card>
+  <Card title="Several accounts" icon="random">
+    Watch more than one Claude config directory at once, with a warning when a session is under the wrong
+    account.
+  </Card>
+</CardGrid>
+
+## How it works
+
+Perch reads Claude Code's own files under `~/.claude/` and adds a few hooks to Claude Code's settings for you
+(no plugin to install). Your session contents never leave your machine. The only network calls are update
+checks and the features you turn on. See [Privacy](/perch/privacy/) for the full list.

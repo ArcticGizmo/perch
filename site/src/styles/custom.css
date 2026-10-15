@@ -1,0 +1,25 @@
+/* Perch's amber brand accent, matching docs/perch-overview.html. Starlight's accent scale: low = tinted
+   backgrounds, base = links/buttons, high = text on low. */
+:root {
+  --sl-color-accent-low: #3a2508;
+  --sl-color-accent: #e8a13c;
+  --sl-color-accent-high: #f7d6a6;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #f6e3c6;
+  --sl-color-accent: #8a4e0c;
+  --sl-color-accent-high: #4a2905;
+}
+
+/* The overlay render is tall and narrow; keep it from dominating the splash hero. */
+.hero img {
+  max-height: 32rem;
+  width: auto;
+  border-radius: 0.75rem;
+}
+
+.sl-markdown-content img {
+  border-radius: 0.5rem;
+  border: 1px solid var(--sl-color-gray-5);
+}

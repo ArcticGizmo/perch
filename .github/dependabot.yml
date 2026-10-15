@@ -9,3 +9,15 @@ updates:
     groups:
       actions:
         patterns: ['*']
+
+  # The docs site's exact-pinned npm dependencies (site/package.json + package-lock.json). The cooldown keeps a
+  # release at least two weeks old before it's proposed.
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      site:
+        patterns: ['*']

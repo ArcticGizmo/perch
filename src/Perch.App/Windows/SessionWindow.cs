@@ -3964,12 +3964,12 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // the bar's branch chip is captured. Bump the generation so the in-flight (null) load from ShowThread
         // is dropped rather than hiding the chip back.
         _branchGen++;
-        ApplyBranch(new GitRepoStatus("inc-exploration", "origin/inc-exploration", 2, 0, []));
+        ApplyBranch(new GitRepoStatus("feature-x", "origin/feature-x", 2, 0, []));
         // The render config set is pinned (single account), so the live account read would hide the chip — seed a
         // sample so the footer's account chip (and its wrapping alongside the other chips) is captured.
         _accountChipGen++;
-        _accountChipText.Text = "Redux InControl";
-        _accountChip[ToolTip.TipProperty] = "Running under account: Redux InControl";
+        _accountChipText.Text = "Acme Corp";
+        _accountChip[ToolTip.TipProperty] = "Running under account: Acme Corp";
         _accountChip.IsVisible = true;
         RefreshBar();
     }
