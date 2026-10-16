@@ -64,6 +64,10 @@ internal sealed class WorkItemsWindow : Window
     private string _detailSignature = "";
     private string _sessionsSignature = "";
     private bool _editingNotes;
+    private string? _notesDraft;
+    // A change the window made itself (rebuild the pane at once) vs one from elsewhere — a scan's write, the CLI, a
+    // hand edit — which waits while the user is typing in the pane (_detailStale), then lands when they leave the field.
+    private bool _ownChange, _detailStale;
     private StackPanel? _sessionsPanel;
     private TextBox? _nameBox, _logBox;
 
@@ -182,6 +186,7 @@ internal sealed class WorkItemsWindow : Window
 
         _host.Changed += OnHostChanged;
         Closed += (_, _) => _host.Changed -= OnHostChanged;
+        _detailHost.AddHandler(LostFocusEvent, (_, _) => OnDetailLostFocus(), handledEventsToo: true);
         Refresh();
     }
 
@@ -193,6 +198,7 @@ internal sealed class WorkItemsWindow : Window
             if (item.Status == WorkItemStatus.Done) _showDone.IsChecked = true;
             _selectedId = itemId;
             _editingNotes = false;
+            _notesDraft = null;
             _detailSignature = "";
         }
         Refresh();
@@ -216,7 +222,38 @@ internal sealed class WorkItemsWindow : Window
         FillSessions(_sessionsPanel, item);
     }
 
-    private void OnHostChanged() => Refresh();
+    private void OnHostChanged()
+    {
+        RefreshList();
+        if (!_ownChange && TypingInDetail()) { _detailStale = true; return; }
+        RenderDetail();
+    }
+
+    // Runs one of the window's own writes, so the Changed it raises rebuilds the pane straight away.
+    private T Own<T>(Func<T> act)
+    {
+        _ownChange = true;
+        try { return act(); }
+        finally { _ownChange = false; }
+    }
+
+    // The keyboard focus is in a text field inside the detail pane.
+    private bool TypingInDetail() =>
+        FocusManager?.GetFocusedElement() is Visual v
+        && (v as TextBox ?? v.FindAncestorOfType<TextBox>()) is { } box
+        && _detailHost.IsVisualAncestorOf(box);
+
+    // Focus left a field: apply an outside change that waited for it.
+    private void OnDetailLostFocus()
+    {
+        if (!_detailStale) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_detailStale || TypingInDetail()) return;
+            _detailStale = false;
+            RenderDetail();
+        }, DispatcherPriority.Background);
+    }
 
     private void Refresh()
     {
@@ -317,6 +354,7 @@ internal sealed class WorkItemsWindow : Window
     {
         _selectedId = id;
         _editingNotes = false;
+        _notesDraft = null;
         _detailSignature = "";
         Refresh();
         _detailScroll.Offset = default;
@@ -326,7 +364,7 @@ internal sealed class WorkItemsWindow : Window
     {
         var name = _composer.Text?.Trim() ?? "";
         if (name.Length == 0) { _composer.Focus(); return; }
-        if (_host.Create(name) is not { } item) return;
+        if (Own(() => _host.Create(name)) is not { } item) return;
         _composer.Text = "";
         Select(item.Id);
     }
@@ -386,7 +424,7 @@ internal sealed class WorkItemsWindow : Window
         {
             var n = _nameBox!.Text?.ReplaceLineEndings(" ").Trim() ?? "";
             if (n.Length == 0) { _nameBox.Text = item.Name; return; }
-            if (n != item.Name) _host.Mutate(item.Id, i => { i.Name = n; i.AddLog($"Renamed to \"{n}\"", byPerch: true); });
+            if (n != item.Name) Own(() => _host.Mutate(item.Id, i => { i.Name = n; i.AddLog($"Renamed to \"{n}\"", byPerch: true); }));
         }
         _nameBox.KeyDown += (_, e) =>
         {
@@ -429,7 +467,7 @@ internal sealed class WorkItemsWindow : Window
             bool ok = await ConfirmDialog.ShowAsync(this, "Delete this work item?",
                 $"\"{item.Name}\" and its notes, links and log are deleted. Its sessions aren't touched. "
                 + "To finish an item and keep its history, mark it Done instead.", "Delete", "Cancel", delete);
-            if (ok) { _host.Delete(item.Id); _selectedId = null; Refresh(); }
+            if (ok) { Own(() => _host.Delete(item.Id)); _selectedId = null; Refresh(); }
         };
         var actions = new Grid { Margin = new Thickness(0, 16, 0, 0) };
         actions.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { newSession, openFile, reveal } });
@@ -465,7 +503,7 @@ internal sealed class WorkItemsWindow : Window
                 Margin = new Thickness(st == WorkItemStatus.Active ? 0 : -1, 0, 0, 0),
                 Cursor = new Cursor(StandardCursorType.Hand),
             };
-            b.Click += (_, _) => _host.SetStatus(item.Id, st);
+            b.Click += (_, _) => Own(() => _host.SetStatus(item.Id, st));
             row.Children.Add(b);
         }
         return row;
@@ -490,7 +528,7 @@ internal sealed class WorkItemsWindow : Window
             b.Click += (_, _) =>
             {
                 flyout.Hide();
-                if (!on) _host.Mutate(item.Id, i => i.Colour = name);
+                if (!on) Own(() => _host.Mutate(item.Id, i => i.Colour = name));
             };
             grid.Children.Add(b);
         }
@@ -522,8 +560,8 @@ internal sealed class WorkItemsWindow : Window
             ToolTip.SetTip(urlText, link.Url);
             var remove = IconButton("✕", "Remove link");
             var target = link;
-            remove.Click += (_, _) => _host.Mutate(item.Id, i =>
-                i.Links.RemoveAll(l => l.Url == target.Url && l.Label == target.Label) > 0);
+            remove.Click += (_, _) => Own(() => _host.Mutate(item.Id, i =>
+                i.Links.RemoveAll(l => l.Url == target.Url && l.Label == target.Label) > 0));
             var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
             Grid.SetColumn(label, 0);
             Grid.SetColumn(urlText, 1);
@@ -553,7 +591,7 @@ internal sealed class WorkItemsWindow : Window
             var url = urlBox.Text?.Trim() ?? "";
             if (url.Length == 0) { urlBox.Focus(); return; }
             var label = labelBox.Text?.Trim() ?? "";
-            _host.Mutate(item.Id, i => i.Links.Add(new WorkLink { Label = label, Url = url }));
+            Own(() => _host.Mutate(item.Id, i => i.Links.Add(new WorkLink { Label = label, Url = url })));
         }
         add.Click += (_, _) => Commit();
         urlBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
@@ -580,22 +618,26 @@ internal sealed class WorkItemsWindow : Window
         Control action;
         if (_editingNotes)
         {
+            // The draft outlives a rebuild of the pane (a status click, a scan's write), so unsaved notes are never lost.
             var box = new TextBox
             {
-                Text = item.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 13, MinHeight = 140,
-                PlaceholderText = "A goal, a plan, a scratchpad. Markdown.", VerticalContentAlignment = VerticalAlignment.Top,
+                Text = _notesDraft ?? item.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 13,
+                MinHeight = 140, PlaceholderText = "A goal, a plan, a scratchpad. Markdown.",
+                VerticalContentAlignment = VerticalAlignment.Top,
             };
+            box.TextChanged += (_, _) => _notesDraft = box.Text;
             var save = SolidButton("Save");
             save.Click += (_, _) =>
             {
                 _editingNotes = false;
+                _notesDraft = null;
                 var text = box.Text ?? "";
-                if (_host.Mutate(item.Id, i => { if (i.Notes == text.Trim()) return false; i.Notes = text; return true; }) is null)
-                    RenderDetail();
-                else { _detailSignature = ""; RenderDetail(); }
+                Own(() => _host.Mutate(item.Id, i => { if (i.Notes == text.Trim()) return false; i.Notes = text; return true; }));
+                _detailSignature = "";
+                RenderDetail();
             };
             var cancel = OutlineButton("Cancel", Muted);
-            cancel.Click += (_, _) => { _editingNotes = false; _detailSignature = ""; RenderDetail(); };
+            cancel.Click += (_, _) => { _editingNotes = false; _notesDraft = null; _detailSignature = ""; RenderDetail(); };
             body = new StackPanel
             {
                 Spacing = 8,
@@ -733,7 +775,7 @@ internal sealed class WorkItemsWindow : Window
             },
         };
         var remove = IconButton("✕", "Take out of this item");
-        remove.Click += (_, _) => _host.RemoveSession(item.Id, m.SessionId);
+        remove.Click += (_, _) => Own(() => _host.RemoveSession(item.Id, m.SessionId));
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto") };
         Grid.SetColumn(dot, 0);
@@ -788,7 +830,7 @@ internal sealed class WorkItemsWindow : Window
         var items = new List<Control>();
         foreach (var s in candidates)
             items.Add(Item(s.IsDormant ? s.DisplayName + " (not running)" : s.DisplayName,
-                () => _host.AddSession(itemId, s.SessionId, s.DisplayName, s.Cwd, WorkJoin.Manual)));
+                () => Own(() => _host.AddSession(itemId, s.SessionId, s.DisplayName, s.Cwd, WorkJoin.Manual))));
         if (items.Count == 0)
             items.Add(new MenuItem { Header = "Every running session is already in it", IsEnabled = false });
         new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedLeft }.ShowAt(anchor);
@@ -805,7 +847,7 @@ internal sealed class WorkItemsWindow : Window
             e.Handled = true;
             var text = _logBox.Text?.Trim() ?? "";
             if (text.Length == 0) return;
-            if (_host.AddNote(item.Id, text) is not null) _logBox.Text = "";
+            if (Own(() => _host.AddNote(item.Id, text)) is not null) _logBox.Text = "";
             Dispatcher.UIThread.Post(() => _logBox?.Focus(), DispatcherPriority.Input);
         };
 
@@ -947,7 +989,7 @@ internal sealed class WorkItemsWindow : Window
     {
         if (e.Key == Key.Escape)
         {
-            if (_editingNotes) { _editingNotes = false; _detailSignature = ""; RenderDetail(); }
+            if (_editingNotes) { _editingNotes = false; _notesDraft = null; _detailSignature = ""; RenderDetail(); }
             else Close();
             e.Handled = true;
         }

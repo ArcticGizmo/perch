@@ -1,7 +1,20 @@
 # Work items — design & checkpoint plan
 
-Status: **in progress** on branch `work-items` (2026-10-16). The interaction exploration this builds on is the
-artifact "Perch Work Items" (local copy `.claude/artefacts/work-items-interaction-patterns.html`).
+Status: **W0–W3 built** on branch `work-items` (2026-10-16), each checkpoint green on tests and checked by the
+headless render. **Nothing has been run in a live tray yet**: the owed checks are `docs/work-items-testing.md`. W4 is
+not started. The interaction exploration this builds on is the artifact "Perch Work Items" (local copy
+`.claude/artefacts/work-items-interaction-patterns.html`).
+
+### Where the build differs from the exploration
+
+- **Member rows aren't indented.** They keep the full row width and wear a 3px stripe in the item's colour, so every
+  glyph lines up with the ungrouped rows.
+- **Ended sessions are a count on the header** ("2 ended"), not dimmed rows. They're listed, and resumable, in the
+  window.
+- **Marking done asks nothing.** Done is reversible, and the item's still-running sessions just fall under "Not in a
+  work item", so a leave/end/take-out prompt would only add a step. "End them" was also the one destructive choice.
+- **No inline name field in the overlay.** "New work item from this session…" creates the item at once and opens the
+  window with its name selected. The tray's **Work items…** opens the window's new-item field.
 
 ## The ask
 
@@ -93,7 +106,7 @@ Marked **first** (W0–W3) or **later** (W4).
 | Home | Work items window: Active / Paused / Done list; detail with name, colour, status, links, notes, sessions (with via), log | W3 |
 | Log | Perch writes the facts (joined / left / status change / session ended); you write one-liners (window, header menu, `perch work log`) | W1–W3 |
 | Log | "Copy as Markdown" of an item's log | W3 |
-| Finish | Status dropdown / header menu → Done. If members are still running: leave them / end them / take them out | W3 |
+| Finish | Status buttons / header menu → Done (no prompt; reopen any time) | W3 |
 | Later | Drag a row onto a header; folder rules; suggestions; "This week" view; transcript summaries; Roost tab binding; Focus mode | W4 |
 
 If you never create an item, the overlay looks exactly as it did before.
@@ -102,10 +115,10 @@ If you never create an item, the overlay looks exactly as it did before.
 
 | # | Scope | Gate |
 |---|-------|------|
-| **W0** | Core: `WorkItem` model, `WorkItemFile` codec (front matter + notes + log), `WorkItemStore` (folder, load, `Mutate`, create, resolve refs, membership helpers), hue set in `FixedColors`. xUnit tests: round-trip, hand-edited/odd files, ref resolution, concurrent read-modify-write. | tests green |
-| **W1** | Overlay grouping (`OverlayCanvas.Work.cs`): rows per item, header paint/hit/hover, collapse state (`AppSettings.CollapsedWorkItems`, NotSettings), header right-click menu, session-row **Work items ▸** submenu, "New work item from this session…". App: `WorkItemsHost` (load, watch the folder, push to overlay), auto log of joins/leaves/session end. SampleData + render. | render + tests |
-| **W2** | Starting inside an item: header "+" → launcher bound to the item; `perch --work`; `perch-hook` `PERCH_WORK` → `{sid}.work` sidecar (cleaned on SessionEnd) → `ClaudeSession.WorkRef` → tray attaches (`via: terminal`). `perch work new/list/add/log/done` CLI. Help text. | tests |
-| **W3** | `WorkItemsWindow`: list + detail (rename, colour, status, links, notes edit, sessions with open/resume/remove, log + entry box + copy as Markdown), mark-done prompt. Tray menu entry. | render + manual |
+| ✅ **W0** | Core: `WorkItem` model, `WorkItemFile` codec (front matter + notes + log), `WorkItemStore` (folder, load, `Mutate`, create, resolve refs, membership helpers), hue set in `FixedColors`. xUnit tests: round-trip, hand-edited/odd files, ref resolution, concurrent read-modify-write. | tests green |
+| ✅ **W1** | Overlay grouping (`OverlayCanvas.Work.cs`): rows per item, header paint/hit/hover, collapse state (`AppSettings.CollapsedWorkItems`, NotSettings), header right-click menu, session-row **Work items ▸** submenu, "New work item from this session…". App: `WorkItemsHost` (load, watch the folder, push to overlay), auto log of joins/leaves/session end. SampleData + render. | render + tests |
+| ✅ **W2** | Starting inside an item: header "+" → launcher bound to the item; `perch --work`; `perch-hook` `PERCH_WORK` → `{sid}.work` sidecar (cleaned on SessionEnd) → `ClaudeSession.WorkRef` → tray attaches (`via: terminal`). `perch work new/list/add/log/done` CLI. Help text. | tests |
+| ✅ **W3** | `WorkItemsWindow`: list + detail (rename, colour, status, links, notes edit, sessions with open/resume/remove, log + entry box + copy as Markdown). Tray menu entry. | render + manual |
 | **W4** | Later set (see table). Not started. | — |
 
 ## Manual testing
