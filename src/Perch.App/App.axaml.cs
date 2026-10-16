@@ -196,6 +196,7 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _work?.Dispose();
                 _gitHubHost?.Dispose();
                 _feedsHost?.Dispose();
                 _controlServer?.Dispose();
@@ -329,7 +330,9 @@ public partial class App : Application
             _monitorHost = new SessionMonitorHost(sessions =>
             {
                 _lastSessions = sessions;
-                _overlay!.Canvas.Update(WithDormantRows(sessions));   // + Perch sessions that aren't running
+                var roster = WithDormantRows(sessions);   // + Perch sessions that aren't running
+                ObserveWorkItems(roster);                 // work-item groups first, so the rows below build grouped
+                _overlay!.Canvas.Update(roster);
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
@@ -493,6 +496,9 @@ public partial class App : Application
             _todoHost = new Services.TodoMonitorHost(
                 _todoStore, (lines, total, overdue) => _overlay!.Canvas.SetTopTodos(lines, total, overdue), _notifications, settings);
             _overlay.Canvas.TodosRequested += OpenTodos;
+            // Work items: the markdown files in the profile's work/ folder, grouping the overlay's sessions
+            // (App.WorkItems.cs, docs/work-items-plan.md).
+            InitWorkItems(settings);
             // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
             // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
             _gitHubHost = new Services.GitHubAlertsMonitorHost(GitHubAlertsSeenStore.Load(), GitHubAlertsDismissStore.Load(),
@@ -758,6 +764,7 @@ public partial class App : Application
         _switcher?.Close();
         _projectPicker?.Close();
         _todoWindow?.Close();
+        _workWindow?.Close();
         _gitHubWindow?.Close();
         _feedStoryWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
@@ -3218,6 +3225,9 @@ public partial class App : Application
         var todosItem = new NativeMenuItem("Todos…");
         todosItem.Click += (_, _) => OpenTodos();
 
+        var workItem = new NativeMenuItem("Work items…");
+        workItem.Click += (_, _) => OpenWorkItems(focus: WorkFocus.Compose);
+
         var newSessionItem = new NativeMenuItem("New session…");
         newSessionItem.Click += (_, _) => OpenSessionWindow();
 
@@ -3255,6 +3265,7 @@ public partial class App : Application
                 flightItem,
                 achievementsItem,
                 todosItem,
+                workItem,
                 newSessionItem,
                 roostItem,
                 _updateItem,

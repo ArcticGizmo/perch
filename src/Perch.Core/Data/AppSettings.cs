@@ -701,6 +701,10 @@ internal sealed class AppSettings
     // Toggled by the region's own chevron and persisted here so it survives a restart. Expanded by default.
     public bool SocialRegionExpanded { get; set; } = true;
 
+    // The work-item groups collapsed in the overlay's session list: item ids, plus "~loose" for the "Not in a work
+    // item" group (docs/work-items-plan.md). Absent = expanded. Toggled by each group's own header on the overlay.
+    public List<string> CollapsedWorkItems { get; set; } = [];
+
     // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
     // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.

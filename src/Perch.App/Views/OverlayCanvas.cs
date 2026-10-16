@@ -1704,13 +1704,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private DispatcherTimer? _dwellTimer;
     private OverlayTooltip? _tooltip;
 
-    // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
-    // Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's own child,
-    // …), driving its indent in the tree; 0 for session and section rows.
-    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0)
+    // Which group header a row is, if any (OverlayCanvas.Work.cs adds the work-item groups).
+    private enum RowHeader { None, Autonomous, WorkItem, Loose }
+
+    // A flat render row: a parent session, one of its sub-agents, or a group header ("Autonomous", a work item,
+    // "Not in a work item"). Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's
+    // own child, …), driving its indent in the tree; 0 for session and header rows. Work is the item a header names,
+    // or the item a session/sub-agent row is listed under (its colour stripe); SectionCount is a header's count.
+    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0,
+        RowHeader Header = RowHeader.None, OverlayWorkItem? Work = null)
     {
         public bool IsSubAgent => Sub != null;
-        public bool IsSectionHeader => SectionCount >= 0;
+        public bool IsSectionHeader => Header != RowHeader.None;
     }
 
     /// <summary>When on, idle teammates are dropped from the roster (only working ones show). Wired to
@@ -1744,20 +1749,28 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // human driving them); only background/SDK-driven ones group under the collapsible "Autonomous"
         // section. Each partition sorted by display name.
         var interactive = sessions.Where(s => !s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
-            .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase);
+            .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         var background = sessions.Where(s => s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
             .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
         var rows = new List<DisplayRow>();
-        foreach (var s in interactive) AddSessionRows(rows, s);
-
-        if (background.Count > 0)
+        if (WorkGrouping)
         {
-            rows.Add(new DisplayRow(null, null, background.Count));
-            if (_autonomousExpanded)
-                foreach (var s in background) AddSessionRows(rows, s);
+            // Grouped by work item (OverlayCanvas.Work.cs); with no items the list below is unchanged.
+            AddWorkGroupedRows(rows, interactive, background);
         }
-        else _autonomousExpanded = false;
+        else
+        {
+            foreach (var s in interactive) AddSessionRows(rows, s);
+
+            if (background.Count > 0)
+            {
+                rows.Add(new DisplayRow(null, null, background.Count, Header: RowHeader.Autonomous));
+                if (_autonomousExpanded)
+                    foreach (var s in background) AddSessionRows(rows, s);
+            }
+            else _autonomousExpanded = false;
+        }
 
         _rows = rows;
         // Deliberately *not* collapsing when the session list empties. The panel keeps its strips at zero
@@ -1777,10 +1790,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // A session's row plus its running sub-agent / teammate subtree, walked depth-first in draw order so
     // each parent is immediately followed by its (indented) children.
-    private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session)
+    private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session, OverlayWorkItem? work = null)
     {
-        rows.Add(new DisplayRow(session, null));
-        AddSubTree(rows, session, session.SubAgents, 1);
+        rows.Add(new DisplayRow(session, null, Work: work));
+        AddSubTree(rows, session, session.SubAgents, 1, work);
         // PR checks are surfaced only in the glyph's aggregate dot, hover tooltip, and click flyout — never
         // as overlay child rows.
     }
@@ -1788,7 +1801,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Appends one level of the sub-agent tree, then recurses into each node's children unless the node is
     // collapsed. Ordering per level matches the flat layout it replaces: teammates first, working before
     // idle, then by name.
-    private void AddSubTree(List<DisplayRow> rows, ClaudeSession session, IReadOnlyList<SubAgent> subs, int depth)
+    private void AddSubTree(List<DisplayRow> rows, ClaudeSession session, IReadOnlyList<SubAgent> subs, int depth,
+        OverlayWorkItem? work = null)
     {
         var ordered = subs
             .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
@@ -1797,9 +1811,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
         foreach (var sub in ordered)
         {
-            rows.Add(new DisplayRow(session, sub, Depth: depth));
+            rows.Add(new DisplayRow(session, sub, Depth: depth, Work: work));
             if (sub.Children.Count > 0 && !_collapsedAgents.Contains(sub.AgentId))
-                AddSubTree(rows, session, sub.Children, depth + 1);
+                AddSubTree(rows, session, sub.Children, depth + 1, work);
         }
     }
 
@@ -1941,6 +1955,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _jiraRects.Clear();
                 _dirRects.Clear();
                 _subChevronRects.Clear();
+                _workPlusRects.Clear();
 
                 // Paint every visible section at the top recorded by the preceding measure pass, in the user's
                 // chosen order. _sectionTop was populated by PanelBodyHeight() above. See OverlayCanvas.Sections.cs.
@@ -4118,6 +4133,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool autoHeader = _autonomousHeaderRect.Width > 0 && _autonomousHeaderRect.Contains(p);
         if (autoHeader != _hoveredAutonomousHeader) { _hoveredAutonomousHeader = autoHeader; InvalidateVisual(); }
 
+        // A work item header's "+" box (OverlayCanvas.Work.cs) has its own hover over the header's.
+        int workPlus = HitTestWorkPlus(p);
+        if (workPlus != _hoveredWorkPlus) { _hoveredWorkPlus = workPlus; InvalidateVisual(); }
+
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
@@ -4183,7 +4202,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overUsageToggle || overGitHub || overTodos || overFeeds)
+               || overRoost || overRecent || overUsageToggle || overGitHub || overTodos || overFeeds || workPlus >= 0)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4319,6 +4338,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredSocial = false;
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
+        if (_hoveredWorkPlus != -1) { _hoveredWorkPlus = -1; changed = true; }
         _hoveredNewSession = false;
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
@@ -4716,7 +4736,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int row = HitTestRow(p);
         if (row >= 0)
         {
-            if (_rows[row].IsSectionHeader)
+            if (_rows[row].Header is RowHeader.WorkItem or RowHeader.Loose)
+            {
+                RouteWorkHeaderClick(row, p);   // OverlayCanvas.Work.cs
+            }
+            else if (_rows[row].IsSectionHeader)
             {
                 _autonomousExpanded = !_autonomousExpanded;
                 Update(_sessions); // rebuild the render list under the new section state
@@ -4871,6 +4895,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var items = new List<Control>();
 
         int row = HitTestRow(p);
+
+        // A work item's header has its own menu (open, new session, log, pause/resume, done).
+        if (!RearrangeMode && row >= 0 && _rows[row] is { Header: RowHeader.WorkItem, Work: { } headerItem })
+        {
+            ShowFlyout(WorkHeaderMenu(headerItem));
+            return;
+        }
+
         // The "Autonomous" divider carries no session, so none of the per-session items apply to it.
         bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
         bool subRow = sessionRow && _rows[row].IsSubAgent;
@@ -4883,6 +4915,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 [
                     MenuItem("Open", () => SessionActivated?.Invoke(dormant)),
                     MenuItem("View history", () => HistoryRequested?.Invoke(dormant.SessionId)),
+                    WorkItemsSubmenu(dormant),
                 ],
                 [MenuItem("Resume in terminal", () => DormantTerminalRequested?.Invoke(dormant))],
                 [MenuItem("End session", () => DormantEndRequested?.Invoke(dormant))],
@@ -4933,6 +4966,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // The todo list is global (not tied to this session), but the row menu is a handy place to
             // reach it — the same window the tray's "Todos…" and the overlay strip open.
             actions.Add(MenuItem("Todos…", () => TodosRequested?.Invoke()));
+
+            // Work items (docs/work-items-plan.md): tick the items this session belongs to, or start one from it.
+            // A sub-agent row works on its parent session, which is the thing that belongs to an item.
+            actions.Insert(0, WorkItemsSubmenu(s));
 
             // Elevate to Perch (PoC, session-control M4): take over this terminal session over
             // stream-json. Only a real interactive CLI session can be elevated (not sub-agents, desktop,

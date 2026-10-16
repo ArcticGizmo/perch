@@ -30,7 +30,11 @@ public partial class App
     }
 
     /// <summary>Re-feeds the overlay its rows when the not-running set changes between scans.</summary>
-    private void PushOverlayRows() => _overlay?.Canvas.Update(WithDormantRows(_lastSessions));
+    private void PushOverlayRows()
+    {
+        PushWorkItems();   // a not-running row coming or going moves a work item's "ended" count
+        _overlay?.Canvas.Update(WithDormantRows(_lastSessions));
+    }
 
     /// <summary>A not-running row's click: its conversation in a window, still not running until the first reply.</summary>
     private void OpenDormantRow(ClaudeSession row) => OpenSessionResume(row.SessionId, row.Cwd);

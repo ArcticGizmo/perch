@@ -195,6 +195,17 @@ internal static class HeadlessRenderer
         RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_off_1x.png"), 96);
         BenchOverlayPaint();
 
+        // Work items (docs/work-items-plan.md W1): the roster grouped under item headers (swatch, name, rolled-up
+        // light + count, "+"), member rows striped in the item's colour, a paused item as one dim line, and the
+        // leftovers under "Not in a work item"; then with one item and the loose group collapsed.
+        var workProbe = new OverlayCanvas();
+        workProbe.Update(SampleData.Sessions());
+        workProbe.SetWorkItems(SampleData.WorkItems());
+        RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_1x.png"), 96);
+        RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_1.5x.png"), 144);
+        workProbe.SetCollapsedWorkItems(["w-mac", OverlayCanvas.LooseGroupKey]);
+        RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_collapsed_1x.png"), 96);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);
@@ -335,6 +346,7 @@ internal static class HeadlessRenderer
             new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
         RenderGitHubAlertsWindow(outDir);
         RenderPrSessionWindow(outDir);
+        RenderWorkItemsWindow(outDir);
         RenderFeedDialog(outDir);
         RenderFeedStory(outDir);
         RenderLinkPopup(outDir);
@@ -3266,6 +3278,59 @@ internal static class HeadlessRenderer
                 frame.Save(fs);
             }
             w.Close();
+        }
+    }
+
+    // The Work items window (docs/work-items-plan.md W3) on a seeded item: links, notes, sessions (live ones from the
+    // sample roster plus an ended one, each with how it joined) and a log mixing Perch's events with the user's lines.
+    // The store lives in a throwaway temp folder, so nothing touches the real profile.
+    private static void RenderWorkItemsWindow(string outDir)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"perch-render-work-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new Perch.Data.Work.WorkItemStore(dir);
+            var t0 = DateTime.UtcNow.AddDays(-2);
+            var pay = store.Create("Payments refactor", nowUtc: t0)!;
+            store.Create("macOS port", nowUtc: t0.AddMinutes(5));
+            var docs = store.Create("Docs site polish", nowUtc: t0.AddMinutes(9))!;
+            store.Mutate(docs.Id, i => i.Status = Perch.Data.Work.WorkItemStatus.Paused);
+            var now = DateTimeOffset.Now;
+            store.Mutate(pay.Id, i =>
+            {
+                i.Notes = "## Goal\n\nMove charge creation behind the new ledger API without downtime.\n\n" +
+                          "- API changes in worktree-a\n- UI flags in worktree-b\n- Backfill script last, after review";
+                i.Links.Add(new Perch.Data.Work.WorkLink { Label = "Design doc", Url = "https://example.com/docs/payments-v2" });
+                i.Links.Add(new Perch.Data.Work.WorkLink { Label = "", Url = "https://github.com/acme/billing/pull/412" });
+                i.AddMember("s1", Perch.Data.Work.WorkJoin.Launched, "perch", @"C:\src\perch", DateTime.UtcNow.AddHours(-3));
+                i.AddMember("s2", Perch.Data.Work.WorkJoin.Terminal, "api", @"C:\src\api", DateTime.UtcNow.AddHours(-2));
+                i.AddMember("ended-1", Perch.Data.Work.WorkJoin.Manual, "schema spike",
+                    @"C:\Users\me\Documents\git\work\clients\acme-billing-schema-spike", DateTime.UtcNow.AddDays(-1));
+                i.AddLog("schema spike joined (manual)", byPerch: true, at: now.AddDays(-1).AddHours(-1));
+                i.AddLog("schema spike ended", byPerch: true, at: now.AddDays(-1));
+                i.AddLog("perch joined (launched)", byPerch: true, at: now.AddHours(-3));
+                i.AddLog("Ledger API agreed with the platform team. Unblocks the UI half.", byPerch: false, at: now.AddHours(-2).AddMinutes(-20));
+                i.AddLog("api joined (terminal)", byPerch: true, at: now.AddHours(-2));
+            });
+
+            var host = new WorkItemsHost(store);
+            host.LoadNow();
+            var w = new WorkItemsWindow(host, SampleData.Sessions);
+            w.Show();
+            w.Retarget(pay.Id);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "work_items_window_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+            host.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
 

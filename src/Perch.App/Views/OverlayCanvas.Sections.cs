@@ -152,9 +152,18 @@ public sealed partial class OverlayCanvas
         for (int i = 0; i < _rows.Count; i++)
         {
             var r = _rows[i];
-            if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, y, width);
-            else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
-            else DrawSessionRow(ctx, i, r.Session!, y, width);
+            switch (r.Header)
+            {
+                case RowHeader.Autonomous: DrawSectionHeaderRow(ctx, r, y, width); break;
+                case RowHeader.WorkItem: DrawWorkHeaderRow(ctx, i, r, y, width); break;
+                case RowHeader.Loose: DrawLooseHeaderRow(ctx, i, r, y, width); break;
+                default:
+                    if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
+                    else DrawSessionRow(ctx, i, r.Session!, y, width);
+                    // A row listed under a work item wears a thin stripe in the item's colour.
+                    if (r.Work is { } work) DrawWorkStripe(ctx, work, y, HeightOf(r));
+                    break;
+            }
             y += HeightOf(r);
         }
 
