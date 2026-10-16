@@ -3292,7 +3292,7 @@ internal static class HeadlessRenderer
             var store = new Perch.Data.Work.WorkItemStore(dir);
             var t0 = DateTime.UtcNow.AddDays(-2);
             var pay = store.Create("Payments refactor", nowUtc: t0)!;
-            store.Create("macOS port", nowUtc: t0.AddMinutes(5));
+            var mac = store.Create("macOS port", nowUtc: t0.AddMinutes(5))!;
             var docs = store.Create("Docs site polish", nowUtc: t0.AddMinutes(9))!;
             store.Mutate(docs.Id, i => i.Status = Perch.Data.Work.WorkItemStatus.Paused);
             var now = DateTimeOffset.Now;
@@ -3317,14 +3317,20 @@ internal static class HeadlessRenderer
             host.LoadNow();
             var w = new WorkItemsWindow(host, SampleData.Sessions);
             w.Show();
-            w.Retarget(pay.Id);
-            Dispatcher.UIThread.RunJobs();
-            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-            if (w.CaptureRenderedFrame() is { } frame)
+            void Capture(string itemId, string file)
             {
-                using var fs = File.Create(Path.Combine(outDir, "work_items_window_1x.png"));
-                frame.Save(fs);
+                w.Retarget(itemId);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (w.CaptureRenderedFrame() is { } frame)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, file));
+                    frame.Save(fs);
+                }
             }
+            // A worked item (sessions, notes, links, activity), then a bare one: only what it has is on screen.
+            Capture(pay.Id, "work_items_window_1x.png");
+            Capture(mac.Id, "work_items_window_empty_1x.png");
             w.Close();
             host.Dispose();
         }

@@ -20,24 +20,28 @@ namespace Perch.Avalonia.Windows;
 internal enum WorkFocus
 {
     None,
-    /// <summary>The name field, all selected (a freshly created item named after its session).</summary>
+    /// <summary>The name, in rename mode with all of it selected (a freshly created item named after its session).</summary>
     Rename,
-    /// <summary>The log entry box ("Log a note…").</summary>
+    /// <summary>The activity box ("Log a note…").</summary>
     Log,
-    /// <summary>The "new work item" field on the left.</summary>
+    /// <summary>The "new work item" field in the list.</summary>
     Compose,
 }
 
 /// <summary>
 /// The work items window (docs/work-items-plan.md W3), opened from the overlay's item headers and session menus and
-/// the tray. Left: a field to name a new item, over the list grouped Active / Paused (and Done, behind a toggle).
-/// Right: the selected item's home: its name, colour and status; its links; its notes (markdown, edited in place);
-/// its sessions with how each joined, live ones opening their window or terminal and ended ones resumable; and its
-/// log, newest first, with a box to add a line and a "Copy as Markdown".
+/// the tray. Laid out for progressive disclosure: only what an item actually has is on screen.
+///
+/// <para>Left, the list: a quiet "+ New work item" row that turns into a name field, then Active and Paused, with
+/// Done folded into a row of its own. Right, the selected item: its colour, its name (click to rename), a status pill
+/// and a "⋯" menu for the rarer actions (open the file, show it in its folder, copy the log, delete). Then its
+/// sessions, which are the point of an item; then its notes and links, each only once it has some (until then a
+/// small "+ Notes" / "+ Link" chip); then its activity, the last few entries with the rest a click away.</para>
 ///
 /// <para>Every change goes through <see cref="WorkItemsHost"/> (a read-modify-write of the item's one file), which
-/// raises <c>Changed</c>; the detail pane is rebuilt only when the selected item's content actually moved, so a reload
-/// of our own write, or a scan, never wipes a field the user is typing in. Styled off <see cref="TodoWindow"/>.</para>
+/// raises <c>Changed</c>. The window's own changes rebuild the pane at once; an outside one (a scan's write, the CLI,
+/// a hand edit) waits while the user is typing in the pane and lands when they leave the field, and a notes draft
+/// survives any rebuild. Chrome styled off <see cref="TodoWindow"/>.</para>
 /// </summary>
 internal sealed class WorkItemsWindow : Window
 {
@@ -45,17 +49,19 @@ internal sealed class WorkItemsWindow : Window
     private static readonly IBrush Bg2 = Palette.ButtonBgBrush;
     private static readonly IBrush Stroke = Palette.BorderBrush;
     private static readonly IBrush Fg = Palette.FgBrush;
+    private static readonly IBrush Title2 = Palette.TitleBrush;
     private static readonly IBrush Muted = Palette.MutedBrush;
     private static readonly IBrush Accent = Palette.AccentBrush;
-    private static readonly IBrush RowHover = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
+    private static readonly IBrush RowHover = new SolidColorBrush(Color.FromArgb(24, 255, 255, 255));
     private static Color AccentColor => Palette.Active.Accent.ToColor();
     private static IBrush SelBrush => new SolidColorBrush(Color.FromArgb(30, AccentColor.R, AccentColor.G, AccentColor.B));
+
+    // How many activity entries show before "Show all".
+    private const int ActivityPreview = 5;
 
     private readonly WorkItemsHost _host;
     private readonly Func<IReadOnlyList<ClaudeSession>> _roster;
 
-    private readonly TextBox _composer;
-    private readonly CheckBox _showDone;
     private readonly StackPanel _list = new();
     private readonly ContentControl _detailHost = new();
     private readonly ScrollViewer _detailScroll;
@@ -63,13 +69,16 @@ internal sealed class WorkItemsWindow : Window
     private string? _selectedId;
     private string _detailSignature = "";
     private string _sessionsSignature = "";
-    private bool _editingNotes;
+
+    // Disclosure state: what's open right now. Reset when another item is selected.
+    private bool _composing, _doneExpanded, _renaming, _editingNotes, _addingLink, _showAllActivity;
     private string? _notesDraft;
-    // A change the window made itself (rebuild the pane at once) vs one from elsewhere — a scan's write, the CLI, a
-    // hand edit — which waits while the user is typing in the pane (_detailStale), then lands when they leave the field.
+    // A change the window made itself (rebuild the pane at once) vs one from elsewhere, which waits while the user is
+    // typing in the pane (_detailStale) and lands when they leave the field.
     private bool _ownChange, _detailStale;
+
     private StackPanel? _sessionsPanel;
-    private TextBox? _nameBox, _logBox;
+    private TextBox? _composerBox, _nameBox, _logBox;
 
     /// <summary>A live session's row was clicked: focus it (its Perch window or its terminal).</summary>
     public event Action<ClaudeSession>? FocusSessionRequested;
@@ -92,23 +101,17 @@ internal sealed class WorkItemsWindow : Window
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         CanResize = false;
-        Width = 900;
-        Height = 680;
+        Width = 860;
+        Height = 640;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Header (draggable) ──
-        var heading = new TextBlock { Text = "Work items", Foreground = Fg, FontWeight = FontWeight.Bold, FontSize = 16 };
-        var subhead = new TextBlock
-        {
-            Text = "Name a piece of work, then put the sessions doing it inside, however you run them.",
-            Foreground = Muted, FontSize = 12, Margin = new Thickness(0, 2, 0, 0),
-        };
+        // ── Header (draggable): just the title and close ──
         var closeGlyph = new Button
         {
             Content = "✕", Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(4, 0), FontSize = 14, Cursor = new Cursor(StandardCursorType.Hand),
-            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
         };
         closeGlyph.Click += (_, _) => Close();
         var headerBorder = new Border
@@ -116,8 +119,12 @@ internal sealed class WorkItemsWindow : Window
             Background = Bg, BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
             Child = new Grid
             {
-                Margin = new Thickness(20, 16, 18, 14),
-                Children = { new StackPanel { Children = { heading, subhead } }, closeGlyph },
+                Margin = new Thickness(20, 13, 16, 13),
+                Children =
+                {
+                    new TextBlock { Text = "Work items", Foreground = Title2, FontWeight = FontWeight.Bold, FontSize = 15, VerticalAlignment = VerticalAlignment.Center },
+                    closeGlyph,
+                },
             },
         };
         headerBorder.PointerPressed += (_, e) =>
@@ -126,50 +133,28 @@ internal sealed class WorkItemsWindow : Window
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) BeginMoveDrag(e);
         };
 
-        // ── Left: composer + show-done + list ──
-        _composer = new TextBox { PlaceholderText = "Name a new work item…", FontSize = 13 };
-        _composer.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitCreate(); e.Handled = true; } };
-        var addBtn = SolidButton("New work item");
-        addBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
-        addBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
-        addBtn.Click += (_, _) => CommitCreate();
-        var composerBorder = new Border
-        {
-            Background = Bg2, BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = new StackPanel { Margin = new Thickness(14, 13), Spacing = 8, Children = { _composer, addBtn } },
-        };
-
-        _showDone = new CheckBox { Content = "Show done", Foreground = Muted, FontSize = 12, Margin = new Thickness(14, 8, 0, 8) };
-        _showDone.IsCheckedChanged += (_, _) => RefreshList();
-        var showBorder = new Border { BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1), Child = _showDone };
-
+        // ── Left: the list ──
         var listScroller = new ScrollViewer
         {
             Content = _list, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0, 0, 0, 8),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0, 6, 0, 10),
         };
-        var leftGrid = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
-        Grid.SetRow(composerBorder, 0);
-        Grid.SetRow(showBorder, 1);
-        Grid.SetRow(listScroller, 2);
-        leftGrid.Children.Add(composerBorder);
-        leftGrid.Children.Add(showBorder);
-        leftGrid.Children.Add(listScroller);
 
         // ── Right: the selected item ──
-        _detailHost.Padding = new Thickness(24, 20, 24, 24);
+        _detailHost.Padding = new Thickness(28, 22, 28, 28);
         _detailScroll = new ScrollViewer
         {
             Content = _detailHost, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
-        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("290,1,*") };
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("250,1,*") };
+        var left = new Border { Background = Palette.SurfaceSunkenBrush, Child = listScroller };
         var divider = new Border { Background = Stroke };
-        Grid.SetColumn(leftGrid, 0);
+        Grid.SetColumn(left, 0);
         Grid.SetColumn(divider, 1);
         Grid.SetColumn(_detailScroll, 2);
-        body.Children.Add(leftGrid);
+        body.Children.Add(left);
         body.Children.Add(divider);
         body.Children.Add(_detailScroll);
 
@@ -195,12 +180,13 @@ internal sealed class WorkItemsWindow : Window
     {
         if (itemId is not null && _host.Find(itemId) is { } item)
         {
-            if (item.Status == WorkItemStatus.Done) _showDone.IsChecked = true;
+            if (item.Status == WorkItemStatus.Done) _doneExpanded = true;
+            if (item.Id != _selectedId) ResetDisclosure();
             _selectedId = itemId;
-            _editingNotes = false;
-            _notesDraft = null;
             _detailSignature = "";
         }
+        if (focus == WorkFocus.Rename && _selectedId is not null) { _renaming = true; _detailSignature = ""; }
+        if (focus == WorkFocus.Compose) _composing = true;
         Refresh();
         Dispatcher.UIThread.Post(() =>
         {
@@ -208,7 +194,7 @@ internal sealed class WorkItemsWindow : Window
             {
                 case WorkFocus.Rename: _nameBox?.Focus(); _nameBox?.SelectAll(); break;
                 case WorkFocus.Log: _logBox?.Focus(); break;
-                case WorkFocus.Compose: _composer.Focus(); break;
+                case WorkFocus.Compose: _composerBox?.Focus(); break;
             }
         }, DispatcherPriority.Input);
     }
@@ -217,9 +203,14 @@ internal sealed class WorkItemsWindow : Window
     public void RosterChanged()
     {
         if (_selectedId is null || _host.Find(_selectedId) is not { } item || _sessionsPanel is null) return;
-        var sig = SessionsSignature(item);
-        if (sig == _sessionsSignature) return;
+        if (SessionsSignature(item) == _sessionsSignature) return;
         FillSessions(_sessionsPanel, item);
+    }
+
+    private void ResetDisclosure()
+    {
+        _renaming = _editingNotes = _addingLink = _showAllActivity = false;
+        _notesDraft = null;
     }
 
     private void OnHostChanged()
@@ -261,36 +252,81 @@ internal sealed class WorkItemsWindow : Window
         RenderDetail();
     }
 
+    // Rebuild the pane after a disclosure toggle (not a data change).
+    private void Rerender()
+    {
+        _detailSignature = "";
+        RenderDetail();
+    }
+
     // ── The list ──
 
     private void RefreshList()
     {
         _list.Children.Clear();
+        _list.Children.Add(ComposerRow());
+
         var items = _host.Items;
         AddGroup("Active", items.Where(i => i.Status == WorkItemStatus.Active));
         AddGroup("Paused", items.Where(i => i.Status == WorkItemStatus.Paused));
-        if (_showDone.IsChecked == true)
-            AddGroup("Done", items.Where(i => i.Status == WorkItemStatus.Done).Reverse());
 
-        if (_list.Children.Count == 0)
+        var done = items.Where(i => i.Status == WorkItemStatus.Done).Reverse().ToList();
+        if (done.Count > 0)
+        {
+            _list.Children.Add(FoldRow($"Done · {done.Count}", _doneExpanded, () => { _doneExpanded = !_doneExpanded; RefreshList(); }));
+            if (_doneExpanded) foreach (var i in done) _list.Children.Add(BuildListRow(i));
+        }
+
+        if (items.Count == 0)
             _list.Children.Add(new TextBlock
             {
-                Text = items.Count == 0
-                    ? "No work items yet. Name one above, or right-click a session in the overlay and choose Work items."
-                    : "Nothing active. Tick Show done to see finished items.",
-                Foreground = Muted, FontSize = 12, Margin = new Thickness(16, 12), TextWrapping = TextWrapping.Wrap,
+                Text = "Name a piece of work, then put the sessions doing it inside. You can also right-click a session "
+                       + "in the overlay and choose Work items.",
+                Foreground = Muted, FontSize = 12, Margin = new Thickness(16, 10), TextWrapping = TextWrapping.Wrap,
+                LineHeight = 18,
             });
 
         if (_host.Store.Unreadable.Count > 0)
             _list.Children.Add(new TextBlock
             {
-                Text = $"{_host.Store.Unreadable.Count} file(s) in the work folder couldn't be read and are left alone: "
-                       + string.Join(", ", _host.Store.Unreadable.Select(Path.GetFileName)),
+                Text = $"Couldn't read {string.Join(", ", _host.Store.Unreadable.Select(Path.GetFileName))}. It's left as it is.",
                 Foreground = new SolidColorBrush(Palette.Danger), FontSize = 11.5, Margin = new Thickness(16, 12),
                 TextWrapping = TextWrapping.Wrap,
             });
 
         if (_selectedId is { } sel && _host.Find(sel) is null) _selectedId = null;
+    }
+
+    // "+ New work item": a quiet row that becomes a name field. Enter creates, Esc (or leaving it empty) folds back.
+    private Control ComposerRow()
+    {
+        if (!_composing)
+        {
+            var row = Hoverable(new TextBlock { Text = "+  New work item", Foreground = Accent, FontSize = 12.5, FontWeight = FontWeight.SemiBold },
+                new Thickness(16, 9));
+            row.Margin = new Thickness(0, 0, 0, 4);
+            row.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                _composing = true;
+                RefreshList();
+                Dispatcher.UIThread.Post(() => _composerBox?.Focus(), DispatcherPriority.Input);
+            };
+            return row;
+        }
+
+        _composerBox = new TextBox { PlaceholderText = "Name it, then press Enter", FontSize = 13, Margin = new Thickness(12, 4, 12, 8) };
+        _composerBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { CommitCreate(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { _composing = false; RefreshList(); e.Handled = true; }
+        };
+        _composerBox.LostFocus += (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(_composerBox?.Text) && _composing)
+                Dispatcher.UIThread.Post(() => { _composing = false; RefreshList(); }, DispatcherPriority.Background);
+        };
+        return _composerBox;
     }
 
     private void AddGroup(string name, IEnumerable<WorkItem> items)
@@ -300,28 +336,43 @@ internal sealed class WorkItemsWindow : Window
         _list.Children.Add(new TextBlock
         {
             FontSize = 10.5, FontWeight = FontWeight.SemiBold, Foreground = Muted, LetterSpacing = 0.6,
-            Margin = new Thickness(15, 13, 15, 5), Text = $"{name.ToUpperInvariant()}   {list.Count}",
+            Margin = new Thickness(16, 12, 16, 4), Text = name.ToUpperInvariant(),
         });
         foreach (var i in list) _list.Children.Add(BuildListRow(i));
+    }
+
+    private Control FoldRow(string text, bool open, Action toggle)
+    {
+        var row = Hoverable(new TextBlock
+        {
+            Text = (open ? "▾  " : "▸  ") + text, FontSize = 11.5, Foreground = Muted, FontWeight = FontWeight.SemiBold,
+        }, new Thickness(16, 8));
+        row.Margin = new Thickness(0, 10, 0, 0);
+        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) toggle(); };
+        return row;
     }
 
     private Control BuildListRow(WorkItem item)
     {
         var roster = _roster();
         int live = item.Members.Count(m => roster.Any(s => s.SessionId == m.SessionId && !s.IsDormant));
-        var swatch = Swatch(item.Colour, 9);
+        bool done = item.Status == WorkItemStatus.Done;
         var title = new TextBlock
         {
-            Text = item.Name, FontSize = 13, Foreground = item.Status == WorkItemStatus.Done ? Muted : Fg,
+            Text = item.Name, FontSize = 13, Foreground = done ? Muted : Fg,
             TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(9, 0, 8, 0),
+            Margin = new Thickness(10, 0, 8, 0),
         };
+        // A running count only when something runs: a quiet list reads as a list of names.
         var meta = new TextBlock
         {
-            FontSize = 11.5, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center,
-            Text = live > 0 ? $"{live} live" : item.Members.Count > 0 ? $"{item.Members.Count}" : "",
+            FontSize = 11, Foreground = new SolidColorBrush(Palette.Green), VerticalAlignment = VerticalAlignment.Center,
+            Text = live > 0 ? $"● {live}" : "",
         };
+        if (live > 0) ToolTip.SetTip(meta, live == 1 ? "1 session running" : $"{live} sessions running");
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        var swatch = Swatch(item.Colour, 9);
+        if (done) swatch.Opacity = 0.5;
         Grid.SetColumn(swatch, 0);
         Grid.SetColumn(title, 1);
         Grid.SetColumn(meta, 2);
@@ -332,7 +383,7 @@ internal sealed class WorkItemsWindow : Window
         bool selected = item.Id == _selectedId;
         var row = new Border
         {
-            Child = grid, Padding = new Thickness(13, 8, 15, 8), Cursor = new Cursor(StandardCursorType.Hand),
+            Child = grid, Padding = new Thickness(14, 8, 14, 8), Cursor = new Cursor(StandardCursorType.Hand),
             BorderThickness = new Thickness(2, 0, 0, 0),
             BorderBrush = selected ? Accent : Brushes.Transparent,
             Background = selected ? SelBrush : Brushes.Transparent,
@@ -352,9 +403,8 @@ internal sealed class WorkItemsWindow : Window
 
     private void Select(string id)
     {
+        if (id != _selectedId) ResetDisclosure();
         _selectedId = id;
-        _editingNotes = false;
-        _notesDraft = null;
         _detailSignature = "";
         Refresh();
         _detailScroll.Offset = default;
@@ -362,10 +412,10 @@ internal sealed class WorkItemsWindow : Window
 
     private void CommitCreate()
     {
-        var name = _composer.Text?.Trim() ?? "";
-        if (name.Length == 0) { _composer.Focus(); return; }
+        var name = _composerBox?.Text?.Trim() ?? "";
+        if (name.Length == 0) { _composerBox?.Focus(); return; }
         if (Own(() => _host.Create(name)) is not { } item) return;
-        _composer.Text = "";
+        _composing = false;
         Select(item.Id);
     }
 
@@ -381,9 +431,8 @@ internal sealed class WorkItemsWindow : Window
             _detailHost.Content = EmptyDetail();
             return;
         }
-        // Rebuild only when the item's content moved (our own write's echo, a scan, or a no-op reload must not
-        // wipe a field mid-typing), or when switching notes between read and edit.
-        var sig = WorkItemFile.Serialize(item) + "|" + _editingNotes + "|" + _showDone.IsChecked;
+        // Rebuild only when the item's content or the disclosure state moved, never for a no-op reload.
+        var sig = $"{WorkItemFile.Serialize(item)}|{_renaming}{_editingNotes}{_addingLink}{_showAllActivity}";
         if (sig == _detailSignature) { RosterChanged(); return; }
         _detailSignature = sig;
         _detailHost.Content = Detail(item);
@@ -391,122 +440,187 @@ internal sealed class WorkItemsWindow : Window
 
     private Control EmptyDetail() => new StackPanel
     {
-        VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center, Spacing = 6,
-        Margin = new Thickness(0, 180, 0, 0),
+        HorizontalAlignment = HorizontalAlignment.Center, Spacing = 6, Margin = new Thickness(0, 200, 0, 0),
         Children =
         {
-            new TextBlock { Text = "Select a work item", Foreground = Muted, FontSize = 14, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center },
-            new TextBlock { Text = "Its links, notes, sessions and log show here.", Foreground = Muted, Opacity = 0.75, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center },
+            new TextBlock { Text = _host.Items.Count == 0 ? "No work items yet" : "Select a work item", Foreground = Muted, FontSize = 14, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center },
+            new TextBlock { Text = "Its sessions, notes and activity show here.", Foreground = Muted, Opacity = 0.75, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center },
         },
     };
 
     private Control Detail(WorkItem item)
     {
-        var stack = new StackPanel { Spacing = 0 };
-
-        // Title row: colour swatch (a picker), the name (edited in place), the status.
-        var swatchBtn = new Button
-        {
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0, 0, 10, 0),
-            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
-            Content = Swatch(item.Colour, 16),
-            Flyout = ColourFlyout(item),
-        };
-        ToolTip.SetTip(swatchBtn, "Colour");
-
-        _nameBox = new TextBox
-        {
-            Text = item.Name, FontSize = 20, FontWeight = FontWeight.SemiBold, Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 2), MinWidth = 120,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        void CommitName()
-        {
-            var n = _nameBox!.Text?.ReplaceLineEndings(" ").Trim() ?? "";
-            if (n.Length == 0) { _nameBox.Text = item.Name; return; }
-            if (n != item.Name) Own(() => _host.Mutate(item.Id, i => { i.Name = n; i.AddLog($"Renamed to \"{n}\"", byPerch: true); }));
-        }
-        _nameBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter) { CommitName(); e.Handled = true; }
-            else if (e.Key == Key.Escape) { _nameBox.Text = item.Name; e.Handled = true; }
-        };
-        _nameBox.LostFocus += (_, _) => CommitName();
-
-        var titleRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-        var status = StatusPicker(item);
-        status.Margin = new Thickness(12, 0, 0, 0);
-        Grid.SetColumn(swatchBtn, 0);
-        Grid.SetColumn(_nameBox, 1);
-        Grid.SetColumn(status, 2);
-        titleRow.Children.Add(swatchBtn);
-        titleRow.Children.Add(_nameBox);
-        titleRow.Children.Add(status);
-        stack.Children.Add(titleRow);
-
-        int live = LiveMembers(item).Count();
-        stack.Children.Add(new TextBlock
-        {
-            Text = $"Started {item.CreatedUtc.ToLocalTime():d MMM yyyy} · {Plural(item.Members.Count, "session")}"
-                   + (live > 0 ? $", {live} running" : ""),
-            Foreground = Muted, FontSize = 12, Margin = new Thickness(26, 6, 0, 0),
-        });
-
-        // Actions.
-        var newSession = SolidButton("+ New session");
-        newSession.IsEnabled = item.Status != WorkItemStatus.Done;
-        newSession.Click += (_, _) => NewSessionRequested?.Invoke(item.Id);
-        var openFile = OutlineButton("Open file", Fg);
-        ToolTip.SetTip(openFile, item.FilePath);
-        openFile.Click += (_, _) => { if (item.FilePath is { } p) PlatformServices.FileRevealer.OpenInEditor(p); };
-        var reveal = OutlineButton("Show in folder", Fg);
-        reveal.Click += (_, _) => { if (item.FilePath is { } p) PlatformServices.FileRevealer.RevealInFileManager(p); };
-        var delete = OutlineButton("Delete…", new SolidColorBrush(Palette.Danger));
-        delete.Click += async (_, _) =>
-        {
-            bool ok = await ConfirmDialog.ShowAsync(this, "Delete this work item?",
-                $"\"{item.Name}\" and its notes, links and log are deleted. Its sessions aren't touched. "
-                + "To finish an item and keep its history, mark it Done instead.", "Delete", "Cancel", delete);
-            if (ok) { Own(() => _host.Delete(item.Id)); _selectedId = null; Refresh(); }
-        };
-        var actions = new Grid { Margin = new Thickness(0, 16, 0, 0) };
-        actions.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { newSession, openFile, reveal } });
-        delete.HorizontalAlignment = HorizontalAlignment.Right;
-        actions.Children.Add(delete);
-        stack.Children.Add(actions);
-
-        stack.Children.Add(LinksSection(item));
-        stack.Children.Add(NotesSection(item));
+        var stack = new StackPanel();
+        stack.Children.Add(TitleBlock(item));
         stack.Children.Add(SessionsSection(item));
-        stack.Children.Add(LogSection(item));
+
+        // Notes and links appear once there's something in them (or they're being written); until then a chip each.
+        bool showNotes = item.Notes.Length > 0 || _editingNotes;
+        bool showLinks = item.Links.Count > 0 || _addingLink;
+        if (showNotes) stack.Children.Add(NotesSection(item));
+        if (showLinks) stack.Children.Add(LinksSection(item));
+        if (!showNotes || !showLinks)
+        {
+            var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 22, 0, 0) };
+            if (!showNotes) chips.Children.Add(Chip("+ Notes", () => { _editingNotes = true; Rerender(); }));
+            if (!showLinks) chips.Children.Add(Chip("+ Link", () => { _addingLink = true; Rerender(); }));
+            stack.Children.Add(chips);
+        }
+
+        stack.Children.Add(ActivitySection(item));
         return stack;
     }
 
-    // Active / Paused / Done as a small segmented control. Only the user moves an item between them (D3).
-    private Control StatusPicker(WorkItem item)
+    // Swatch · name (click to rename) · status pill · ⋯, over one muted line of facts.
+    private Control TitleBlock(WorkItem item)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
-        foreach (var st in new[] { WorkItemStatus.Active, WorkItemStatus.Paused, WorkItemStatus.Done })
+        var swatchBtn = new Button
         {
-            bool on = item.Status == st;
-            var b = new Button
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0, 0, 12, 0),
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            Content = Swatch(item.Colour, 14), Flyout = ColourFlyout(item),
+        };
+        ToolTip.SetTip(swatchBtn, "Change colour");
+
+        Control name;
+        if (_renaming)
+        {
+            _nameBox = new TextBox
             {
-                Content = st.ToString(), FontSize = 12, Padding = new Thickness(11, 5),
-                Background = on ? new SolidColorBrush(AccentColor) { Opacity = 0.18 } : Brushes.Transparent,
-                Foreground = on ? Accent : Muted, BorderBrush = on ? Accent : Stroke, BorderThickness = new Thickness(1),
-                CornerRadius = st switch
-                {
-                    WorkItemStatus.Active => new CornerRadius(7, 0, 0, 7),
-                    WorkItemStatus.Done => new CornerRadius(0, 7, 7, 0),
-                    _ => new CornerRadius(0),
-                },
-                Margin = new Thickness(st == WorkItemStatus.Active ? 0 : -1, 0, 0, 0),
-                Cursor = new Cursor(StandardCursorType.Hand),
+                Text = item.Name, FontSize = 19, FontWeight = FontWeight.SemiBold, Padding = new Thickness(6, 2),
+                VerticalAlignment = VerticalAlignment.Center,
             };
-            b.Click += (_, _) => Own(() => _host.SetStatus(item.Id, st));
-            row.Children.Add(b);
+            bool committed = false;
+            void Commit()
+            {
+                if (committed) return;
+                committed = true;
+                _renaming = false;
+                var n = _nameBox!.Text?.ReplaceLineEndings(" ").Trim() ?? "";
+                if (n.Length > 0 && n != item.Name)
+                    Own(() => _host.Mutate(item.Id, i => { i.Name = n; i.AddLog($"Renamed to \"{n}\"", byPerch: true); }));
+                Rerender();
+            }
+            _nameBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter) { Commit(); e.Handled = true; }
+                else if (e.Key == Key.Escape) { committed = true; _renaming = false; Rerender(); e.Handled = true; }
+            };
+            _nameBox.LostFocus += (_, _) => Commit();
+            name = _nameBox;
         }
-        return row;
+        else
+        {
+            var text = new TextBlock
+            {
+                Text = item.Name, FontSize = 19, FontWeight = FontWeight.SemiBold, Foreground = Title2,
+                TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+                Cursor = new Cursor(StandardCursorType.Ibeam), Background = Brushes.Transparent,
+            };
+            ToolTip.SetTip(text, "Click to rename");
+            text.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                _renaming = true;
+                Rerender();
+                Dispatcher.UIThread.Post(() => { _nameBox?.Focus(); _nameBox?.SelectAll(); }, DispatcherPriority.Input);
+            };
+            name = text;
+        }
+
+        var status = StatusPill(item);
+        status.Margin = new Thickness(12, 0, 6, 0);
+        var more = MoreButton(item);
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
+        Grid.SetColumn(swatchBtn, 0);
+        Grid.SetColumn(name, 1);
+        Grid.SetColumn(status, 2);
+        Grid.SetColumn(more, 3);
+        row.Children.Add(swatchBtn);
+        row.Children.Add(name);
+        row.Children.Add(status);
+        row.Children.Add(more);
+
+        int live = LiveMembers(item).Count();
+        var facts = $"Started {item.CreatedUtc.ToLocalTime():d MMM yyyy}";
+        if (live > 0) facts += live == 1 ? " · 1 session running" : $" · {live} sessions running";
+        var sub = new TextBlock { Text = facts, Foreground = Muted, FontSize = 12, Margin = new Thickness(26, 4, 0, 0) };
+
+        return new StackPanel { Children = { row, sub } };
+    }
+
+    // "● Active ▾": the status, and a menu to change it. Only the user moves an item between them (D3).
+    private Control StatusPill(WorkItem item)
+    {
+        var dot = item.Status switch
+        {
+            WorkItemStatus.Active => Palette.Green,
+            WorkItemStatus.Paused => Palette.Yellow,
+            _ => Palette.Idle,
+        };
+        var pill = new Button
+        {
+            Background = Brushes.Transparent, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(999), Padding = new Thickness(10, 3, 9, 3), Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 6,
+                Children =
+                {
+                    new Border { Width = 7, Height = 7, CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(dot), VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = item.Status.ToString(), FontSize = 12, Foreground = Fg, VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = "▾", FontSize = 10, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+        };
+        pill.Click += (_, _) =>
+        {
+            var items = new List<Control>();
+            foreach (var (st, label) in new[]
+                     {
+                         (WorkItemStatus.Active, "Active"), (WorkItemStatus.Paused, "Paused: one dim line in the overlay"),
+                         (WorkItemStatus.Done, "Done: off the overlay, kept here"),
+                     })
+            {
+                var mi = new MenuItem { Header = label, ToggleType = MenuItemToggleType.Radio, IsChecked = item.Status == st };
+                mi.Click += (_, _) => Own(() => _host.SetStatus(item.Id, st));
+                items.Add(mi);
+            }
+            new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight }.ShowAt(pill);
+        };
+        return pill;
+    }
+
+    // "⋯": the rarer actions, out of the way.
+    private Control MoreButton(WorkItem item)
+    {
+        var more = new Button
+        {
+            Content = "⋯", FontSize = 16, Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(8, 0, 2, 2), Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(more, "More");
+        more.Click += (_, _) =>
+        {
+            var items = new List<Control>
+            {
+                Item("Open file", () => { if (item.FilePath is { } p) PlatformServices.FileRevealer.OpenInEditor(p); }),
+                Item("Show in folder", () => { if (item.FilePath is { } p) PlatformServices.FileRevealer.RevealInFileManager(p); }),
+                Item("Copy activity as Markdown", () => TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(LogMarkdown(item))),
+                new Separator(),
+                Item("Delete…", async () =>
+                {
+                    bool ok = await ConfirmDialog.ShowAsync(this, "Delete this work item?",
+                        $"\"{item.Name}\" and its notes, links and activity are deleted. Its sessions aren't touched. "
+                        + "To finish an item and keep its history, mark it Done instead.", "Delete", "Cancel", more);
+                    if (ok) { Own(() => _host.Delete(item.Id)); _selectedId = null; ResetDisclosure(); Refresh(); }
+                }),
+            };
+            new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight }.ShowAt(more);
+        };
+        return more;
     }
 
     private Flyout ColourFlyout(WorkItem item)
@@ -536,150 +650,18 @@ internal sealed class WorkItemsWindow : Window
         return flyout;
     }
 
-    // ── Links ──
-
-    private Control LinksSection(WorkItem item)
-    {
-        var body = new StackPanel { Spacing = 2 };
-        foreach (var link in item.Links)
-        {
-            var label = new Button
-            {
-                Content = link.Label.Length > 0 ? link.Label : LinkLabel(link.Url), Foreground = Accent,
-                Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0, 3),
-                FontSize = 13, Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
-            };
-            var url = link.Url;
-            label.Click += (_, _) => PlatformServices.UrlOpener.Open(url);
-            // A URL keeps its tail visible, the way a path does (CLAUDE.md: never trim the end off).
-            var urlText = new TextBlock
-            {
-                Text = link.Url, Foreground = Muted, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.PrefixCharacterEllipsis, Margin = new Thickness(10, 0, 8, 0),
-            };
-            ToolTip.SetTip(urlText, link.Url);
-            var remove = IconButton("✕", "Remove link");
-            var target = link;
-            remove.Click += (_, _) => Own(() => _host.Mutate(item.Id, i =>
-                i.Links.RemoveAll(l => l.Url == target.Url && l.Label == target.Label) > 0));
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-            Grid.SetColumn(label, 0);
-            Grid.SetColumn(urlText, 1);
-            Grid.SetColumn(remove, 2);
-            row.Children.Add(label);
-            row.Children.Add(urlText);
-            row.Children.Add(remove);
-            body.Children.Add(row);
-        }
-        if (item.Links.Count == 0)
-            body.Children.Add(Hint("Design docs, PRs, tickets: anything with a URL."));
-
-        // The add form, folded behind "+ Add link".
-        var labelBox = new TextBox { PlaceholderText = "Label (optional)", FontSize = 12.5, Width = 150 };
-        var urlBox = new TextBox { PlaceholderText = "https://…", FontSize = 12.5 };
-        var add = SolidButton("Add");
-        var form = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Margin = new Thickness(0, 6, 0, 0), IsVisible = false };
-        Grid.SetColumn(labelBox, 0);
-        Grid.SetColumn(urlBox, 1);
-        Grid.SetColumn(add, 2);
-        urlBox.Margin = new Thickness(6, 0);
-        form.Children.Add(labelBox);
-        form.Children.Add(urlBox);
-        form.Children.Add(add);
-        void Commit()
-        {
-            var url = urlBox.Text?.Trim() ?? "";
-            if (url.Length == 0) { urlBox.Focus(); return; }
-            var label = labelBox.Text?.Trim() ?? "";
-            Own(() => _host.Mutate(item.Id, i => i.Links.Add(new WorkLink { Label = label, Url = url })));
-        }
-        add.Click += (_, _) => Commit();
-        urlBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
-        labelBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) { urlBox.Focus(); e.Handled = true; } };
-        body.Children.Add(form);
-
-        var toggle = CaptionLink("+ Add link", () => { form.IsVisible = true; urlBox.Focus(); });
-        return Section("Links", toggle, body);
-    }
-
-    // A label for a bare URL: its host plus the last path segment, so "github.com · 412".
-    private static string LinkLabel(string url)
-    {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return url;
-        var last = u.Segments.LastOrDefault()?.Trim('/') ?? "";
-        return last.Length > 0 ? $"{u.Host} · {Uri.UnescapeDataString(last)}" : u.Host;
-    }
-
-    // ── Notes ──
-
-    private Control NotesSection(WorkItem item)
-    {
-        Control body;
-        Control action;
-        if (_editingNotes)
-        {
-            // The draft outlives a rebuild of the pane (a status click, a scan's write), so unsaved notes are never lost.
-            var box = new TextBox
-            {
-                Text = _notesDraft ?? item.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 13,
-                MinHeight = 140, PlaceholderText = "A goal, a plan, a scratchpad. Markdown.",
-                VerticalContentAlignment = VerticalAlignment.Top,
-            };
-            box.TextChanged += (_, _) => _notesDraft = box.Text;
-            var save = SolidButton("Save");
-            save.Click += (_, _) =>
-            {
-                _editingNotes = false;
-                _notesDraft = null;
-                var text = box.Text ?? "";
-                Own(() => _host.Mutate(item.Id, i => { if (i.Notes == text.Trim()) return false; i.Notes = text; return true; }));
-                _detailSignature = "";
-                RenderDetail();
-            };
-            var cancel = OutlineButton("Cancel", Muted);
-            cancel.Click += (_, _) => { _editingNotes = false; _notesDraft = null; _detailSignature = ""; RenderDetail(); };
-            body = new StackPanel
-            {
-                Spacing = 8,
-                Children = { box, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, save } } },
-            };
-            action = new Border();
-            Dispatcher.UIThread.Post(() => box.Focus(), DispatcherPriority.Input);
-        }
-        else
-        {
-            body = item.Notes.Length > 0
-                ? MarkdownView.Build(item.Notes, NotesStyle())
-                : Hint("No notes yet.");
-            action = CaptionLink("Edit", () => { _editingNotes = true; _detailSignature = ""; RenderDetail(); });
-        }
-        return Section("Notes", action, body);
-    }
-
-    private static MarkdownStyle NotesStyle() => new(
-        Fg: Palette.FgBrush, Muted: Palette.MutedBrush, Title: Palette.TitleBrush, Link: Palette.AccentBrush,
-        CodeFg: Palette.FgBrush, CodeBg: Palette.SurfaceSunkenBrush, QuoteBar: Palette.BorderBrush,
-        Rule: Palette.SeparatorBrush, TableBorder: Palette.BorderBrush, TableHeaderBg: Palette.SurfaceSunkenBrush,
-        Syntax: Palette.Active.IsDark ? CodeSyntax.Dark() : CodeSyntax.Light())
-    {
-        BodySize = 13, BlockGap = 8, RootMargin = new Thickness(0), PlainClickLinks = true,
-        InlineCodeBg = Palette.SurfaceSunkenBrush,
-    };
-
     // ── Sessions ──
 
     private Control SessionsSection(WorkItem item)
     {
         _sessionsPanel = new StackPanel { Spacing = 1 };
         FillSessions(_sessionsPanel, item);
-        var add = new Button
-        {
-            Content = "Add a running session ▾", Foreground = Accent, Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0), Padding = new Thickness(0), FontSize = 11.5,
-            Cursor = new Cursor(StandardCursorType.Hand),
-        };
-        add.Click += (_, _) => ShowAddSessionMenu(add, item.Id);
-        return Section("Sessions", add, _sessionsPanel);
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
+        if (item.Status != WorkItemStatus.Done)
+            actions.Children.Add(TextAction("+ New session", Accent, _ => NewSessionRequested?.Invoke(item.Id)));
+        actions.Children.Add(TextAction("Add running ▾", Muted, b => ShowAddSessionMenu(b, item.Id)));
+        return Section("Sessions", actions, _sessionsPanel, top: 26);
     }
 
     private IEnumerable<ClaudeSession> LiveMembers(WorkItem item)
@@ -705,8 +687,17 @@ internal sealed class WorkItemsWindow : Window
         panel.Children.Clear();
         if (item.Members.Count == 0)
         {
-            panel.Children.Add(Hint("No sessions yet. Start one here, tick this item in a session's right-click menu, "
-                + $"or start claude in any terminal with PERCH_WORK={item.Id} (perch work help)."));
+            panel.Children.Add(new Border
+            {
+                BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(14, 12),
+                Child = new TextBlock
+                {
+                    Text = "No sessions yet. Start one with + New session, tick this item in a session's right-click menu, "
+                           + $"or run claude in any terminal with PERCH_WORK={item.Id}.",
+                    Foreground = Muted, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, LineHeight = 19,
+                },
+            });
             return;
         }
         var roster = _roster();
@@ -722,18 +713,20 @@ internal sealed class WorkItemsWindow : Window
     private Control SessionRow(WorkItem item, WorkMember m, ClaudeSession? s)
     {
         bool running = s is { IsDormant: false };
-        var dotColor = !running ? Palette.Idle : s!.Status switch
-        {
-            SessionStatus.Running => Palette.Green,
-            SessionStatus.NeedsAttention => Palette.Orange,
-            SessionStatus.AwaitingInput => Palette.Yellow,
-            SessionStatus.ApiError => Palette.Red,
-            _ => Palette.Idle,
-        };
+        var (statusText, statusColor) = s is null ? ("ended", Palette.Idle)
+            : s.IsDormant ? ("not running", Palette.Idle)
+            : s.Status switch
+            {
+                SessionStatus.Running => ("working", Palette.Green),
+                SessionStatus.NeedsAttention => ("done", Palette.Orange),
+                SessionStatus.AwaitingInput => ("needs you", Palette.Yellow),
+                SessionStatus.ApiError => ("api error", Palette.Red),
+                _ => ("idle", Palette.Idle),
+            };
         var dot = new Border
         {
-            Width = 8, Height = 8, CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(dotColor),
-            VerticalAlignment = VerticalAlignment.Center, Opacity = running ? 1 : 0.6,
+            Width = 8, Height = 8, CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(statusColor),
+            VerticalAlignment = VerticalAlignment.Center, Opacity = running ? 1 : 0.55,
         };
 
         string title = s?.DisplayName ?? m.Title ?? $"Session {m.SessionId[..Math.Min(8, m.SessionId.Length)]}";
@@ -744,58 +737,38 @@ internal sealed class WorkItemsWindow : Window
         var cwd = s?.Cwd ?? m.Cwd;
         var folder = new TextBlock
         {
-            Text = cwd ?? "", FontSize = 11, Foreground = Muted, Opacity = 0.85, IsVisible = !string.IsNullOrEmpty(cwd),
+            Text = cwd ?? "", FontSize = 11, Foreground = Muted, Opacity = 0.8, IsVisible = !string.IsNullOrEmpty(cwd),
             TextTrimming = TextTrimming.PrefixCharacterEllipsis,   // keep the folder's own name, lose the drive
         };
-        var text = new StackPanel { Children = { name, folder }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) };
+        var text = new StackPanel { Children = { name, folder }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 10, 0) };
 
-        var via = new Border
+        var status = new TextBlock
         {
-            BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 0), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
-            Child = new TextBlock { Text = m.Via.ToString().ToLowerInvariant(), FontSize = 10.5, Foreground = Muted },
+            Text = statusText, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = running && statusColor != Palette.Idle ? new SolidColorBrush(statusColor) : Muted,
         };
-        ToolTip.SetTip(via, m.Via switch
-        {
-            WorkJoin.Launched => "Started inside this item",
-            WorkJoin.Terminal => "Joined from a terminal (PERCH_WORK)",
-            _ => "Added by you",
-        } + $" · {m.AddedUtc.ToLocalTime():d MMM HH:mm}");
-
-        var meta = new TextBlock
-        {
-            FontSize = 11.5, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0),
-            Text = s is null ? "ended" : s.IsDormant ? "not running" : s.Status switch
-            {
-                SessionStatus.Running => "working",
-                SessionStatus.NeedsAttention => "done",
-                SessionStatus.AwaitingInput => "needs you",
-                SessionStatus.ApiError => "api error",
-                _ => "idle",
-            },
-        };
+        // Taking a session out is a hover action, so a list of sessions isn't a column of crosses.
         var remove = IconButton("✕", "Take out of this item");
+        remove.Opacity = 0;
         remove.Click += (_, _) => Own(() => _host.RemoveSession(item.Id, m.SessionId));
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
         Grid.SetColumn(dot, 0);
         Grid.SetColumn(text, 1);
-        Grid.SetColumn(via, 2);
-        Grid.SetColumn(meta, 3);
-        Grid.SetColumn(remove, 4);
+        Grid.SetColumn(status, 2);
+        Grid.SetColumn(remove, 3);
         grid.Children.Add(dot);
         grid.Children.Add(text);
-        grid.Children.Add(via);
-        grid.Children.Add(meta);
+        grid.Children.Add(status);
         grid.Children.Add(remove);
 
         var row = new Border
         {
-            Child = grid, Padding = new Thickness(8, 6), CornerRadius = new CornerRadius(6),
-            Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+            Child = grid, Padding = new Thickness(10, 7, 4, 7), CornerRadius = new CornerRadius(7),
+            Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand), Margin = new Thickness(-10, 0, 0, 0),
         };
-        row.PointerEntered += (_, _) => row.Background = RowHover;
-        row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
+        row.PointerEntered += (_, _) => { row.Background = RowHover; remove.Opacity = 1; };
+        row.PointerExited += (_, _) => { row.Background = Brushes.Transparent; remove.Opacity = 0; };
         row.PointerReleased += (_, e) =>
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
@@ -803,7 +776,13 @@ internal sealed class WorkItemsWindow : Window
             if (s is not null) FocusSessionRequested?.Invoke(s);
             else ShowEndedMenu(row, m);
         };
-        ToolTip.SetTip(row, s is null ? "Click to resume" : "Click to open");
+        var via = m.Via switch
+        {
+            WorkJoin.Launched => "Started inside this item",
+            WorkJoin.Terminal => "Joined from a terminal (PERCH_WORK)",
+            _ => "Added by you",
+        };
+        ToolTip.SetTip(row, $"{(s is null ? "Click to resume" : "Click to open")}\n{via}, {m.AddedUtc.ToLocalTime():d MMM HH:mm}");
         return row;
     }
 
@@ -833,14 +812,165 @@ internal sealed class WorkItemsWindow : Window
                 () => Own(() => _host.AddSession(itemId, s.SessionId, s.DisplayName, s.Cwd, WorkJoin.Manual))));
         if (items.Count == 0)
             items.Add(new MenuItem { Header = "Every running session is already in it", IsEnabled = false });
-        new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedLeft }.ShowAt(anchor);
+        new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedRight }.ShowAt(anchor);
     }
 
-    // ── Log ──
+    // ── Notes ──
 
-    private Control LogSection(WorkItem item)
+    private Control NotesSection(WorkItem item)
     {
-        _logBox = new TextBox { PlaceholderText = "Write a log entry and press Enter…", FontSize = 13 };
+        if (_editingNotes)
+        {
+            // The draft outlives a rebuild of the pane (a status click, a scan's write), so unsaved notes are never lost.
+            var box = new TextBox
+            {
+                Text = _notesDraft ?? item.Notes, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 13,
+                MinHeight = 120, PlaceholderText = "A goal, a plan, a scratchpad. Markdown.",
+                VerticalContentAlignment = VerticalAlignment.Top,
+            };
+            box.TextChanged += (_, _) => _notesDraft = box.Text;
+            var save = SolidButton("Save");
+            save.Click += (_, _) =>
+            {
+                _editingNotes = false;
+                _notesDraft = null;
+                var text = box.Text ?? "";
+                Own(() => _host.Mutate(item.Id, i => { if (i.Notes == text.Trim()) return false; i.Notes = text; return true; }));
+                Rerender();
+            };
+            var cancel = OutlineButton("Cancel", Muted);
+            cancel.Click += (_, _) => { _editingNotes = false; _notesDraft = null; Rerender(); };
+            Dispatcher.UIThread.Post(() => box.Focus(), DispatcherPriority.Input);
+            return Section("Notes", new Border(), new StackPanel
+            {
+                Spacing = 8,
+                Children = { box, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, save } } },
+            });
+        }
+
+        var edit = TextAction("Edit", Muted, _ => { _editingNotes = true; Rerender(); });
+        return Section("Notes", edit, MarkdownView.Build(item.Notes, NotesStyle()));
+    }
+
+    private static MarkdownStyle NotesStyle() => new(
+        Fg: Palette.FgBrush, Muted: Palette.MutedBrush, Title: Palette.TitleBrush, Link: Palette.AccentBrush,
+        CodeFg: Palette.FgBrush, CodeBg: Palette.SurfaceSunkenBrush, QuoteBar: Palette.BorderBrush,
+        Rule: Palette.SeparatorBrush, TableBorder: Palette.BorderBrush, TableHeaderBg: Palette.SurfaceSunkenBrush,
+        Syntax: Palette.Active.IsDark ? CodeSyntax.Dark() : CodeSyntax.Light())
+    {
+        // Each block reserves an 11px caret-highlight bar (MarkdownView.Wrap) the notes never use; pull it back so the
+        // text lines up with the rest of the pane.
+        BodySize = 13, BlockGap = 8, RootMargin = new Thickness(-11, 0, 0, 0), PlainClickLinks = true,
+        InlineCodeBg = Palette.SurfaceSunkenBrush,
+    };
+
+    // ── Links ──
+
+    private Control LinksSection(WorkItem item)
+    {
+        var body = new StackPanel { Spacing = 0 };
+        foreach (var link in item.Links)
+        {
+            var url = link.Url;
+            var label = new TextBlock
+            {
+                Text = link.Label.Length > 0 ? link.Label : LinkLabel(link.Url), Foreground = Accent, FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            // A URL keeps its tail visible, the way a path does (CLAUDE.md: never trim the end off).
+            var urlText = new TextBlock
+            {
+                Text = link.Url, Foreground = Muted, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.PrefixCharacterEllipsis, Margin = new Thickness(10, 0, 8, 0),
+            };
+            var remove = IconButton("✕", "Remove link");
+            remove.Opacity = 0;
+            var target = link;
+            remove.Click += (_, _) => Own(() => _host.Mutate(item.Id, i =>
+                i.Links.RemoveAll(l => l.Url == target.Url && l.Label == target.Label) > 0));
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+            Grid.SetColumn(label, 0);
+            Grid.SetColumn(urlText, 1);
+            Grid.SetColumn(remove, 2);
+            grid.Children.Add(label);
+            grid.Children.Add(urlText);
+            grid.Children.Add(remove);
+            var row = new Border
+            {
+                Child = grid, Padding = new Thickness(10, 5, 4, 5), CornerRadius = new CornerRadius(6),
+                Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand), Margin = new Thickness(-10, 0, 0, 0),
+            };
+            row.PointerEntered += (_, _) => { row.Background = RowHover; remove.Opacity = 1; };
+            row.PointerExited += (_, _) => { row.Background = Brushes.Transparent; remove.Opacity = 0; };
+            row.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                if (e.Source is Visual v && v.FindAncestorOfType<Button>() is not null) return;
+                PlatformServices.UrlOpener.Open(url);
+            };
+            ToolTip.SetTip(row, link.Url);
+            body.Children.Add(row);
+        }
+
+        if (_addingLink) body.Children.Add(LinkForm(item));
+        var add = TextAction("+ Add", Muted, _ =>
+        {
+            _addingLink = true;
+            Rerender();
+        });
+        return Section("Links", _addingLink ? new Border() : add, body);
+    }
+
+    private Control LinkForm(WorkItem item)
+    {
+        var urlBox = new TextBox { PlaceholderText = "Paste a URL", FontSize = 12.5 };
+        var labelBox = new TextBox { PlaceholderText = "Label (optional)", FontSize = 12.5, Width = 150, Margin = new Thickness(6, 0) };
+        var add = SolidButton("Add");
+        void Commit()
+        {
+            var url = urlBox.Text?.Trim() ?? "";
+            if (url.Length == 0) { urlBox.Focus(); return; }
+            var label = labelBox.Text?.Trim() ?? "";
+            _addingLink = false;
+            Own(() => _host.Mutate(item.Id, i => i.Links.Add(new WorkLink { Label = label, Url = url })));
+            Rerender();
+        }
+        void Cancel() { _addingLink = false; Rerender(); }
+        add.Click += (_, _) => Commit();
+        urlBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { Commit(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { Cancel(); e.Handled = true; }
+        };
+        labelBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { Commit(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { Cancel(); e.Handled = true; }
+        };
+        var form = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Margin = new Thickness(0, 6, 0, 0) };
+        Grid.SetColumn(urlBox, 0);
+        Grid.SetColumn(labelBox, 1);
+        Grid.SetColumn(add, 2);
+        form.Children.Add(urlBox);
+        form.Children.Add(labelBox);
+        form.Children.Add(add);
+        Dispatcher.UIThread.Post(() => urlBox.Focus(), DispatcherPriority.Input);
+        return form;
+    }
+
+    // A label for a bare URL: its host plus the last path segment, so "github.com · 412".
+    private static string LinkLabel(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return url;
+        var last = u.Segments.LastOrDefault()?.Trim('/') ?? "";
+        return last.Length > 0 ? $"{u.Host} · {Uri.UnescapeDataString(last)}" : u.Host;
+    }
+
+    // ── Activity ──
+
+    private Control ActivitySection(WorkItem item)
+    {
+        _logBox = new TextBox { PlaceholderText = "Add a note to the activity…", FontSize = 12.5 };
         _logBox.KeyDown += (_, e) =>
         {
             if (e.Key != Key.Enter) return;
@@ -851,52 +981,56 @@ internal sealed class WorkItemsWindow : Window
             Dispatcher.UIThread.Post(() => _logBox?.Focus(), DispatcherPriority.Input);
         };
 
-        var entries = new StackPanel { Spacing = 0, Margin = new Thickness(0, 10, 0, 0) };
-        string? lastDay = null;
-        var today = DateTime.Today;
-        foreach (var e in Enumerable.Reverse(item.Log))
-        {
-            var local = e.IsRaw ? (DateTime?)null : e.At.LocalDateTime;
-            var day = local is { } d ? (d.Date == today ? "Today" : d.Date == today.AddDays(-1) ? "Yesterday" : d.ToString("dddd d MMM")) : "";
-            if (day.Length > 0 && day != lastDay)
-            {
-                entries.Children.Add(new TextBlock
-                {
-                    Text = day.ToUpperInvariant(), FontSize = 10, FontWeight = FontWeight.SemiBold, LetterSpacing = 0.6,
-                    Foreground = Muted, Margin = new Thickness(0, lastDay is null ? 0 : 10, 0, 4),
-                });
-                lastDay = day;
-            }
-            var time = new TextBlock
-            {
-                Text = local?.ToString("HH:mm") ?? "", FontSize = 11.5, Foreground = Muted, Width = 44,
-                FontFeatures = FontFeatureCollection.Parse("tnum"),
-            };
-            var bullet = new Border
-            {
-                Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 6, 9, 0),
-                VerticalAlignment = VerticalAlignment.Top,
-                Background = e.ByPerch || e.IsRaw ? Muted : Accent,
-            };
-            var text = new TextBlock
-            {
-                Text = e.Text, FontSize = 12.5, TextWrapping = TextWrapping.Wrap,
-                Foreground = e.ByPerch || e.IsRaw ? Muted : Fg, FontStyle = e.IsRaw ? FontStyle.Italic : FontStyle.Normal,
-            };
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), Margin = new Thickness(0, 2) };
-            Grid.SetColumn(time, 0);
-            Grid.SetColumn(bullet, 1);
-            Grid.SetColumn(text, 2);
-            row.Children.Add(time);
-            row.Children.Add(bullet);
-            row.Children.Add(text);
-            entries.Children.Add(row);
-        }
-        if (item.Log.Count == 0) entries.Children.Add(Hint("Nothing logged yet. Perch notes when sessions join and end; you write what it meant."));
+        var entries = new StackPanel { Spacing = 0, Margin = new Thickness(0, 12, 0, 0) };
+        var newestFirst = Enumerable.Reverse(item.Log).ToList();
+        var shown = _showAllActivity ? newestFirst : newestFirst.Take(ActivityPreview).ToList();
+        foreach (var e in shown) entries.Children.Add(ActivityRow(e));
 
-        var copy = CaptionLink("Copy as Markdown", () =>
-            TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(LogMarkdown(item)));
-        return Section("Log", copy, new StackPanel { Children = { _logBox, entries } });
+        if (newestFirst.Count > shown.Count)
+            entries.Children.Add(TextAction($"Show all {newestFirst.Count}", Muted, _ => { _showAllActivity = true; Rerender(); }, new Thickness(0, 6, 0, 0)));
+        else if (_showAllActivity && newestFirst.Count > ActivityPreview)
+            entries.Children.Add(TextAction("Show less", Muted, _ => { _showAllActivity = false; Rerender(); }, new Thickness(0, 6, 0, 0)));
+
+        return Section("Activity", new Border(), new StackPanel { Children = { _logBox, entries } });
+    }
+
+    // One activity line: your notes in full colour with an accent bullet; Perch's facts small and muted.
+    private static Control ActivityRow(WorkLogEntry e)
+    {
+        bool mine = !e.ByPerch && !e.IsRaw;
+        var when = new TextBlock
+        {
+            Text = e.IsRaw ? "" : When(e.At.LocalDateTime), FontSize = 11, Foreground = Muted, Width = 92,
+            VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, mine ? 1 : 0, 0, 0),
+        };
+        var bullet = new Border
+        {
+            Width = 5, Height = 5, CornerRadius = new CornerRadius(3), Margin = new Thickness(0, 6, 10, 0),
+            VerticalAlignment = VerticalAlignment.Top, Background = mine ? Accent : Brushes.Transparent,
+        };
+        var text = new TextBlock
+        {
+            Text = e.Text, TextWrapping = TextWrapping.Wrap,
+            FontSize = mine ? 13 : 12, Foreground = mine ? Fg : Muted,
+            FontStyle = e.IsRaw ? FontStyle.Italic : FontStyle.Normal,
+        };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"), Margin = new Thickness(0, 3) };
+        Grid.SetColumn(when, 0);
+        Grid.SetColumn(bullet, 1);
+        Grid.SetColumn(text, 2);
+        row.Children.Add(when);
+        row.Children.Add(bullet);
+        row.Children.Add(text);
+        return row;
+    }
+
+    // "14:45" today, "Yesterday 09:10", else "Tue 14 Oct".
+    private static string When(DateTime local)
+    {
+        var today = DateTime.Today;
+        if (local.Date == today) return local.ToString("HH:mm");
+        if (local.Date == today.AddDays(-1)) return "Yesterday " + local.ToString("HH:mm");
+        return local.ToString(local.Year == today.Year ? "ddd d MMM" : "d MMM yyyy");
     }
 
     /// <summary>The log as a pasteable markdown list, oldest first, under the item's name.</summary>
@@ -914,9 +1048,9 @@ internal sealed class WorkItemsWindow : Window
 
     // ── Shared bits ──
 
-    private static Control Section(string caption, Control action, Control body)
+    private static Control Section(string caption, Control action, Control body, double top = 30)
     {
-        var head = new Grid { Margin = new Thickness(0, 26, 0, 8) };
+        var head = new Grid { Margin = new Thickness(0, top, 0, 8) };
         head.Children.Add(new TextBlock
         {
             Text = caption.ToUpperInvariant(), FontSize = 10.5, FontWeight = FontWeight.SemiBold, LetterSpacing = 0.8,
@@ -928,22 +1062,40 @@ internal sealed class WorkItemsWindow : Window
         return new StackPanel { Children = { head, body } };
     }
 
-    private static Button CaptionLink(string text, Action onClick)
+    // A text-only button (an action that shouldn't shout).
+    private static Button TextAction(string text, IBrush fg, Action<Button> onClick, Thickness? margin = null)
     {
         var b = new Button
         {
-            Content = text, Foreground = Accent, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            Padding = new Thickness(0), FontSize = 11.5, Cursor = new Cursor(StandardCursorType.Hand),
+            Content = text, Foreground = fg, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(0), FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
+            HorizontalAlignment = HorizontalAlignment.Left, Margin = margin ?? default,
+        };
+        b.Click += (_, _) => onClick(b);
+        return b;
+    }
+
+    // A dashed-outline chip for something an item doesn't have yet ("+ Notes", "+ Link").
+    private static Control Chip(string text, Action onClick)
+    {
+        var b = new Button
+        {
+            Content = text, Foreground = Muted, Background = Brushes.Transparent, BorderBrush = Stroke,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(999), Padding = new Thickness(12, 4),
+            FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
         };
         b.Click += (_, _) => onClick();
         return b;
     }
 
-    private static TextBlock Hint(string text) => new()
+    // A transparent row with a hover wash.
+    private static Border Hoverable(Control child, Thickness padding)
     {
-        Text = text, FontSize = 12.5, Foreground = Muted, FontStyle = FontStyle.Italic, TextWrapping = TextWrapping.Wrap,
-        Opacity = 0.85,
-    };
+        var row = new Border { Child = child, Padding = padding, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand) };
+        row.PointerEntered += (_, _) => row.Background = RowHover;
+        row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
+        return row;
+    }
 
     private static Border Swatch(string colour, double size) => new()
     {
@@ -956,7 +1108,7 @@ internal sealed class WorkItemsWindow : Window
         var b = new Button
         {
             Content = glyph, Foreground = Muted, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            Padding = new Thickness(6, 2), FontSize = 11, Cursor = new Cursor(StandardCursorType.Hand),
+            Padding = new Thickness(8, 2), FontSize = 11, Cursor = new Cursor(StandardCursorType.Hand),
             VerticalAlignment = VerticalAlignment.Center,
         };
         ToolTip.SetTip(b, tip);
@@ -983,13 +1135,11 @@ internal sealed class WorkItemsWindow : Window
         return mi;
     }
 
-    private static string Plural(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
-
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
         {
-            if (_editingNotes) { _editingNotes = false; _notesDraft = null; _detailSignature = ""; RenderDetail(); }
+            if (_editingNotes || _addingLink || _renaming) { ResetDisclosure(); Rerender(); }
             else Close();
             e.Handled = true;
         }

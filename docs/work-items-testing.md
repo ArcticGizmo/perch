@@ -114,14 +114,16 @@ Open it from the tray (**Work items…**), a header's right-click (**Open work i
 
 | | Expected |
 |---|---|
-| Status buttons | Active / Paused / Done. Paused turns the overlay header into one dim "· paused" line. Clicking that line opens the item. Done removes the header |
+| A bare item | Only the title, **Sessions** (with a short how-to when it has none), two chips **+ Notes** / **+ Link**, and **Activity**. Nothing empty takes a whole section |
+| List | **+ New work item** at the top turns into a name field (Enter creates, Esc or leaving it empty folds it back). Done items sit folded under **Done · N** at the bottom. A green **● N** shows only on items with running sessions |
+| Name | Click it to rename in place. Enter or clicking away saves, Esc cancels |
+| Status pill | **● Active ▾** opens Active / Paused / Done. Paused turns the overlay header into one dim "· paused" line, and clicking that line opens the item. Done removes the header |
 | Colour swatch | A flyout of 8 colours. Picking one recolours the header and stripes |
-| Links | **+ Add link** shows label + URL fields. A bare URL is labelled "host · last segment". The URL keeps its tail when it's too long. Clicking the label opens the browser |
-| Notes | **Edit** opens a text box, **Save** renders it as markdown. Start editing, then make a change from outside (e.g. `perch work log …`): your unsaved text stays |
-| Sessions | Running ones first. Click a running one to focus it. Click an ended one for Resume in Perch / Resume in terminal / View history. Each row shows how it joined (hover for the date) |
-| Log | Type and press Enter: the line appears at the top under "Today". **Copy as Markdown** puts `## <name>` and one `- yyyy-MM-dd HH:mm text` line per entry on the clipboard |
-| Open file / Show in folder | Opens the `.md` in your editor / Explorer |
-| Delete… | Asks first, then removes the file. The sessions themselves are untouched |
+| **⋯** | Open file, Show in folder, Copy activity as Markdown (`## <name>` then one `- yyyy-MM-dd HH:mm text` line per entry), Delete… (asks first; the sessions themselves are untouched) |
+| Sessions | Running ones first, with their state in colour. Hovering a row shows ✕ (take it out) and a tooltip with how and when it joined. Click a running one to focus it. Click an ended one for Resume in Perch / Resume in terminal / View history. **+ New session** and **Add running ▾** sit on the section header |
+| Notes | **+ Notes** opens a text box. **Save** renders it as markdown, and the section stays from then on. Start editing, then make a change from outside (e.g. `perch work log …`): your unsaved text stays |
+| Links | **+ Link** shows a URL field (label optional). A bare URL is labelled "host · last segment". The URL keeps its tail when it's too long. Click a row to open it, hover for ✕ |
+| Activity | Type and press Enter: your line appears at the top in full colour. Perch's own lines are smaller and muted. Only the last 5 show, with **Show all N** for the rest |
 | A broken hand edit | Delete the closing `---` in a file. The item drops out of the list with a red note naming the file, and the file isn't rewritten |
 
 ## 9. Ended sessions
