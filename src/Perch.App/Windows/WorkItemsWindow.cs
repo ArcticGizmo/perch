@@ -100,9 +100,12 @@ internal sealed class WorkItemsWindow : Window
         WindowDecorations = WindowDecorations.None;
         Background = Brushes.Transparent;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
-        CanResize = false;
+        // Frameless, so there's no system resize border: the grips laid over the edges (ResizeGrips) drive it.
+        CanResize = true;
         Width = 860;
         Height = 640;
+        MinWidth = 600;
+        MinHeight = 400;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
@@ -163,11 +166,19 @@ internal sealed class WorkItemsWindow : Window
         root.Children.Add(headerBorder);
         root.Children.Add(body);
 
-        Content = new Border
+        var layers = new Grid
         {
-            Background = Bg, CornerRadius = new CornerRadius(12), BorderBrush = Stroke, BorderThickness = new Thickness(1.5),
-            Child = root, ClipToBounds = true,
+            Children =
+            {
+                new Border
+                {
+                    Background = Bg, CornerRadius = new CornerRadius(12), BorderBrush = Stroke, BorderThickness = new Thickness(1.5),
+                    Child = root, ClipToBounds = true,
+                },
+            },
         };
+        foreach (var grip in ResizeGrips.For(this)) layers.Children.Add(grip);
+        Content = layers;
 
         _host.Changed += OnHostChanged;
         Closed += (_, _) => _host.Changed -= OnHostChanged;
