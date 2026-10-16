@@ -74,6 +74,8 @@ public static class Palette
         JiraBrush.Color        = Fixed.Jira.ToColor();
         BasketballBrush.Color  = Fixed.Basketball.ToColor();
         HypertreeBrush.Color   = Fixed.Hypertree.ToColor();
+        for (int i = 0; i < WorkHueBrushes.Length && i < Fixed.WorkHues.Count; i++)
+            WorkHueBrushes[i].Color = Fixed.WorkHues[i].ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -211,6 +213,19 @@ public static class Palette
     public static readonly SolidColorBrush BasketballBrush = new(FixedColors.Default.Basketball.ToColor());
     // The Hypertree mark on the overlay's Hypertree strip; Hypertree's brand green under every theme.
     public static readonly SolidColorBrush HypertreeBrush = new(FixedColors.Default.Hypertree.ToColor());
+
+    // ── Work-item colours ──
+    // The fixed set a work item is labelled with (FixedColors.WorkHues), by hue name. Fixed rather than themed: the
+    // colour is the item's identity, so it stays put across themes (only the CVD preview re-colours it).
+    private static readonly SolidColorBrush[] WorkHueBrushes =
+        FixedColors.Default.WorkHues.Select(c => new SolidColorBrush(c.ToColor())).ToArray();
+
+    /// <summary>The cached brush for a work item's colour name; an unknown name gets the first hue.</summary>
+    public static SolidColorBrush WorkHueBrush(string? name) =>
+        WorkHueBrushes[Math.Clamp(Perch.Data.Work.WorkHues.IndexOf(name), 0, WorkHueBrushes.Length - 1)];
+
+    /// <summary>A work item's colour, by name.</summary>
+    public static Color WorkHue(string? name) => WorkHueBrush(name).Color;
 
     // ── Draw with Perch swatches ──
     // The fixed drawing palette (see Perch.Games.DrawPalette). Theme-independent on purpose: a drawing must look

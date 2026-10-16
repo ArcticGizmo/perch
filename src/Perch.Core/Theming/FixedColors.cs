@@ -29,6 +29,10 @@ public sealed record FixedColors
     public required Rgb Basketball { get; init; }
     /// <summary>The Hypertree mark on the overlay's Hypertree strip (Hypertree's brand green).</summary>
     public required Rgb Hypertree { get; init; }
+    /// <summary>The work-item colours, index-aligned with <c>Perch.Data.Work.WorkHues.Names</c> (teal, violet, amber,
+    /// sky, pink, lime, indigo, slate). They label an item the user named, so they keep their identity under every
+    /// theme; mid-tones chosen to clear the 3:1 non-text floor on both the dark and the light overlay surface.</summary>
+    public required IReadOnlyList<Rgb> WorkHues { get; init; }
 
     /// <summary>The one true fixed palette.</summary>
     public static readonly FixedColors Default = new()
@@ -39,6 +43,17 @@ public sealed record FixedColors
         Jira       = new(38, 132, 255),   // Jira brand blue (#2684FF)
         Basketball = new(232, 118, 42),   // leather orange; reads on light and dark
         Hypertree  = new(21, 186, 150),   // the midpoint of Hypertree's #15BC72 → #14B7BB logo gradient
+        WorkHues   =
+        [
+            new(13, 148, 136),    // teal-600
+            new(139, 92, 246),    // violet-500
+            new(180, 83, 9),      // amber-700 (amber-600 sits right on 3:1 against the light overlay)
+            new(2, 132, 199),     // sky-600
+            new(219, 39, 119),    // pink-600
+            new(77, 124, 15),     // lime-700
+            new(99, 102, 241),    // indigo-500
+            new(100, 116, 139),   // slate-500
+        ],
     };
 
     /// <summary>These colours as seen under a colour-vision deficiency, for the designer's live preview
@@ -54,6 +69,7 @@ public sealed record FixedColors
             Jira       = CvdSim.Simulate(Jira, type),
             Basketball = CvdSim.Simulate(Basketball, type),
             Hypertree  = CvdSim.Simulate(Hypertree, type),
+            WorkHues   = WorkHues.Select(h => CvdSim.Simulate(h, type)).ToList(),
         };
     }
 

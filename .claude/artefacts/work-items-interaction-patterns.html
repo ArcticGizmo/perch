@@ -1,0 +1,623 @@
+<title>Perch Work Items</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column with wide "specimen" rows where a mockup of the Perch overlay sits beside its explanation. */
+:root {
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --ink: #15171d;
+  --muted: #555a69;
+  --rule: #dcdfe6;
+  --accent: #d2341c;
+  --accent-soft: #fbe6e2;
+
+  /* Overlay mockups follow Perch's Daylight theme in light mode, Midnight in dark */
+  --ov-bg: #f7f8fa;
+  --ov-raised: #ffffff;
+  --ov-hover: #eceef2;
+  --ov-text: #1b1d24;
+  --ov-title: #0c0e14;
+  --ov-muted: #55596a;
+  --ov-sep: #e2e5ea;
+  --ov-border: #cfd4dc;
+  --run: #15803d;
+  --attn: #c2410c;
+  --await: #a16207;
+  --idle: #475569;
+  --err: #b91c1c;
+  --wi-a: #0f766e;
+  --wi-b: #7e22ce;
+  --wi-c: #a16207;
+
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f0f15; --surface: #17171f; --ink: #e6e6ee; --muted: #9b9bb0; --rule: #2a2a39;
+    --accent: #ff6a52; --accent-soft: #3a1c18;
+    --ov-bg: #0f0f14; --ov-raised: #2d2d3c; --ov-hover: #191926; --ov-text: #e1e1eb; --ov-title: #f5f5fa;
+    --ov-muted: #8c8ca0; --ov-sep: #232332; --ov-border: #2d2d3c;
+    --run: #22c55e; --attn: #fb923c; --await: #facc15; --idle: #64748b; --err: #ef4444;
+    --wi-a: #2dd4bf; --wi-b: #c084fc; --wi-c: #fbbf24;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f0f15; --surface: #17171f; --ink: #e6e6ee; --muted: #9b9bb0; --rule: #2a2a39;
+  --accent: #ff6a52; --accent-soft: #3a1c18;
+  --ov-bg: #0f0f14; --ov-raised: #2d2d3c; --ov-hover: #191926; --ov-text: #e1e1eb; --ov-title: #f5f5fa;
+  --ov-muted: #8c8ca0; --ov-sep: #232332; --ov-border: #2d2d3c;
+  --run: #22c55e; --attn: #fb923c; --await: #facc15; --idle: #64748b; --err: #ef4444;
+  --wi-a: #2dd4bf; --wi-b: #c084fc; --wi-c: #fbbf24;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-body); font-size: 15px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; }
+.prose { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2.4rem, 6vw, 3.6rem); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+a { color: var(--accent); }
+.eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 600; }
+.muted { color: var(--muted); }
+
+header.hero { padding-block: 56px 32px; display: grid; gap: 16px; border-bottom: 1px solid var(--rule); }
+header.hero .lede { font-size: 1.15rem; max-width: 60ch; color: var(--muted); }
+header.hero .lede strong { color: var(--ink); font-weight: 600; }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; padding-block: 14px; border-bottom: 1px solid var(--rule); font-size: 0.88rem; }
+nav.toc a { color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+
+section { padding-block: 48px 8px; display: grid; gap: 20px; }
+section > .head { display: grid; gap: 8px; }
+
+/* Settled decisions */
+.settled { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.settled > div { background: var(--surface); padding: 16px 18px; display: grid; gap: 4px; align-content: start; }
+.settled .k { font-family: var(--f-mono); font-size: 0.75rem; color: var(--accent); letter-spacing: 0.04em; }
+.settled .v { font-weight: 600; }
+.settled .d { font-size: 0.9rem; color: var(--muted); }
+
+/* Model */
+.model { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.schema { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; font-family: var(--f-mono); font-size: 0.82rem; line-height: 1.75; overflow-x: auto; }
+.schema .t { color: var(--accent); font-weight: 500; }
+.schema .c { color: var(--muted); }
+.notes { display: grid; gap: 12px; }
+
+/* Shape switcher */
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 3px; background: var(--surface); gap: 2px; flex-wrap: wrap; }
+.seg button { font: inherit; font-size: 0.9rem; border: 0; background: transparent; color: var(--muted); padding: 6px 16px; border-radius: 999px; cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.specimen { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 32px; align-items: start; }
+.specimen .explain { display: grid; gap: 14px; }
+.pc { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pc h4 { margin: 0 0 4px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.pc ul { margin: 0; padding-left: 18px; font-size: 0.92rem; display: grid; gap: 4px; }
+
+.rec { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 14px 18px; border-radius: 0 8px 8px 0; display: grid; gap: 6px; }
+.rec .eyebrow { color: var(--accent); }
+
+/* Overlay mockup (Perch panel) */
+.ov { background: var(--ov-bg); color: var(--ov-text); border: 1px solid var(--ov-border); border-radius: 10px; font-size: 12.5px; line-height: 1.35; overflow: hidden; width: 100%; max-width: 340px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+.ov-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--ov-sep); font-weight: 600; color: var(--ov-title); }
+.ov-head .mark { width: 14px; height: 14px; border-radius: 4px; background: var(--accent); }
+.ov-head .sp { flex: 1; }
+.ov-head .g { color: var(--ov-muted); font-weight: 400; font-family: var(--f-mono); font-size: 11px; }
+.ov-cap { padding: 8px 12px 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ov-muted); font-weight: 600; }
+.grp { display: flex; align-items: center; gap: 7px; padding: 6px 12px; font-weight: 600; color: var(--ov-title); }
+.grp:hover { background: var(--ov-hover); }
+.grp .chev { color: var(--ov-muted); width: 10px; font-size: 10px; }
+.grp .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.grp .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grp .cnt { font-size: 11px; font-variant-numeric: tabular-nums; }
+.grp .plus { color: var(--ov-muted); width: 18px; text-align: center; font-weight: 400; }
+.grp.dim { opacity: 0.55; font-weight: 500; }
+.row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 30px; }
+.row.flat { padding-left: 12px; }
+.row:hover { background: var(--ov-hover); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.row .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .m { color: var(--ov-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.row.dim { opacity: 0.5; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; }
+.also { font-size: 10px; color: var(--ov-muted); border: 1px dashed var(--ov-border); border-radius: 4px; padding: 0 5px; }
+.ov-sep { height: 1px; background: var(--ov-sep); margin: 4px 0; }
+.chips { display: flex; gap: 5px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--ov-sep); }
+.chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--ov-border); color: var(--ov-muted); }
+.chip.on { background: var(--ov-raised); color: var(--ov-title); border-color: var(--ov-muted); }
+.focus { margin: 8px; padding: 8px 10px; border-radius: 8px; background: var(--ov-raised); border: 1px solid var(--ov-border); display: grid; gap: 2px; }
+.focus .l1 { display: flex; align-items: center; gap: 7px; font-weight: 600; color: var(--ov-title); }
+.focus .l2 { font-size: 11px; color: var(--ov-muted); padding-left: 16px; }
+.sugg { margin: 2px 10px 4px 26px; padding: 5px 8px; border: 1px dashed var(--ov-border); border-radius: 6px; font-size: 11px; color: var(--ov-muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sugg b { color: var(--ov-text); font-weight: 500; }
+.sugg .act { color: var(--accent); font-weight: 600; }
+.newrow { padding: 4px 12px 8px 30px; color: var(--ov-muted); font-size: 11.5px; }
+.ov-input { margin: 4px 12px 8px 30px; border: 1px solid var(--accent); border-radius: 5px; padding: 4px 8px; color: var(--ov-title); background: var(--ov-raised); font-size: 12px; }
+.ov-input .caret { display: inline-block; width: 1px; height: 12px; background: var(--ov-title); vertical-align: -2px; }
+
+/* Journeys */
+.journey { display: grid; gap: 18px; padding-block: 28px; border-top: 1px solid var(--rule); }
+.journey:first-of-type { border-top: 0; }
+.journey .q { font-size: 0.95rem; color: var(--muted); }
+.patterns { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.pat { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; display: grid; gap: 8px; align-content: start; }
+.pat .n { font-weight: 600; }
+.pat p { font-size: 0.9rem; color: var(--muted); }
+.pat .when { font-size: 0.8rem; font-family: var(--f-mono); color: var(--ink); }
+.pill { display: inline-block; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); justify-self: start; }
+.pill.later { background: transparent; color: var(--muted); border: 1px solid var(--rule); }
+
+.twocol { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 32px; align-items: start; }
+
+/* Context menu mockup */
+.menus { display: flex; gap: 0; align-items: flex-start; flex-wrap: wrap; }
+.menu { background: var(--ov-raised); color: var(--ov-text); border: 1px solid var(--ov-border); border-radius: 8px; padding: 4px; font-size: 12.5px; min-width: 190px; box-shadow: 0 8px 20px rgba(0,0,0,0.14); }
+.menu div { padding: 5px 10px; border-radius: 5px; display: flex; gap: 8px; align-items: center; }
+.menu .hl { background: var(--ov-hover); }
+.menu .ck { width: 12px; color: var(--accent); }
+.menu .ar { margin-left: auto; color: var(--ov-muted); }
+.menu hr { border: 0; border-top: 1px solid var(--ov-sep); margin: 4px 0; }
+.menu.sub { margin-top: 64px; margin-left: -6px; }
+
+/* Code */
+pre.cli { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-family: var(--f-mono); font-size: 0.82rem; line-height: 1.7; overflow-x: auto; }
+pre.cli .c { color: var(--muted); }
+pre.cli .p { color: var(--accent); }
+
+/* Item window mockup */
+.win { background: var(--ov-bg); color: var(--ov-text); border: 1px solid var(--ov-border); border-radius: 12px; overflow: hidden; font-size: 13px; box-shadow: 0 12px 32px rgba(0,0,0,0.14); }
+.win-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--ov-sep); flex-wrap: wrap; }
+.win-bar .sw { width: 12px; height: 12px; border-radius: 3px; background: var(--wi-a); }
+.win-bar .nm { font-family: var(--f-display); font-size: 1.15rem; font-weight: 700; color: var(--ov-title); }
+.status { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--run); color: var(--run); }
+.win-bar .sp { flex: 1; }
+.btn { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--ov-border); background: var(--ov-raised); color: var(--ov-title); white-space: nowrap; }
+.btn.pri { background: var(--accent); border-color: var(--accent); color: #fff; }
+.win-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.win-body > div { padding: 14px 16px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.win-body > div + div { border-left: 1px solid var(--ov-sep); }
+.wcap { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ov-muted); font-weight: 600; display: flex; justify-content: space-between; }
+.wcap span:last-child { text-transform: none; letter-spacing: 0; color: var(--accent); font-weight: 500; }
+.lnk { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; min-width: 0; }
+.lnk .lb { color: var(--ov-title); white-space: nowrap; }
+.lnk .u { color: var(--ov-muted); font-family: var(--f-mono); font-size: 11px; direction: rtl; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.md { font-size: 12.5px; color: var(--ov-text); display: grid; gap: 4px; }
+.md .h { font-weight: 600; color: var(--ov-title); }
+.md ul { margin: 0; padding-left: 16px; }
+.srow { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+.srow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .via { font-size: 10px; color: var(--ov-muted); border: 1px solid var(--ov-border); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.srow .m { font-size: 11px; color: var(--ov-muted); font-variant-numeric: tabular-nums; }
+.log { display: grid; gap: 0; }
+.log .e { display: grid; grid-template-columns: 52px 12px minmax(0, 1fr); gap: 8px; font-size: 12px; padding: 3px 0; }
+.log .tm { color: var(--ov-muted); font-family: var(--f-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.log .bul { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; background: var(--ov-muted); }
+.log .e.mine .bul { background: var(--accent); }
+.log .e.mine .tx { color: var(--ov-title); }
+.log .day { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ov-muted); padding: 6px 0 2px; font-weight: 600; }
+.logbox { border: 1px solid var(--ov-border); border-radius: 6px; padding: 5px 8px; color: var(--ov-muted); font-size: 12px; background: var(--ov-raised); }
+
+/* Dialog mockup */
+.dlg { background: var(--ov-raised); color: var(--ov-text); border: 1px solid var(--ov-border); border-radius: 10px; padding: 16px; display: grid; gap: 10px; max-width: 340px; font-size: 13px; box-shadow: 0 12px 28px rgba(0,0,0,0.16); }
+.dlg .ti { font-weight: 600; color: var(--ov-title); font-size: 14px; }
+.dlg .opts { display: grid; gap: 6px; }
+.dlg .opt { display: flex; gap: 8px; align-items: flex-start; }
+.dlg .rad { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--ov-muted); margin-top: 3px; flex: none; }
+.dlg .rad.on { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 45%, transparent 50%); }
+.dlg .acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Rollout + open questions */
+.steps { display: grid; gap: 0; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.steps > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 16px; padding: 14px 18px; background: var(--surface); }
+.steps > div + div { border-top: 1px solid var(--rule); }
+.steps .m { font-family: var(--f-mono); color: var(--accent); font-weight: 500; }
+.steps .b { display: grid; gap: 2px; }
+.steps .b span { color: var(--muted); font-size: 0.92rem; }
+.qs { display: grid; gap: 12px; counter-reset: q; }
+.qs > div { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; display: grid; gap: 4px; }
+.qs .lean { font-size: 0.9rem; color: var(--muted); }
+.qs .lean b { color: var(--ink); font-weight: 600; }
+
+footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--rule); font-size: 0.85rem; color: var(--muted); }
+
+@media (max-width: 820px) {
+  .specimen, .twocol, .model { grid-template-columns: minmax(0, 1fr); }
+  .win-body { grid-template-columns: minmax(0, 1fr); }
+  .win-body > div + div { border-left: 0; border-top: 1px solid var(--ov-sep); }
+  .pc { grid-template-columns: 1fr; }
+  .menu.sub { margin-top: 6px; margin-left: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Perch · design exploration · 16 Oct 2026</div>
+  <h1>Work items</h1>
+  <p class="lede">Perch tracks sessions. This explores how it could also track <strong>the work those sessions are for</strong>: a named pile you define, which sessions join however and wherever they run. The focus here is interaction: how you create items, put sessions in them, see them, write about them and finish them.</p>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#settled">What's settled</a>
+  <a href="#model">The model</a>
+  <a href="#shapes">Three shapes</a>
+  <a href="#journeys">Interaction patterns</a>
+  <a href="#slice">First slice</a>
+  <a href="#open">Still open</a>
+</nav>
+
+<section id="settled">
+  <div class="head">
+    <h2>What's settled</h2>
+    <p class="muted prose">From the first round of discussion. Everything below is designed against these.</p>
+  </div>
+  <div class="settled">
+    <div><span class="k">SIZE</span><span class="v">As big as you want</span><span class="d">A work item is a name plus details. Perch doesn't tell a task from an epic.</span></div>
+    <div><span class="k">MEMBERSHIP</span><span class="v">Many-to-many is allowed</span><span class="d">A session can sit in more than one item. It works, but the design doesn't optimise for it.</span></div>
+    <div><span class="k">DONE</span><span class="v">Only you close an item</span><span class="d">Perch never marks anything done. A merged PR or idle sessions don't mean the work is finished.</span></div>
+    <div><span class="k">LINKS</span><span class="v">Generic links</span><span class="d">A list of label + URL. No Jira or GitHub integration for now.</span></div>
+    <div><span class="k">PRINCIPLE</span><span class="v">Work the way you want</span><span class="d">Grouping is a label on sessions. It never decides where or how you run them.</span></div>
+  </div>
+</section>
+
+<section id="model">
+  <div class="head">
+    <h2>The model</h2>
+    <p class="muted prose">Deliberately small. Anything more structured belongs in whatever tracker the user already has, reached through a link.</p>
+  </div>
+  <div class="model">
+<pre class="schema"><span class="t">WorkItem</span>
+  id
+  name            <span class="c">// the only required field</span>
+  colour          <span class="c">// picked for you, changeable</span>
+  status          <span class="c">// Active · Paused · Done (manual)</span>
+  notes           <span class="c">// markdown, free-form</span>
+  links[]         <span class="c">// { label, url }</span>
+  log[]           <span class="c">// your entries + Perch's events</span>
+  rules[]         <span class="c">// optional "join automatically" rules</span>
+
+<span class="t">Membership</span>       <span class="c">// stored per session</span>
+  sessionId → [ workItemId, … ]
+  addedVia        <span class="c">// manual · launched · rule · suggestion</span></pre>
+    <div class="notes prose">
+      <p><b>Membership lives on the session side.</b> A session holds a list of item ids, so many-to-many costs nothing in storage. The UI just picks one item as the place to show it first.</p>
+      <p><b>Every membership records how it happened.</b> "Added by a rule" or "joined at launch" shows on the session row in the item, so automatic joins are visible and easy to undo.</p>
+      <p><b>Sessions stay what they are.</b> Live, ended, controlled or terminal-run, Perch already knows them by session id. A work item just points at them, so history, resume and stats keep working unchanged.</p>
+    </div>
+  </div>
+</section>
+
+<section id="shapes">
+  <div class="head">
+    <h2>Three shapes for the overlay</h2>
+    <p class="muted prose">The biggest decision is how work items show up where you look most: the overlay. Each shape below uses the same data and the same sessions.</p>
+  </div>
+  <div class="seg" role="tablist" aria-label="Overlay shape">
+    <button role="tab" id="tab-groups" aria-controls="panel-groups" aria-selected="true">Groups</button>
+    <button role="tab" id="tab-tags" aria-controls="panel-tags" aria-selected="false">Tags</button>
+    <button role="tab" id="tab-focus" aria-controls="panel-focus" aria-selected="false">Focus</button>
+  </div>
+
+  <div class="specimen" role="tabpanel" id="panel-groups" aria-labelledby="tab-groups">
+    <div class="ov" aria-label="Overlay mockup, grouped">
+      <div class="ov-head"><span class="mark"></span>Perch<span class="sp"></span><span class="g">4 live</span></div>
+      <div class="ov-cap">Work</div>
+      <div class="grp"><span class="chev">▾</span><span class="sw" style="background:var(--wi-a)"></span><span class="name">Payments refactor</span><span class="dot" style="background:var(--attn)"></span><span class="cnt" style="color:var(--attn)">1</span><span class="plus">+</span></div>
+      <div class="row"><span class="dot" style="background:var(--run)"></span><span class="t">api · worktree-a</span><span class="m">working 4m</span></div>
+      <div class="row"><span class="dot" style="background:var(--attn)"></span><span class="t">ui · worktree-b</span><span class="m">needs you</span></div>
+      <div class="row"><span class="dot" style="background:var(--idle)"></span><span class="t">migration script</span><span class="m">idle 1h</span></div>
+      <div class="grp"><span class="chev">▾</span><span class="sw" style="background:var(--wi-b)"></span><span class="name">macOS port</span><span class="dot" style="background:var(--run)"></span><span class="plus">+</span></div>
+      <div class="row"><span class="dot" style="background:var(--run)"></span><span class="t">notifications</span><span class="m">working 12m</span></div>
+      <div class="row"><span class="dot" style="background:var(--idle)"></span><span class="t">ui · worktree-b</span><span class="also">also in Payments</span></div>
+      <div class="grp dim"><span class="chev">▸</span><span class="sw" style="background:var(--wi-c)"></span><span class="name">Docs site polish · paused</span></div>
+      <div class="ov-sep"></div>
+      <div class="grp"><span class="chev">▾</span><span class="sw" style="background:transparent;border:1px dashed var(--ov-muted)"></span><span class="name" style="font-weight:500">Not in a work item</span></div>
+      <div class="row"><span class="dot" style="background:var(--idle)"></span><span class="t">quick question</span><span class="m">idle 3m</span></div>
+    </div>
+    <div class="explain">
+      <h3>Groups: items are collapsible headers, sessions nest under them</h3>
+      <p class="prose">The sessions section is regrouped by work item. Each header uses Perch's existing collapsible-section pattern (chevron, caption, "+" on the right). Its light shows the most urgent status among its sessions, the same rule as Roost tab lights. Sessions in no item collect under a final header. A session in two items appears under both, with an "also in" marker on the second.</p>
+      <div class="pc">
+        <div><h4>Good for</h4><ul><li>Seeing the whole piece of work at once</li><li>Fits patterns Perch already has</li><li>Collapse the work you're not doing</li></ul></div>
+        <div><h4>Costs</h4><ul><li>Takes more vertical space</li><li>Many-to-many shows duplicate rows</li><li>Reorders a list people know by heart</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="specimen" role="tabpanel" id="panel-tags" aria-labelledby="tab-tags" hidden>
+    <div class="ov" aria-label="Overlay mockup, tagged">
+      <div class="ov-head"><span class="mark"></span>Perch<span class="sp"></span><span class="g">4 live</span></div>
+      <div class="chips"><span class="chip on">All</span><span class="chip" style="color:var(--wi-a)">Payments</span><span class="chip" style="color:var(--wi-b)">macOS</span><span class="chip">Untagged</span></div>
+      <div class="ov-cap">Sessions</div>
+      <div class="row flat"><span class="dot" style="background:var(--attn)"></span><span class="t">ui · worktree-b</span><span class="tag" style="color:var(--wi-a)">Payments</span><span class="tag" style="color:var(--wi-b)">macOS</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--run)"></span><span class="t">api · worktree-a</span><span class="tag" style="color:var(--wi-a)">Payments</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--run)"></span><span class="t">notifications</span><span class="tag" style="color:var(--wi-b)">macOS</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--idle)"></span><span class="t">migration script</span><span class="tag" style="color:var(--wi-a)">Payments</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--idle)"></span><span class="t">quick question</span></div>
+    </div>
+    <div class="explain">
+      <h3>Tags: the list stays flat, items are coloured labels you filter by</h3>
+      <p class="prose">Nothing moves. Each session row gets a small tag for each item it's in, and a chip row along the top filters the list. The work item itself is reached by clicking its tag, which opens its window.</p>
+      <div class="pc">
+        <div><h4>Good for</h4><ul><li>Smallest change to the overlay</li><li>Many-to-many feels natural</li><li>Easy to ignore if you don't use it</li></ul></div>
+        <div><h4>Costs</h4><ul><li>No sense of the item as a whole</li><li>Tags eat row width (titles get shorter)</li><li>No per-item status at a glance</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="specimen" role="tabpanel" id="panel-focus" aria-labelledby="tab-focus" hidden>
+    <div class="ov" aria-label="Overlay mockup, focus">
+      <div class="ov-head"><span class="mark"></span>Perch<span class="sp"></span><span class="g">4 live</span></div>
+      <div class="focus">
+        <div class="l1"><span class="sw" style="width:9px;height:9px;border-radius:2px;background:var(--wi-a)"></span>Payments refactor<span style="flex:1"></span><span class="g" style="color:var(--ov-muted);font-weight:400;font-size:11px">switch ▾</span></div>
+        <div class="l2">3 sessions · 1 needs you · new sessions join this</div>
+      </div>
+      <div class="row flat"><span class="dot" style="background:var(--run)"></span><span class="t">api · worktree-a</span><span class="m">working 4m</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--attn)"></span><span class="t">ui · worktree-b</span><span class="m">needs you</span></div>
+      <div class="row flat"><span class="dot" style="background:var(--idle)"></span><span class="t">migration script</span><span class="m">idle 1h</span></div>
+      <div class="ov-cap">Everything else</div>
+      <div class="row flat dim"><span class="dot" style="background:var(--run)"></span><span class="t">notifications</span><span class="m">macOS port</span></div>
+      <div class="row flat dim"><span class="dot" style="background:var(--idle)"></span><span class="t">quick question</span><span class="m"></span></div>
+    </div>
+    <div class="explain">
+      <h3>Focus: one current item, and new sessions join it by default</h3>
+      <p class="prose">You pick what you're working on now. The overlay leads with that item's sessions and dims the rest (they still raise alerts). Any session you start while an item is in focus, from a terminal or from Perch, joins it automatically. Switching focus is one click or a hotkey, so the log knows when you moved between items.</p>
+      <div class="pc">
+        <div><h4>Good for</h4><ul><li>Almost no manual assigning</li><li>Gives the log real "time spent" data</li><li>Matches how a day actually goes</li></ul></div>
+        <div><h4>Costs</h4><ul><li>Easy to forget to switch, so sessions land in the wrong item</li><li>Hides parallel work across items</li><li>A mode to keep in your head</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec">
+    <span class="eyebrow">Recommendation</span>
+    <p class="prose"><b>Store as tags, show as groups, add focus later as a shortcut.</b> The data model above is already tag-shaped, so many-to-many is free. The overlay groups by item, because seeing the whole piece of work is the point. Focus can come later as an opt-in way to attach sessions, not as a layout. A setting could let people who prefer the flat list keep it, with tags on the rows.</p>
+  </div>
+</section>
+
+<section id="journeys">
+  <div class="head">
+    <h2>Interaction patterns</h2>
+    <p class="muted prose">Grouped by what you're trying to do. Each pattern is tagged <span class="pill">First</span> if it belongs in the first slice, or <span class="pill later">Later</span> if it can wait.</p>
+  </div>
+
+  <div class="journey" id="create">
+    <div class="head"><h3>Create a work item</h3><p class="q">How quickly can I name a piece of work without stopping what I'm doing?</p></div>
+    <div class="twocol">
+      <div class="ov" aria-label="Inline create mockup">
+        <div class="ov-head"><span class="mark"></span>Perch<span class="sp"></span></div>
+        <div class="grp"><span class="chev">▾</span><span class="name" style="font-weight:600;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ov-muted)">Work</span><span class="plus" style="color:var(--accent)">+</span></div>
+        <div class="ov-input">Billing emails v2<span class="caret"></span></div>
+        <div class="newrow">Enter to create · Esc to cancel</div>
+        <div class="grp"><span class="chev">▸</span><span class="sw" style="background:var(--wi-a)"></span><span class="name">Payments refactor</span></div>
+      </div>
+      <div class="patterns">
+        <div class="pat"><span class="pill">First</span><span class="n">"+" on the Work header</span><p>Opens a one-line name field in place. Enter creates the item, with a colour picked for you. Notes and links come later, from the item window.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">From a session</span><p>Right-click a session, then "New work item from this session". The name starts as the session title, and the session is already in it.</p></div>
+        <div class="pat"><span class="pill">Later</span><span class="n">From the terminal</span><p><code>perch work new "Billing emails v2"</code>. Prints the item's short id so you can use it straight away.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="journey" id="attach">
+    <div class="head"><h3>Put sessions in an item</h3><p class="q">The make-or-break part. If this takes more than a click, people stop doing it.</p></div>
+    <div class="twocol">
+      <div class="menus" aria-label="Context menu mockup">
+        <div class="menu">
+          <div>Open session</div>
+          <div>Rename…</div>
+          <div class="hl">Add to work item<span class="ar">▸</span></div>
+          <hr>
+          <div>Copy session id</div>
+          <div>End session</div>
+        </div>
+        <div class="menu sub">
+          <div><span class="ck">✓</span>Payments refactor</div>
+          <div class="hl"><span class="ck"></span>macOS port</div>
+          <div><span class="ck"></span>Docs site polish</div>
+          <hr>
+          <div><span class="ck"></span>New work item…</div>
+        </div>
+      </div>
+      <div class="patterns">
+        <div class="pat"><span class="pill">First</span><span class="n">Right-click, "Add to work item"</span><p>Recently used items first, with checkmarks. Ticking another item adds the session to it and keeps the first. Unticking removes it. This is where many-to-many lives, without any extra UI.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">Start it inside the item</span><p>The "+" on an item's header starts a new session that's in the item from its first second. The session launcher and Roost get an item picker next to the account picker.</p></div>
+        <div class="pat"><span class="pill">Later</span><span class="n">Drag a row onto a header</span><p>Drag a session onto an item's header to move it there. Hold Ctrl to add it without leaving its current item.</p></div>
+      </div>
+    </div>
+
+    <div class="patterns">
+      <div class="pat"><span class="pill">First</span><span class="n">From any terminal</span><p>Set <code>PERCH_WORK</code> before running <code>claude</code>, or use <code>perch --work payments</code>. <code>perch-hook</code> reads it on SessionStart and the session joins that item. This is the "run it however you want" path.</p></div>
+      <div class="pat"><span class="pill later">Later</span><span class="n">Folder rules you set</span><p>On an item, add "sessions started in <span class="mono">…\payments-wt-*</span> join automatically". This is something you switch on, not something Perch works out for you. Rows it adds are marked "rule".</p></div>
+      <div class="pat"><span class="pill later">Later</span><span class="n">Suggestions</span><p>A dashed row under an item: "ui · worktree-c looks related (same repo). Add · Dismiss". Perch never adds a session on its own.</p></div>
+      <div class="pat"><span class="pill later">Later</span><span class="n">Follow the session</span><p>Resuming or restarting a session keeps its items. So does <code>/resume</code> in another account. The new session id joins wherever the old one was.</p></div>
+    </div>
+<pre class="cli"><span class="c"># any terminal, any folder: the session joins "Payments refactor"</span>
+<span class="p">$</span> $env:PERCH_WORK = "payments"
+<span class="p">$</span> claude
+
+<span class="c"># or let Perch open the session for you</span>
+<span class="p">$</span> perch --work payments
+
+<span class="c"># scripting and the odd quick fix</span>
+<span class="p">$</span> perch work add payments --session 4f1c…
+<span class="p">$</span> perch work list</pre>
+  </div>
+
+  <div class="journey" id="glance">
+    <div class="head"><h3>See where the work stands</h3><p class="q">From the overlay, can I tell which piece of work needs me, without opening anything?</p></div>
+    <div class="twocol">
+      <div class="ov" aria-label="Overlay with suggestion mockup">
+        <div class="ov-head"><span class="mark"></span>Perch<span class="sp"></span></div>
+        <div class="grp"><span class="chev">▾</span><span class="sw" style="background:var(--wi-a)"></span><span class="name">Payments refactor</span><span class="dot" style="background:var(--attn)"></span><span class="cnt" style="color:var(--attn)">1</span><span class="plus">+</span></div>
+        <div class="row"><span class="dot" style="background:var(--attn)"></span><span class="t">ui · worktree-b</span><span class="m">needs you</span></div>
+        <div class="row"><span class="dot" style="background:var(--run)"></span><span class="t">api · worktree-a</span><span class="m">working 4m</span></div>
+        <div class="row dim"><span class="dot" style="background:var(--idle)"></span><span class="t">schema spike</span><span class="m">ended · resume</span></div>
+        <div class="sugg"><span><b>ui · worktree-c</b> same repo</span><span class="act">Add</span><span>Dismiss</span></div>
+        <div class="grp dim"><span class="chev">▸</span><span class="sw" style="background:var(--wi-b)"></span><span class="name">macOS port · 2 ended</span></div>
+      </div>
+      <div class="patterns">
+        <div class="pat"><span class="pill">First</span><span class="n">A rolled-up light per item</span><p>The header dot is the most urgent state inside (error, needs you, done and waiting, working, idle). The number counts sessions that want you. A collapsed item still tells you when to open it.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">Ended sessions stay in the item</span><p>They show dimmed with "resume", then fold into an "N ended" count on the header once there are more than a couple. The item is the memory of the work, not just what's running now.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">Collapse is remembered per item</span><p>Same as the Social section today. A Paused item collapses to one dimmed line. A Done item leaves the overlay.</p></div>
+        <div class="pat"><span class="pill later">Later</span><span class="n">Item chip in the session window</span><p>The session window's header shows which items the session is in. Clicking a chip opens the item. Roost tabs could be bound to an item the same way.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="journey" id="home">
+    <div class="head"><h3>The item's own window</h3><p class="q">Where the details live: what this is, where its links point, which sessions worked on it, and what happened.</p></div>
+    <div class="win" aria-label="Work item window mockup">
+      <div class="win-bar"><span class="sw"></span><span class="nm">Payments refactor</span><span class="status">Active ▾</span><span class="sp"></span><span class="btn">Open in Roost</span><span class="btn pri">+ New session</span></div>
+      <div class="win-body">
+        <div>
+          <div><div class="wcap"><span>Links</span><span>+ Add link</span></div>
+            <div class="lnk"><span class="lb">Design doc</span><span class="u">https://example.com/docs/payments-v2</span></div>
+            <div class="lnk"><span class="lb">PR</span><span class="u">https://github.com/acme/billing/pull/412</span></div>
+            <div class="lnk"><span class="lb">Ticket</span><span class="u">https://tracker.example.com/browse/PAY-88</span></div>
+          </div>
+          <div><div class="wcap"><span>Notes</span><span>Edit</span></div>
+            <div class="md">
+              <div class="h">Goal</div>
+              <div>Move charge creation behind the new ledger API without downtime.</div>
+              <div class="h">Plan</div>
+              <ul><li>API changes in worktree-a</li><li>UI flags in worktree-b</li><li>Backfill script last, after review</li></ul>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div><div class="wcap"><span>Sessions</span><span>Add existing…</span></div>
+            <div class="srow"><span class="dot" style="background:var(--attn)"></span><span class="t">ui · worktree-b</span><span class="via">launched</span><span class="m">needs you</span></div>
+            <div class="srow"><span class="dot" style="background:var(--run)"></span><span class="t">api · worktree-a</span><span class="via">manual</span><span class="m">4m</span></div>
+            <div class="srow"><span class="dot" style="background:var(--idle)"></span><span class="t">migration script</span><span class="via">rule</span><span class="m">1h</span></div>
+            <div class="srow" style="opacity:.55"><span class="dot" style="background:var(--idle)"></span><span class="t">schema spike</span><span class="via">manual</span><span class="m">ended Tue</span></div>
+          </div>
+          <div><div class="wcap"><span>Log</span><span>Copy as Markdown</span></div>
+            <div class="logbox">Write a log entry…</div>
+            <div class="log">
+              <div class="day">Today</div>
+              <div class="e"><span class="tm">14:10</span><span class="bul"></span><span class="tx">ui · worktree-b needs you</span></div>
+              <div class="e mine"><span class="tm">13:42</span><span class="bul"></span><span class="tx">Ledger API agreed with the platform team. Unblocks the UI half.</span></div>
+              <div class="e"><span class="tm">13:05</span><span class="bul"></span><span class="tx">api · worktree-a joined (manual)</span></div>
+              <div class="day">Tuesday</div>
+              <div class="e"><span class="tm">16:30</span><span class="bul"></span><span class="tx">schema spike ended</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="patterns">
+      <div class="pat"><span class="pill">First</span><span class="n">Name, colour, status in the title bar</span><p>Click the name to rename it. Status is a plain dropdown: Active, Paused, Done. Nothing changes status without you.</p></div>
+      <div class="pat"><span class="pill">First</span><span class="n">Links are just label + URL</span><p>Paste a URL and the label is filled in from the host or path. They open in the browser. Long URLs keep their tail, like file paths do in Perch.</p></div>
+      <div class="pat"><span class="pill">First</span><span class="n">Notes are markdown</span><p>Uses the same viewer/editor as the markdown window. Whatever you want: a goal, a plan, a scratchpad.</p></div>
+      <div class="pat"><span class="pill">First</span><span class="n">Each session shows how it joined</span><p>"manual", "launched", "rule", "suggested". Hover a row to remove it from this item.</p></div>
+    </div>
+  </div>
+
+  <div class="journey" id="log">
+    <div class="head"><h3>Keep a worklog</h3><p class="q">What did I actually do on this, and across everything this week?</p></div>
+    <div class="patterns">
+      <div class="pat"><span class="pill">First</span><span class="n">Two kinds of entry, one timeline</span><p>Perch writes the facts: a session joined, ended, needed you, was resumed. You write the meaning, in one line. Your entries are drawn stronger so they stand out from the events.</p></div>
+      <div class="pat"><span class="pill">First</span><span class="n">Log from wherever you are</span><p>The box in the item window. "Log a note…" when you right-click an item header. <code>perch work log payments "…"</code> from a terminal.</p></div>
+      <div class="pat"><span class="pill later">Later</span><span class="n">A "This week" view across items</span><p>Every item's entries by day, in one list. "Copy as Markdown" gives you a standup or handover note straight away.</p></div>
+      <div class="pat"><span class="pill later">Later</span><span class="n">Summaries from the transcripts</span><p>On request, a one-line summary of what each session did, taken from the transcript tail. These are drafts you edit before they go into the log, never written straight in.</p></div>
+    </div>
+  </div>
+
+  <div class="journey" id="finish">
+    <div class="head"><h3>Pause, finish and come back</h3><p class="q">Finishing is your call. What happens to sessions that are still around?</p></div>
+    <div class="twocol">
+      <div class="dlg" aria-label="Mark done dialog mockup">
+        <div class="ti">Mark "Payments refactor" done?</div>
+        <div class="muted" style="font-size:12.5px;color:var(--ov-muted)">2 sessions in it are still running.</div>
+        <div class="opts">
+          <div class="opt"><span class="rad on"></span><span>Leave them running</span></div>
+          <div class="opt"><span class="rad"></span><span>End them</span></div>
+          <div class="opt"><span class="rad"></span><span>Take them out of this item and leave them running</span></div>
+        </div>
+        <div class="acts"><span class="btn">Cancel</span><span class="btn pri">Mark done</span></div>
+      </div>
+      <div class="patterns">
+        <div class="pat"><span class="pill">First</span><span class="n">Done is a button, nothing more</span><p>In the title bar's status dropdown, or by right-clicking the header. Perch only asks something when sessions are still running, and the default touches nothing.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">Paused is "not now"</span><p>The item stays in the overlay as one dimmed line. Alerts from its sessions still come through.</p></div>
+        <div class="pat"><span class="pill">First</span><span class="n">Done items are kept</span><p>They're listed under Done in the Work window, with their notes, links, log and session history. Reopen one any time and it's back in the overlay.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="slice">
+  <div class="head">
+    <h2>A first slice</h2>
+    <p class="muted prose">What's tagged <span class="pill">First</span> above, in an order where each step can be used on its own.</p>
+  </div>
+  <div class="steps">
+    <div><span class="m">W0</span><div class="b"><b>Model and storage</b><span>Work items, membership with "added via", a local store, tests over fixtures.</span></div></div>
+    <div><span class="m">W1</span><div class="b"><b>Overlay groups</b><span>Item headers with rolled-up light, create with "+", right-click "Add to work item", a "Not in a work item" group.</span></div></div>
+    <div><span class="m">W2</span><div class="b"><b>Start inside an item</b><span>"+" on the header, an item picker in the launcher, <code>PERCH_WORK</code> read by perch-hook, <code>perch --work</code>.</span></div></div>
+    <div><span class="m">W3</span><div class="b"><b>Item window</b><span>Title bar with status, links, markdown notes, sessions with how they joined, the log with your own entries.</span></div></div>
+    <div><span class="m">W4</span><div class="b"><b>Later set</b><span>Drag to assign, folder rules, suggestions, This week view, Roost binding, Focus as an opt-in.</span></div></div>
+  </div>
+</section>
+
+<section id="open">
+  <div class="head">
+    <h2>Still open</h2>
+    <p class="muted prose">These change the build. Each has a suggested answer to react to.</p>
+  </div>
+  <div class="qs">
+    <div><b>Groups, tags or focus in the overlay?</b><span class="lean"><b>Suggested:</b> groups, with tags as an option for people who want a flat list, and focus later as a way to attach sessions.</span></div>
+    <div><b>Where do work items live on disk?</b><span class="lean"><b>Suggested:</b> one markdown file per item (front matter for status and links, body for notes and log) in a Perch folder. You can edit it in any editor, grep it, keep it in git, and a session could read it later. The alternative is a JSON file next to the settings, which is simpler but locked to Perch.</span></div>
+    <div><b>Should sessions not in an item be shown first or last?</b><span class="lean"><b>Suggested:</b> last, under their own header, so the work leads. If you never create an item, the overlay looks exactly as it does today.</span></div>
+    <div><b>Should a session know which item it's in?</b><span class="lean"><b>Suggested:</b> not yet. Once items are files, perch-hook could add the item's name and notes as context on SessionStart. That needs an opt-in per item and a size cap.</span></div>
+    <div><b>Does a work item have a home folder or repo?</b><span class="lean"><b>Suggested:</b> no, by default. A work item can span repos, or have none at all. A folder only appears when you add a rule.</span></div>
+  </div>
+</section>
+
+<footer>Design exploration for Perch. Example item and session names are illustrative.</footer>
+</div>
+
+<script>
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.seg [role="tab"]'));
+  function select(tab) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { select(t); });
+    t.addEventListener('keydown', function (e) {
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!d) return;
+      var n = tabs[(i + d + tabs.length) % tabs.length];
+      select(n); n.focus(); e.preventDefault();
+    });
+  });
+  select(tabs[0]);
+})();
+</script>
