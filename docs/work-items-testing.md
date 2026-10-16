@@ -58,6 +58,14 @@ In the window, type a second name in **Name a new work item…** and press Enter
 | Header light | The most urgent state among the item's sessions: red for an API error, then yellow for waiting on you, orange for done/unread, green for working. The number next to it counts the sessions that want you |
 | Click a header | Collapses or expands it. Restart the tray and the collapse state is kept |
 | Click "Not in a work item" | Collapses or expands too |
+| End one of an item's sessions | Within a scan, a faded "<name> … ended" line appears at the bottom of the item's group (the newest five, then "N more ended…", which opens the window). Collapse the item and its header says "N ended" instead |
+| Click an ended line | A menu: Resume in Perch, Resume in terminal, View history, Take out of this item. Right-click opens the same menu. Take out removes the line and logs "taken out" |
+| Drag a session row onto another item's header | An accent outline marks the item under the pointer and a chip with the session's name follows it. Drop: the session moves to that item (out of the one it was under). The log of each item shows the leave and the join |
+| Drag onto a session or ended line inside an item | Same as dropping on that item's header |
+| Drag onto "Not in a work item" | The session leaves its item |
+| Drag onto its own group, the Autonomous group, or off the list | The no-entry cursor shows, and dropping does nothing |
+| A press on a row that barely moves | Still a click (focuses the session) |
+| Briefcase on the "+ New session" row | Sits left of the clock (Recent) and the Roost. Hover for "Work items · N active"; click opens the window |
 
 ## 4. Start a session inside an item
 
@@ -124,6 +132,7 @@ Open it from the tray (**Work items…**), a header's right-click (**Open work i
 | Notes | **+ Notes** opens a text box. **Save** renders it as markdown, and the section stays from then on. Start editing, then make a change from outside (e.g. `perch work log …`): your unsaved text stays |
 | Links | **+ Link** shows a URL field (label optional). A bare URL is labelled "host · last segment". The URL keeps its tail when it's too long. Click a row to open it, hover for ✕ |
 | Activity | Type and press Enter: your line appears at the top in full colour. Perch's own lines are smaller and muted. Only the last 5 show, with **Show all N** for the rest |
+| Resize | Drag any edge or corner (the cursor changes over the outer few pixels). It stops shrinking at 600×400. The list keeps its width and the detail pane takes the rest. Dragging the header still moves the window |
 | A broken hand edit | Delete the closing `---` in a file. The item drops out of the list with a red note naming the file, and the file isn't rewritten |
 
 ## 9. Ended sessions

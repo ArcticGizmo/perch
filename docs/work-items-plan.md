@@ -9,8 +9,13 @@ not started. The interaction exploration this builds on is the artifact "Perch W
 
 - **Member rows aren't indented.** They keep the full row width and wear a 3px stripe in the item's colour, so every
   glyph lines up with the ungrouped rows.
-- **Ended sessions are a count on the header** ("2 ended"), not dimmed rows. They're listed, and resumable, in the
-  window.
+- **Ended sessions are faded lines under an expanded item** (changed 2026-10-16, at the user's ask; it was a count on
+  the header). The newest five show, one line each, with a "N more ended…" line that opens the window for the rest. A
+  click opens Resume in Perch / Resume in terminal / View history / Take out. A collapsed header still says "N ended".
+- **Drag a session row onto a group** (added 2026-10-16). Dropped on an item (its header or any line under it) it
+  *moves* there, out of the item it was dragged from; dropped on "Not in a work item" it leaves its item. To have a
+  session in two items, tick the second in its row menu.
+- **A Work items button** (a briefcase) on the "+ New session" row, left of Recent and the Roost, opens the window.
 - **Marking done asks nothing.** Done is reversible, and the item's still-running sessions just fall under "Not in a
   work item", so a leave/end/take-out prompt would only add a step. "End them" was also the one destructive choice.
 - **No inline name field in the overlay.** "New work item from this session…" creates the item at once and opens the

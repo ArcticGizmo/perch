@@ -219,8 +219,8 @@ internal sealed class WorkItemsHost : IDisposable
     }
 
     /// <summary>The overlay's view of the items: active ones (oldest first) then paused ones; done items are left
-    /// out. Each carries every member id (the overlay groups whichever are on its roster) and how many members are
-    /// no longer on <paramref name="roster"/>.</summary>
+    /// out. Each carries every member id (the overlay groups whichever are on its roster) and the members no longer
+    /// on <paramref name="roster"/>, newest first, named from their snapshots.</summary>
     public IReadOnlyList<OverlayWorkItem> ForOverlay(IReadOnlyList<ClaudeSession> roster)
     {
         var onRoster = roster.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
@@ -228,7 +228,10 @@ internal sealed class WorkItemsHost : IDisposable
             .OrderBy(i => i.Status)
             .Select(i => new OverlayWorkItem(i.Id, i.Name, i.Colour, i.Status,
                 i.Members.Select(m => m.SessionId).ToHashSet(StringComparer.Ordinal),
-                i.Members.Count(m => !onRoster.Contains(m.SessionId))))
+                i.Members.Where(m => !onRoster.Contains(m.SessionId))
+                    .OrderByDescending(m => m.AddedUtc)
+                    .Select(m => new OverlayEndedMember(m.SessionId, Label(m.Title, m.SessionId), m.Cwd))
+                    .ToList()))
             .ToList();
     }
 
@@ -236,7 +239,8 @@ internal sealed class WorkItemsHost : IDisposable
     /// re-pushes the list to the overlay when it must.</summary>
     public static string Signature(IReadOnlyList<OverlayWorkItem> items) =>
         string.Join("|", items.Select(i =>
-            $"{i.Id}:{i.Name}:{i.Colour}:{i.Status}:{i.EndedCount}:{string.Join(",", i.SessionIds.Order(StringComparer.Ordinal))}"));
+            $"{i.Id}:{i.Name}:{i.Colour}:{i.Status}:{string.Join(",", i.SessionIds.Order(StringComparer.Ordinal))}"
+            + $":{string.Join(",", i.Ended.Select(e => $"{e.SessionId}={e.Title}={e.Cwd}"))}"));
 
     // How a session is named in the log: its title snapshot, else a short id.
     private static string Label(string? title, string sessionId) =>

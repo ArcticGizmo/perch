@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
@@ -8,22 +9,35 @@ using Perch.Data.Work;
 
 namespace Perch.Avalonia.Views;
 
-/// <summary>A work item as the overlay draws it (docs/work-items-plan.md): its identity, and which of the sessions
-/// it holds are on the roster right now. Built by the app from the store + the latest scan.</summary>
+/// <summary>A work item as the overlay draws it (docs/work-items-plan.md): its identity, every session it holds (the
+/// overlay groups whichever are on its roster), and the ones that have ended (no longer on the roster), newest first.
+/// Built by the app from the store + the latest scan.</summary>
 internal sealed record OverlayWorkItem(
-    string Id, string Name, string Colour, WorkItemStatus Status, IReadOnlySet<string> SessionIds, int EndedCount);
+    string Id, string Name, string Colour, WorkItemStatus Status, IReadOnlySet<string> SessionIds,
+    IReadOnlyList<OverlayEndedMember> Ended)
+{
+    public int EndedCount => Ended.Count;
+}
+
+/// <summary>A member session that has ended, from the item's snapshot of it: enough to name it and resume it.</summary>
+internal sealed record OverlayEndedMember(string SessionId, string Title, string? Cwd);
 
 /// <summary>
 /// Work items in the sessions section (docs/work-items-plan.md W1). When the user has active or paused items, the
 /// session list is grouped: each item is a collapsible header (chevron, colour swatch, name, the most urgent status
 /// among its sessions plus how many want you, and a "+" that starts a session inside it), with its live sessions
-/// below it wearing a thin stripe in its colour. Sessions in no item gather under "Not in a work item", then the
+/// below it wearing a thin stripe in its colour, then the ones that have ended as compact faded lines (the newest few;
+/// the rest are a "N more" line that opens the item). Sessions in no item gather under "Not in a work item", then the
 /// Autonomous group as before. A paused item is one dimmed line that opens the item; a done item isn't shown. With no
 /// items at all, the list is exactly what it was.
 ///
 /// <para>A session in two items is listed under both (D2). The expand state is per item and persisted by the app
 /// (<c>AppSettings.CollapsedWorkItems</c>), seeded through <see cref="SetCollapsedWorkItems"/> and written back from
 /// <see cref="WorkItemExpandChanged"/>, the same shape as the Friends section.</para>
+///
+/// <para>A session row can be dragged onto another group: dropped on an item (its header or any line under it) it
+/// moves there, out of the item it was dragged from; dropped on "Not in a work item" it leaves its item. The "+ New
+/// session" row carries a Work items button (a briefcase) beside Recent and the Roost.</para>
 /// </summary>
 public sealed partial class OverlayCanvas
 {
@@ -74,6 +88,19 @@ public sealed partial class OverlayCanvas
     /// <summary>"New work item from this session…": create an item named after the session, with it inside.</summary>
     internal event Action<ClaudeSession>? WorkItemFromSessionRequested;
 
+    /// <summary>An ended member's "Take out of this item": (item id, session id).</summary>
+    internal event Action<string, string>? WorkItemRemoveEndedRequested;
+
+    /// <summary>An ended member's "Resume in Perch": (session id, cwd).</summary>
+    internal event Action<string, string>? WorkEndedResumeRequested;
+
+    /// <summary>An ended member's "Resume in terminal": (session id, cwd).</summary>
+    internal event Action<string, string>? WorkEndedTerminalRequested;
+
+    // How many ended members an expanded item lists before a "N more" line.
+    private const int EndedPreview = 5;
+    private const double EndedRowHeight = 24;
+
     // Whether the roster is grouped at all: only once there's an item worth showing.
     private bool WorkGrouping => _workItems.Count > 0;
 
@@ -93,8 +120,12 @@ public sealed partial class OverlayCanvas
             foreach (var m in members) grouped.Add(m.SessionId);
 
             rows.Add(new DisplayRow(null, null, members.Count, Header: RowHeader.WorkItem, Work: item));
-            if (item.Status == WorkItemStatus.Active && WorkExpanded(item.Id))
-                foreach (var s in members) AddSessionRows(rows, s, item);
+            if (item.Status != WorkItemStatus.Active || !WorkExpanded(item.Id)) continue;
+            foreach (var s in members) AddSessionRows(rows, s, item);
+            foreach (var e in item.Ended.Take(EndedPreview))
+                rows.Add(new DisplayRow(null, null, Header: RowHeader.WorkEnded, Work: item, Ended: e));
+            if (item.Ended.Count > EndedPreview)
+                rows.Add(new DisplayRow(null, null, item.Ended.Count - EndedPreview, Header: RowHeader.WorkMore, Work: item));
         }
 
         var loose = interactive.Where(s => !grouped.Contains(s.SessionId)).ToList();
@@ -169,6 +200,7 @@ public sealed partial class OverlayCanvas
         if (rowIndex == _hoveredRow && !hoverPlus)
             OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6),
                 FeedHoverBrush, null, 6);
+        if (rowIndex == _workDropRow) DrawDropTarget(ctx, top, width);
 
         using (ctx.PushOpacity(paused ? PausedOpacity : 1))
             DrawWorkHeaderBody(ctx, item, plus, midY, width, expanded, paused);
@@ -205,7 +237,8 @@ public sealed partial class OverlayCanvas
             ctx.DrawEllipse(OverlayDraw.Brush(c), null, new Point(right - 3.5, midY), 3.5, 3.5);
             right -= 11;
         }
-        if (item.EndedCount > 0)
+        // Collapsed only: an expanded item lists its ended sessions below it.
+        if (item.EndedCount > 0 && !expanded)
         {
             var endedFt = OverlayDraw.Text($"{item.EndedCount} ended", FeedCaptionSize, MutedBrush);
             if (right - endedFt.Width > x + 60)
@@ -230,12 +263,58 @@ public sealed partial class OverlayCanvas
         if (rowIndex == _hoveredRow)
             OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6),
                 FeedHoverBrush, null, 6);
+        if (rowIndex == _workDropRow) DrawDropTarget(ctx, top, width);
 
         DrawChevron(ctx, HorizPad + 4, midY, WorkExpanded(LooseGroupKey));
         var capFt = OverlayDraw.Text("Not in a work item", FeedCaptionSize, MutedBrush, FontWeight.SemiBold);
         OverlayDraw.TextLeftMid(ctx, capFt, HorizPad + 14, midY);
         var nFt = OverlayDraw.Text(row.SectionCount.ToString(), FeedCaptionSize, MutedBrush);
         OverlayDraw.TextLeftMid(ctx, nFt, width - HorizPad - nFt.Width, midY);
+    }
+
+    // An ended member under an expanded item: a hollow dot, its name and "ended", faded like a not-running row. Click
+    // it for resume / history / take out.
+    private void DrawWorkEndedRow(DrawingContext ctx, int rowIndex, DisplayRow row, double top, double width)
+    {
+        double midY = top + EndedRowHeight / 2;
+        if (rowIndex == _hoveredRow) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
+        DrawWorkStripe(ctx, row.Work!, top, EndedRowHeight);
+
+        using var dim = ctx.PushOpacity(DormantRowOpacity);
+        ctx.DrawEllipse(null, OverlayDraw.Pen(MutedBrush, 1.2), new Point(HorizPad + 4, midY), 3.5, 3.5);
+        var tag = OverlayDraw.Text("ended", StatusSize, MutedBrush);
+        double right = width - HorizPad - tag.Width;
+        OverlayDraw.TextLeftMid(ctx, tag, right, midY);
+        double x = HorizPad + 14;
+        var shown = OverlayDraw.Truncate(row.Ended!.Title, SubNameSize, Math.Max(0, right - x - 8));
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, SubNameSize, Palette.FgBrush), x, midY);
+    }
+
+    // "N more ended…" after the first few: opens the item, where they're all listed.
+    private void DrawWorkMoreRow(DrawingContext ctx, int rowIndex, DisplayRow row, double top, double width)
+    {
+        double midY = top + EndedRowHeight / 2;
+        bool hover = rowIndex == _hoveredRow;
+        if (hover) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
+        DrawWorkStripe(ctx, row.Work!, top, EndedRowHeight);
+        var ft = OverlayDraw.Text($"{row.SectionCount} more ended…", FeedCaptionSize, hover ? Palette.AccentBrush : MutedBrush);
+        OverlayDraw.TextLeftMid(ctx, ft, HorizPad + 14, midY);
+    }
+
+    // The header a dragged session would drop on: an accent outline over the band.
+    private void DrawDropTarget(DrawingContext ctx, double top, double width) =>
+        OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6),
+            FeedHoverBrush, OverlayDraw.Pen(Palette.AccentBrush, 1.5), 6);
+
+    // The dragged session's name in a small chip beside the pointer, kept inside the panel.
+    private void DrawDragGhost(DrawingContext ctx, double width)
+    {
+        if (!_dragging || _dragSession is not { } s) return;
+        var ft = OverlayDraw.Text(OverlayDraw.Truncate(s.DisplayName, NameSize, 180), NameSize, Palette.TitleBrush);
+        double w = ft.Width + 16, h = ft.Height + 8;
+        var r = new Rect(Math.Clamp(_dragAt.X + 12, 2, Math.Max(2, width - w - 2)), _dragAt.Y + 6, w, h);
+        OverlayDraw.Panel(ctx, r, Palette.FormBgBrush, OverlayDraw.Pen(Palette.AccentBrush, 1), 6);
+        OverlayDraw.TextLeftMid(ctx, ft, r.X + 8, r.Center.Y);
     }
 
     // The thin stripe in the item's colour down the left edge of a session (or sub-agent) row inside an item.
@@ -248,11 +327,25 @@ public sealed partial class OverlayCanvas
     // The hovered "+" box (row index), or -1.
     private int HitTestWorkPlus(Point p) => ShowFullPanel ? HitRect(_workPlusRects, p) : -1;
 
-    // A click on a group header: the "+" starts a session in the item; elsewhere an active item (or the loose
-    // group) toggles open/shut, and a paused one opens the item.
-    private void RouteWorkHeaderClick(int row, Point p)
+    // The rows this file owns: the group headers and the ended / "N more" lines under an item.
+    private static bool IsWorkRow(RowHeader h) => h is RowHeader.WorkItem or RowHeader.Loose or RowHeader.WorkEnded or RowHeader.WorkMore;
+
+    // A click on one of them. An ended line opens its menu, "N more" opens the item. On a header the "+" starts a
+    // session in the item; elsewhere an active item (or the loose group) toggles open/shut, and a paused one opens
+    // the item.
+    private void RouteWorkRowClick(int row, Point p)
     {
         var r = _rows[row];
+        if (r is { Header: RowHeader.WorkEnded, Work: { } endedIn, Ended: { } ended })
+        {
+            ShowFlyout(EndedMenu(endedIn, ended));
+            return;
+        }
+        if (r is { Header: RowHeader.WorkMore, Work: { } moreIn })
+        {
+            WorkItemOpenRequested?.Invoke(moreIn.Id);
+            return;
+        }
         if (r.Header == RowHeader.Loose)
         {
             ToggleWorkGroup(LooseGroupKey);
@@ -274,6 +367,170 @@ public sealed partial class OverlayCanvas
         if (nowExpanded) _collapsedWork.Remove(key); else _collapsedWork.Add(key);
         Update(_sessions);
         WorkItemExpandChanged?.Invoke(key, nowExpanded);
+    }
+
+    // An ended member's menu (left or right click): resume it here or in a terminal, read it, or take it out.
+    private List<Control> EndedMenu(OverlayWorkItem item, OverlayEndedMember e)
+    {
+        var open = new List<Control>();
+        if (e.Cwd is { Length: > 0 } cwd)
+        {
+            open.Add(MenuItem("Resume in Perch", () => WorkEndedResumeRequested?.Invoke(e.SessionId, cwd)));
+            open.Add(MenuItem("Resume in terminal", () => WorkEndedTerminalRequested?.Invoke(e.SessionId, cwd)));
+        }
+        open.Add(MenuItem("View history", () => HistoryRequested?.Invoke(e.SessionId)));
+
+        var items = new List<Control>();
+        AddMenuGroups(items, open,
+            [MenuItem("Take out of this item", () => WorkItemRemoveEndedRequested?.Invoke(item.Id, e.SessionId))]);
+        return items;
+    }
+
+    // ── Dragging a session between groups ──
+
+    private static readonly Cursor DragCursor = new(StandardCursorType.DragMove);
+    private static readonly Cursor NoDropCursor = new(StandardCursorType.No);
+    private const double DragThreshold = 4;
+
+    // Armed by a left press on a session (or sub-agent) row; a drag once the pointer passes the threshold.
+    private ClaudeSession? _dragSession;
+    private OverlayWorkItem? _dragFrom;   // the item the pressed row was listed under (null = not in one)
+    private Point _dragStart, _dragAt;
+    private bool _dragging;
+    private int _workDropRow = -1;   // the header the drop would land on (painted as the target)
+
+    private void ArmSessionDrag(Point p)
+    {
+        _dragSession = null;
+        _dragFrom = null;
+        _dragging = false;
+        _workDropRow = -1;
+        if (!WorkGrouping || RearrangeMode || HitResizeEdge(p) != ResizeEdge.None) return;
+        int row = HitTestRow(p);
+        if (row < 0 || _rows[row] is not { Header: RowHeader.None, Session: { } s } r) return;
+        _dragSession = s;
+        _dragFrom = r.Work;
+        _dragStart = p;
+    }
+
+    // The pointer moved with a drag armed. False while it's still a click (inside the threshold), so hover goes on.
+    private bool UpdateSessionDrag(Point p)
+    {
+        if (_dragSession is not { } s) return false;
+        if (!_dragging)
+        {
+            if (Math.Abs(p.X - _dragStart.X) <= DragThreshold && Math.Abs(p.Y - _dragStart.Y) <= DragThreshold) return false;
+            _dragging = true;
+            _hoveredRow = -1;
+            ArmDwell(TipKind.None, -1);
+        }
+        _dragAt = p;
+        var target = DropTargetAt(p, s, _dragFrom);
+        _workDropRow = target.Valid ? target.HeaderRow : -1;
+        Cursor = target.Valid ? DragCursor : NoDropCursor;
+        InvalidateVisual();
+        return true;
+    }
+
+    // Released: move the session into the group under the pointer. True when a drag was in flight (so it's no click).
+    private bool FinishSessionDrag(Point p)
+    {
+        bool dragged = _dragging;
+        var s = _dragSession;
+        var from = _dragFrom;
+        CancelSessionDrag();
+        if (!dragged || s is null) return dragged;
+        Cursor = Cursor.Default;
+
+        var target = DropTargetAt(p, s, from);
+        if (!target.Valid) return true;
+        if (target.Item is { } to && !to.SessionIds.Contains(s.SessionId))
+            WorkItemMembershipRequested?.Invoke(to.Id, s, true);
+        if (from is not null) WorkItemMembershipRequested?.Invoke(from.Id, s, false);
+        return true;
+    }
+
+    private void CancelSessionDrag()
+    {
+        bool repaint = _dragging || _workDropRow != -1;
+        _dragSession = null;
+        _dragFrom = null;
+        _dragging = false;
+        _workDropRow = -1;
+        if (repaint) InvalidateVisual();
+    }
+
+    // Where a drop at p lands: walk up from the row under the pointer to its group's header. An item (its header, one
+    // of its sessions, an ended line) or "Not in a work item" is a target; the Autonomous group isn't, and nor is the
+    // group the session was dragged from.
+    private (bool Valid, OverlayWorkItem? Item, int HeaderRow) DropTargetAt(Point p, ClaudeSession s, OverlayWorkItem? from)
+    {
+        for (int i = HitTestRow(p); i >= 0; i--)
+        {
+            switch (_rows[i].Header)
+            {
+                case RowHeader.WorkItem:
+                    var item = _rows[i].Work!;
+                    return (item.Id != from?.Id, item, i);
+                case RowHeader.Loose:
+                    return (from is not null, null, i);
+                case RowHeader.Autonomous:
+                    return default;
+            }
+        }
+        return default;
+    }
+
+    // A capture taken away mid-drag (a window stealing the pointer) drops the drag rather than leaving it hanging.
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        if (_dragSession is not null) { CancelSessionDrag(); Cursor = Cursor.Default; }
+    }
+
+    // ── The Work items button ──
+    // A briefcase on the "+ New session" row, left of Recent, that opens the Work items window.
+
+    private Rect _workButtonRect;   // laid out by DrawNewSessionRow each paint; empty in Rearrange preview
+    private bool _hoveredWorkButton;
+
+    private bool WorkButtonVisible => !RearrangeMode;
+
+    private void DrawWorkButton(DrawingContext ctx, Rect box)
+    {
+        var c = box.Center;
+        if (_hoveredWorkButton) OverlayDraw.Panel(ctx, box, FeedHoverBrush, null, 5);
+        DrawWorkGlyph(ctx, _hoveredWorkButton ? Palette.AccentBrush : MutedBrush, c.X, c.Y);
+    }
+
+    // A briefcase: a 12×8 body with a seam across it and a handle on top; ~12×11 around (cx, cy), stroked like the
+    // Roost and Recent glyphs.
+    private static void DrawWorkGlyph(DrawingContext ctx, IBrush brush, double cx, double cy)
+    {
+        var pen = OverlayDraw.Pen(brush, 1.2);
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(cx - 6, cy - 2.5, 12, 8), 1.5));
+        ctx.DrawLine(pen, new Point(cx - 6, cy + 1), new Point(cx + 6, cy + 1));
+        ctx.DrawLine(pen, new Point(cx - 2.5, cy - 2.5), new Point(cx - 2.5, cy - 5));
+        ctx.DrawLine(pen, new Point(cx - 2.5, cy - 5), new Point(cx + 2.5, cy - 5));
+        ctx.DrawLine(pen, new Point(cx + 2.5, cy - 5), new Point(cx + 2.5, cy - 2.5));
+    }
+
+    private bool OverWorkButton(Point p) => ShowFullPanel && _workButtonRect.Width > 0 && _workButtonRect.Contains(p);
+
+    // The dwell tooltip: what the button opens, and how many items there are.
+    private void ShowWorkButtonTooltip()
+    {
+        if (_workButtonRect.Width <= 0) return;
+        int active = _workItems.Count(i => i.Status == WorkItemStatus.Active);
+        int paused = _workItems.Count(i => i.Status == WorkItemStatus.Paused);
+        string detail = _workItems.Count == 0 ? "Group sessions into pieces of work"
+            : paused > 0 ? $"{active} active · {paused} paused" : $"{active} active";
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new("Work items", OverlayTooltip.FgColor, true),
+            new(detail, OverlayTooltip.MutedColor, false),
+        };
+        Tooltip().ShowLines(lines, ToScreen(_workButtonRect.Left - 60, _workButtonRect.Bottom + 4));
     }
 
     // The right-click menu of an item's header.

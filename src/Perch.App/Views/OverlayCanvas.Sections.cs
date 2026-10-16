@@ -157,6 +157,8 @@ public sealed partial class OverlayCanvas
                 case RowHeader.Autonomous: DrawSectionHeaderRow(ctx, r, y, width); break;
                 case RowHeader.WorkItem: DrawWorkHeaderRow(ctx, i, r, y, width); break;
                 case RowHeader.Loose: DrawLooseHeaderRow(ctx, i, r, y, width); break;
+                case RowHeader.WorkEnded: DrawWorkEndedRow(ctx, i, r, y, width); break;
+                case RowHeader.WorkMore: DrawWorkMoreRow(ctx, i, r, y, width); break;
                 default:
                     if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
                     else DrawSessionRow(ctx, i, r.Session!, y, width);
@@ -168,6 +170,7 @@ public sealed partial class OverlayCanvas
         }
 
         if (DaemonStripVisible) DrawDaemonStrip(ctx, width, y);
+        DrawDragGhost(ctx, width);   // a session being dragged onto a work item, over everything
     }
 
     // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
@@ -175,7 +178,8 @@ public sealed partial class OverlayCanvas
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
     // split-panes glyph, with its own hover and hit rect (_roostRect); the Recent button (OverlayCanvas.Recent.cs)
-    // takes the next box in, or the far-right one when the Roost button is off.
+    // takes the next box in, or the far-right one when the Roost button is off, and the Work items button
+    // (OverlayCanvas.Work.cs) the next box in from whichever of those is on.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
         double midY = top + NewSessionRowHeight / 2;
@@ -186,8 +190,11 @@ public sealed partial class OverlayCanvas
         double recentCx = roost.Width > 0 ? boxCx - box - gap : boxCx;
         var recent = RecentButtonVisible ? new Rect(recentCx - box / 2, midY - box / 2, box, box) : default;
         _recentRect = recent;
+        double workCx = recent.Width > 0 ? recentCx - box - gap : recentCx;
+        var work = WorkButtonVisible ? new Rect(workCx - box / 2, midY - box / 2, box, box) : default;
+        _workButtonRect = work;
 
-        double bandRight = recent.Width > 0 ? recent.Left : roost.Width > 0 ? roost.Left : width + 2;
+        double bandRight = work.Width > 0 ? work.Left : recent.Width > 0 ? recent.Left : roost.Width > 0 ? roost.Left : width + 2;
         var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
 
@@ -208,6 +215,7 @@ public sealed partial class OverlayCanvas
             if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(boxCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
         if (recent.Width > 0) DrawRecentButton(ctx, recent);
+        if (work.Width > 0) DrawWorkButton(ctx, work);
     }
 
     // A small status dot at a glyph's corner, inside a cut-out ring so it reads on the glyph's stroke.

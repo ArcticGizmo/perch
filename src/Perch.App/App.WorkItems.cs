@@ -42,6 +42,9 @@ public partial class App
             if (add) _work?.AddSession(id, session.SessionId, session.DisplayName, session.Cwd, WorkJoin.Manual);
             else _work?.RemoveSession(id, session.SessionId);
         };
+        canvas.WorkItemRemoveEndedRequested += (id, sessionId) => _work?.RemoveSession(id, sessionId);
+        canvas.WorkEndedResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
+        canvas.WorkEndedTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
         canvas.WorkItemFromSessionRequested += session =>
         {
             if (_work?.Create(session.DisplayName) is not { } item) return;

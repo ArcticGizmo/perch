@@ -38,11 +38,15 @@ internal static class SampleData
     public static IReadOnlyList<OverlayWorkItem> WorkItems() =>
     [
         new("w-pay", "Payments refactor", "teal", Perch.Data.Work.WorkItemStatus.Active,
-            new HashSet<string> { "s1", "s2", "s6", "gone-1", "gone-2" }, EndedCount: 2),
+            new HashSet<string> { "s1", "s2", "s6", "gone-1", "gone-2" },
+            [
+                new("gone-2", "Spike: idempotency keys", @"C:\code\payments"),
+                new("gone-1", "Ledger migration", @"C:\code\payments\ledger"),
+            ]),
         new("w-mac", "macOS port", "violet", Perch.Data.Work.WorkItemStatus.Active,
-            new HashSet<string> { "s7", "s2" }, EndedCount: 0),
+            new HashSet<string> { "s7", "s2" }, []),
         new("w-docs", "Docs site polish", "amber", Perch.Data.Work.WorkItemStatus.Paused,
-            new HashSet<string> { "s3" }, EndedCount: 0),
+            new HashSet<string> { "s3" }, []),
     ];
 
     public static IReadOnlyList<ClaudeSession> Sessions()
