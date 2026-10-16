@@ -156,6 +156,7 @@ internal sealed class WorkItemsHost : IDisposable
     public void ObserveSessions(IReadOnlyList<ClaudeSession> roster)
     {
         if (Items.Count == 0) return;
+        JoinRequested(roster);
         var byId = new Dictionary<string, ClaudeSession>(StringComparer.Ordinal);
         foreach (var s in roster)
             if (!s.IsDormant) byId.TryAdd(s.SessionId, s);
@@ -200,6 +201,21 @@ internal sealed class WorkItemsHost : IDisposable
             if (_disposed || !t.IsCompletedSuccessfully) return;
             foreach (var w in t.Result) Apply(w);
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // A terminal claude started with PERCH_WORK set left a {sid}.work marker (perch-hook). Put the session in the item
+    // it names ("via: terminal") and delete the marker, so it's acted on once: taking the session out again sticks. A
+    // ref that names no item yet is left in place, so creating that item later still picks the session up.
+    private void JoinRequested(IReadOnlyList<ClaudeSession> roster)
+    {
+        foreach (var s in roster)
+        {
+            if (s.IsDormant || s.WorkRef is not { } reference) continue;
+            if (WorkItemStore.Resolve(reference, Items) is not { } item) continue;
+            if (!item.HasMember(s.SessionId))
+                AddSession(item.Id, s.SessionId, s.DisplayName, s.Cwd, WorkJoin.Terminal);
+            try { File.Delete(Path.Combine(s.SessionsDir, s.SessionId + ".work")); } catch { /* retried next scan */ }
+        }
     }
 
     /// <summary>The overlay's view of the items: active ones (oldest first) then paused ones; done items are left

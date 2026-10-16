@@ -808,6 +808,11 @@ internal sealed class SessionMonitor : IDisposable
             var externalNotify = !string.IsNullOrEmpty(sessionId)
                 && File.Exists(Path.Combine(owner.SessionsDir, $"{sessionId}.notify"));
 
+            // Work item request (docs/work-items-plan.md): perch-hook writes {sessionId}.work when the session was
+            // started with PERCH_WORK set. The app resolves it to an item, adds the session and deletes the marker.
+            var workRef = string.IsNullOrEmpty(sessionId) ? null
+                : ReadMarker(Path.Combine(owner.SessionsDir, $"{sessionId}.work"));
+
             // Self-reported config dir (M3/M4). Read whenever the set is multi-dir: it both disambiguates a
             // SHARED sessions/ (where the folder can't say which dir ran the session) and records a dir that
             // isn't in the set yet as a scan suggestion (NoteSelfReport). In the common single-dir case
@@ -978,6 +983,7 @@ internal sealed class SessionMonitor : IDisposable
                 // thing that can attribute the session. See ClaudeSession.AttributedConfigDir.
                 ReportedConfigDir = reportedConfigDir,
                 ReportedSlug = reportedSlug,
+                WorkRef = workRef,
                 BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
             };
 

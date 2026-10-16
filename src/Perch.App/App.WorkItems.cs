@@ -99,29 +99,37 @@ public partial class App
     /// "launched". The binding is one-shot, so a later /resume in the same window doesn't join anything.</summary>
     private void OpenSessionWindowInWork(string itemId)
     {
-        if (_work?.Find(itemId) is not { } item) return;
+        if (_work?.Find(itemId) is null) return;
         var w = NewSessionWindow();
+        BindToWork(w, itemId);
+        w.Show();
+        ForceFront(w);
+        w.LoadRecents(ActiveSessionIds());
+    }
+
+    /// <summary>Makes the next session window <paramref name="w"/> starts (or resumes) join the item, logged as
+    /// "launched", then lets go: a later /resume in the same window joins nothing.</summary>
+    private void BindToWork(SessionWindow w, string itemId)
+    {
+        if (_work?.Find(itemId) is not { } item) return;
         var start = w.StartRequested;
         var dormant = w.DormantRequested;
-        void Unbind()
+        PerchSession Join(PerchSession s, SessionLaunchOptions o)
         {
             w.StartRequested = start;
             w.DormantRequested = dormant;
-        }
-        PerchSession Join(PerchSession s, SessionLaunchOptions o)
-        {
-            Unbind();
-            if (s.SessionId is { } id)
-                _work?.AddSession(itemId, id, Path.GetFileName(o.Cwd.TrimEnd('\\', '/')), o.Cwd, WorkJoin.Launched);
+            if (s.SessionId is { } id) JoinWork(itemId, id, o.Cwd);
             return s;
         }
         if (start is not null) w.StartRequested = o => Join(start(o), o);
         if (dormant is not null) w.DormantRequested = o => Join(dormant(o), o);
         w.Title = $"New session · {item.Name}";
-        w.Show();
-        ForceFront(w);
-        w.LoadRecents(ActiveSessionIds());
     }
+
+    // A session Perch started or resumed for an item. Its title is the folder for now; the scan replaces it with the
+    // session's own name once it's on the roster.
+    private void JoinWork(string itemId, string sessionId, string cwd) =>
+        _work?.AddSession(itemId, sessionId, Path.GetFileName(cwd.TrimEnd('\\', '/')), cwd, WorkJoin.Launched);
 
     // `perch --work <ref>` (and the hook's PERCH_WORK marker, W2): the item a ref names, if any.
     private WorkItem? ResolveWork(string? reference) =>

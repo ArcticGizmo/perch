@@ -2254,10 +2254,11 @@ public partial class App : Application
         w.ResumeReplace(sessionId, cwd);
     }
 
-    // CLI `perch [dir]`: a fresh session started directly in the folder.
-    private void OpenSessionNew(string cwd, string? model, string? mode, MonitorGeometry? origin = null)
+    // CLI `perch [dir]`: a fresh session started directly in the folder (inside a work item for `--work`).
+    private void OpenSessionNew(string cwd, string? model, string? mode, MonitorGeometry? origin = null, string? workId = null)
     {
         var w = NewSessionWindow();
+        if (workId is not null) BindToWork(w, workId);
         PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.StartNew(cwd, model, mode);
@@ -2658,7 +2659,11 @@ public partial class App : Application
             try
             {
                 OpenSessionIntent(intent);
-                tcs.TrySetResult(new Perch.Data.Control.ControlReply(true, "Opening in Perch."));
+                // A --work / PERCH_WORK that names no item still opens the session, and says so.
+                var reply = intent.WorkRef is { } wr && ResolveWork(wr) is null
+                    ? $"Opening in Perch. No work item matches \"{wr}\", so it isn't in one (perch work list shows them)."
+                    : "Opening in Perch.";
+                tcs.TrySetResult(new Perch.Data.Control.ControlReply(true, reply));
             }
             catch (Exception ex)
             {
@@ -2673,14 +2678,18 @@ public partial class App : Application
     // recent transcript (falling back to a fresh session when there is none), else start fresh there.
     private void OpenSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
     {
+        // `--work <item>` (or PERCH_WORK in the launching terminal): the session it opens joins that item.
+        var workId = ResolveWork(intent.WorkRef)?.Id;
         if (intent.ResumeId is { } id)
         {
             OpenSessionResume(id, intent.Cwd, intent.OriginMonitor);
+            if (workId is not null) JoinWork(workId, id, intent.Cwd);
             return;
         }
         if (intent.PickResume)
         {
-            OpenSessionWindow();
+            if (workId is not null) OpenSessionWindowInWork(workId);
+            else OpenSessionWindow();
             return;
         }
         if (intent.Continue)
@@ -2694,13 +2703,17 @@ public partial class App : Application
                     : null;
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (latest is not null) OpenSessionResume(latest.SessionId, latest.Cwd, intent.OriginMonitor);
-                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
+                    if (latest is not null)
+                    {
+                        OpenSessionResume(latest.SessionId, latest.Cwd, intent.OriginMonitor);
+                        if (workId is not null) JoinWork(workId, latest.SessionId, latest.Cwd);
+                    }
+                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor, workId);
                 });
             });
             return;
         }
-        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
+        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor, workId);
     }
 
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys

@@ -14,7 +14,8 @@ using System.Text.Json.Nodes;
 //   mode         PreToolUse / PostToolUse / Stop  → write {sid}.mode (permission mode)
 //   agentstop    SubagentStop                     → drop agent-{id}.stopped beside the agent transcript
 //   teammateidle TeammateIdle                     → drop agent-{id}.idle beside the matching transcript
-//   start        SessionStart                     → launch the tray if the user opted into auto-start
+//   start        SessionStart                     → {sid}.configdir, {sid}.work (PERCH_WORK), launch the tray if
+//                                                   the user opted into auto-start
 //   cleanup      SessionEnd                       → remove this session's sidecars + sweep agent markers
 //
 // Two invariants keep a stale hook from ever wedging a Claude Code session: it always exits 0, and it
@@ -63,6 +64,7 @@ try
         case "start":
             WriteMode(sessionsDir, f);
             WriteConfigDir(sessionsDir, claudeDir, f);
+            WriteWorkRef(sessionsDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -96,6 +98,21 @@ static void WriteConfigDir(string sessionsDir, string claudeDir, Dictionary<stri
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(claudeDir) && Directory.Exists(sessionsDir))
         File.WriteAllText(Path.Combine(sessionsDir, sid + ".configdir"), claudeDir);
+}
+
+// Work items (docs/work-items-plan.md): a `claude` started with PERCH_WORK=<item> in its environment asks to join that
+// work item. Record the ref in {sid}.work; the tray resolves it to an item, adds the session ("via: terminal") and
+// consumes the marker. Written on SessionStart only, so the per-tool-call path is untouched. The value is the user's
+// own text from their own environment; it's kept to one short line and only ever read back as a name to look up.
+static void WriteWorkRef(string sessionsDir, Dictionary<string, string?> f)
+{
+    string? sid = f["session_id"], source = f["source"];
+    if (string.IsNullOrEmpty(sid) || !Directory.Exists(sessionsDir)) return;
+    if (!string.IsNullOrEmpty(source) && source != "startup" && source != "resume") return;
+    var work = Environment.GetEnvironmentVariable("PERCH_WORK")?.Trim();
+    if (string.IsNullOrEmpty(work)) return;
+    work = new string(work.Where(c => !char.IsControl(c)).Take(200).ToArray());
+    if (work.Length > 0) File.WriteAllText(Path.Combine(sessionsDir, sid + ".work"), work);
 }
 
 // SubagentStop: a sub-agent finished (or a teammate ended a turn). Drop agent-{id}.stopped beside its
@@ -213,7 +230,7 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".configdir", ".slug" /* legacy */, ".afk" /* legacy */ })
+        foreach (string ext in new[] { ".mode", ".notify", ".history", ".configdir", ".work", ".slug" /* legacy */, ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.
@@ -472,6 +489,8 @@ static void LaunchPerch()
     try
     {
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
+        // Nor this session's work item: a tray carrying PERCH_WORK would pass it to every session it starts.
+        Environment.SetEnvironmentVariable("PERCH_WORK", null);
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
         // Never the bare name: this hook runs with the session's project folder as its current directory, and

@@ -82,6 +82,14 @@ internal static class Program
             return Services.ArtifactCli.Run(args);
         }
 
+        // `perch work …` edits work items (docs/work-items-plan.md) straight in their files; a running tray sees the
+        // change through its folder watcher, so this never needs the tray.
+        if (args.Length > 0 && string.Equals(args[0], "work", StringComparison.OrdinalIgnoreCase))
+        {
+            AttachParentConsole();
+            return Perch.Data.Work.WorkCli.Run(args[1..], Console.Out, Console.Error, Perch.Data.Work.WorkItemStore.Open());
+        }
+
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
@@ -159,6 +167,16 @@ internal static class Program
         bool fromTerminal = !isReplay && LaunchedFromTerminal();
         if (sessionIntent is null && !trayOnly && fromTerminal)
             sessionIntent = Perch.Data.Control.SessionOpenIntent.StartFresh(Environment.CurrentDirectory);
+
+        // A terminal with PERCH_WORK set puts the session it opens in that work item, as the hook does for a plain
+        // `claude` (docs/work-items-plan.md); an explicit --work wins.
+        if (relaunchIntent is null && sessionIntent is { WorkRef: null }
+            && Environment.GetEnvironmentVariable("PERCH_WORK") is { } envWork
+            && Perch.Data.Control.SessionOpenIntent.IsWorkRef(envWork))
+            sessionIntent = sessionIntent with { WorkRef = envWork.Trim() };
+        // …and it stops there. A tray that kept it would hand it to every session it starts (their hook would put each
+        // one in that item), and to the detached relaunch below.
+        Environment.SetEnvironmentVariable("PERCH_WORK", null);
 
         // Remember which monitor the launching terminal is on so the tray opens the session window there
         // rather than on the primary. It has to be sampled *here*, in the CLI process, because the terminal

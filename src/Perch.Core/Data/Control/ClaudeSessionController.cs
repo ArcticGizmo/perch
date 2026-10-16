@@ -98,6 +98,9 @@ internal sealed class ClaudeSessionController : IDisposable
         // Where the publish-artifact skill finds `perch artifact publish` (PerchSessionPlugin).
         if (Environment.ProcessPath is { } perchExe) psi.Environment[PerchSessionPlugin.ExeEnvVar] = perchExe;
         psi.Environment[PerchSessionPlugin.SessionEnvVar] = id;
+        // A Perch session joins a work item through the tray, never through an inherited PERCH_WORK (the hook would act
+        // on it): docs/work-items-plan.md.
+        psi.Environment.Remove("PERCH_WORK");
         // Account selection: pin the config dir (and with it, that account's credentials) for this session only.
         // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
         if (!string.IsNullOrWhiteSpace(configDir))

@@ -664,7 +664,7 @@ internal sealed class WorkItemsWindow : Window
         if (item.Members.Count == 0)
         {
             panel.Children.Add(Hint("No sessions yet. Start one here, tick this item in a session's right-click menu, "
-                + "or run claude with PERCH_WORK set (see the Work items help)."));
+                + $"or start claude in any terminal with PERCH_WORK={item.Id} (perch work help)."));
             return;
         }
         var roster = _roster();
