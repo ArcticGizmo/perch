@@ -13,6 +13,7 @@ using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Perch.Avalonia.Views;
+using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Control;
 using Perch.Data.Mermaid;
@@ -457,25 +458,53 @@ internal sealed class MarkdownView
         };
         sourcePanel.IsVisible = false;
 
-        var label = new TextBlock { Text = "Source", FontSize = 11, Foreground = _s.Muted };
-        var toggle = new Border
-        {
-            Background = _s.CodeBg, BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2), Margin = new Thickness(0, 6, 6, 0),
-            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-            Cursor = new Cursor(StandardCursorType.Hand), Child = label,
-        };
-        ToolTip.SetTip(toggle, "Switch between the diagram and its Mermaid source");
-        toggle.PointerEntered += (_, _) => label.Foreground = _s.Fg;
-        toggle.PointerExited += (_, _) => label.Foreground = _s.Muted;
-        toggle.PointerPressed += (_, e) =>
+        var host = new Grid();
+        var fullscreen = Pill("Fullscreen", "Open the diagram in a window you can zoom and move around",
+            _ => MermaidViewerWindow.Open(host, parse.Diagram!, _s, DiagramTitle(parse.Diagram!)));
+        var toggle = Pill("Source", "Switch between the diagram and its Mermaid source", label =>
         {
             card.IsVisible = !card.IsVisible;
             sourcePanel.IsVisible = !card.IsVisible;
             label.Text = card.IsVisible ? "Source" : "Diagram";
+        });
+        host.Children.Add(card);
+        host.Children.Add(sourcePanel);
+        host.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 6, 6, 0),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Children = { fullscreen, toggle },
+        });
+        return Stamp(host, code.Line);
+    }
+
+    private static string DiagramTitle(MermaidDiagram d) => d switch
+    {
+        MermaidSequence => "Sequence diagram",
+        MermaidEr => "ER diagram",
+        _ => "Flowchart",
+    };
+
+    // A small bordered text button for a diagram card's corner. The click is handled so it doesn't also reach the
+    // preview's click-to-source mapping.
+    private Border Pill(string text, string tip, Action<TextBlock> onClick)
+    {
+        var label = new TextBlock { Text = text, FontSize = 11, Foreground = _s.Muted };
+        var pill = new Border
+        {
+            Background = _s.CodeBg, BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2),
+            Cursor = new Cursor(StandardCursorType.Hand), Child = label,
+        };
+        ToolTip.SetTip(pill, tip);
+        pill.PointerEntered += (_, _) => label.Foreground = _s.Fg;
+        pill.PointerExited += (_, _) => label.Foreground = _s.Muted;
+        pill.PointerPressed += (_, e) =>
+        {
+            onClick(label);
             e.Handled = true;
         };
-        return Stamp(new Grid { Children = { card, sourcePanel, toggle } }, code.Line);
+        return pill;
     }
 
     private Control CodeText(CodeBlock code)

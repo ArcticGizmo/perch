@@ -5,10 +5,10 @@ Manual checks for drawing ` ```mermaid ` blocks as diagrams instead of code. It 
 - **A native renderer, no browser.** Mermaid itself is JavaScript and needs a DOM, so Perch has its own parser and layout in `Perch.Core/Data/Mermaid/` (unit-tested in `MermaidTests`). The painter is `Rendering/MermaidDiagramView` and takes its colours from the preview's `MarkdownStyle`, so diagrams follow the light/dark preview theme. Nothing leaves the machine.
 - **Three diagram types.** Flowcharts (`graph`/`flowchart`, all four directions, every node shape, every link style and head, link labels, chains, `&` groups, nested subgraphs, edges to a subgraph), sequence diagrams (participants/actors with aliases, every arrow type, `autonumber`, activations, notes, `loop`/`alt`/`opt`/`par`/`critical`/`break`/`rect` blocks, self-messages) and ER diagrams (entities with attribute tables, crow's-foot cardinalities in symbol or word form, identifying/non-identifying lines, aliases, self-relationships). Styling statements (`classDef`, `style`, `linkStyle`, `click`) are ignored on purpose.
 - **A fallback for everything else.** Other types (`pie`, `gantt`, `classDiagram`, …) and anything unparseable show as the normal code block under a one-line note saying why.
-- **A Source/Diagram toggle** at the top-right of each diagram card.
+- **A Source/Diagram toggle** at the top-right of each diagram card, beside a **Fullscreen** button that opens the diagram in a zoomable, draggable dialog (`Windows/MermaidViewerWindow`, `Views/MermaidPanZoom`; the maths is `PanZoom` in Core, unit-tested).
 - **Everywhere `MarkdownView` renders.** The Markdown viewer preview, the session window's assistant prose, Work items notes and the feed story player all get it.
 
-The headless render (`render <dir>` → `mermaid_1x.png`, `mermaid_dark_1x.png`, `mermaid_er_1x.png`, `mermaid_er_dark_1x.png`) covers the drawing. Only the real app covers the toggle, the viewer's live re-render and the session thread.
+The headless render (`render <dir>` → `mermaid_1x.png`, `mermaid_dark_1x.png`, `mermaid_er_1x.png`, `mermaid_er_dark_1x.png`, `mermaid_viewer_1x.png`, `mermaid_viewer_dark_1x.png`, `mermaid_viewer_zoomed_1x.png`) covers the drawing and the viewer's fitted and zoomed states. Only the real app covers the toggle, the viewer's live re-render and the session thread.
 
 ## Setup
 
@@ -127,7 +127,25 @@ erDiagram
 | Narrow the preview pane until a wide diagram doesn't fit | It scales down to fit and never scrolls sideways; small diagrams keep their size |
 | Click on a diagram | The editor caret jumps to the block's opening fence, as for any other block |
 
-## 6. Fallbacks
+## 6. Fullscreen viewer
+
+Click **Fullscreen** on the checklist ER diagram.
+
+| Do | Expected |
+|---|---|
+| Open | A dialog over the viewer at about 85% of the screen, titled "ER diagram", on the same paper colour as the preview, with the whole diagram fitted and the toolbar reading about 100% |
+| Scroll the wheel over a node | Zooms in/out with that node staying under the cursor; the toolbar % follows; text stays sharp at 300%+ |
+| Drag | The diagram follows the pointer (move cursor while dragging) |
+| Drag far off any edge | It stops with a strip of the diagram still on screen; it can't be lost |
+| Double-click | Zooms in 2× about the click |
+| **−** / **+** / **Fit** / **100%** buttons, and `-` / `+` / `0` / `1` keys | Zoom out, zoom in about the middle, fit the whole diagram, actual size centred |
+| Arrow keys | Pan by a step |
+| Resize the dialog before touching it | The diagram refits; after a zoom or drag it stays where you put it |
+| First zoom or drag | The hint line at the bottom disappears |
+| F11 | True fullscreen; F11 or Esc returns to the dialog |
+| Esc / **×** | Closes the dialog; the preview behind is unchanged |
+| From a session window's prose | Same dialog, on the session thread's background |
+## 7. Fallbacks
 
 | Paste | Expected |
 |---|---|
@@ -135,7 +153,7 @@ erDiagram
 | ` ```mermaid ` + `graph TD` + `%% nothing else` | Note "This Mermaid diagram couldn't be drawn, so this is the source." over the code block |
 | A flowchart with a typo on one line, e.g. `A --> B ?? junk` | The rest of the diagram still draws; the bad tail of that line is skipped |
 
-## 7. Live typing and sessions
+## 8. Live typing and sessions
 
 | Do | Expected |
 |---|---|

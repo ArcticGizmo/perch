@@ -576,6 +576,57 @@ public class MermaidTests
         Assert.True(bar.Box.H > 0);
     }
 
+    // ── Fullscreen viewer: pan and zoom ──
+
+    private static MPoint ToScreen(PanZoom v, MPoint c) => new(c.X * v.Zoom + v.X, c.Y * v.Zoom + v.Y);
+
+    [Fact]
+    public void Zooming_keeps_the_point_under_the_cursor_still()
+    {
+        var view = new PanZoom(1.5, -40, 25);
+        var cursor = new MPoint(300, 180);
+        var content = new MPoint((cursor.X - view.X) / view.Zoom, (cursor.Y - view.Y) / view.Zoom);   // what's under it
+        foreach (var factor in new[] { 1.2, 1 / 1.2, 3, 0.25 })
+        {
+            var after = ToScreen(view.ZoomAt(cursor, factor), content);
+            Assert.Equal(cursor.X, after.X, 6);
+            Assert.Equal(cursor.Y, after.Y, 6);
+        }
+    }
+
+    [Fact]
+    public void Zoom_stays_within_its_limits()
+    {
+        Assert.Equal(PanZoom.MaxZoom, new PanZoom(4, 0, 0).ZoomAt(new MPoint(0, 0), 100).Zoom);
+        Assert.Equal(PanZoom.MinZoom, new PanZoom(0.5, 0, 0).ZoomAt(new MPoint(0, 0), 0.001).Zoom);
+    }
+
+    [Fact]
+    public void Fit_centres_the_whole_diagram_and_caps_small_ones()
+    {
+        var big = PanZoom.Fit(new MSize(2000, 1000), new MSize(1000, 800), 20, 2);
+        Assert.Equal((1000 - 40) / 2000.0, big.Zoom, 6);   // bound by width
+        var topLeft = ToScreen(big, new MPoint(0, 0));
+        var bottomRight = ToScreen(big, new MPoint(2000, 1000));
+        Assert.Equal(1000 - bottomRight.X, topLeft.X, 6);   // centred horizontally
+        Assert.Equal(800 - bottomRight.Y, topLeft.Y, 6);    // and vertically
+
+        var small = PanZoom.Fit(new MSize(100, 50), new MSize(1000, 800), 20, 2);
+        Assert.Equal(2, small.Zoom);   // would fit at 9.6×, opens at the cap
+    }
+
+    [Fact]
+    public void Clamp_keeps_part_of_the_diagram_on_screen()
+    {
+        var content = new MSize(500, 400);
+        var viewport = new MSize(800, 600);
+        var flung = new PanZoom(1, -5000, 9000).Clamp(content, viewport, 48);
+        Assert.Equal(48 - 500, flung.X);    // its right edge still 48px into the view
+        Assert.Equal(600 - 48, flung.Y);    // its top edge still 48px above the bottom
+        var fine = new PanZoom(1, 100, 50);
+        Assert.Equal(fine, fine.Clamp(content, viewport, 48));
+    }
+
     // ── Geometry ──
 
     [Fact]

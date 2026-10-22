@@ -3037,7 +3037,11 @@ internal static class HeadlessRenderer
         "    CUSTOMER only one to zero or more ADDRESS : \"ships to\"\n" +
         "```\n\n" +
         "## Relationships only\n\n" +
-        "```mermaid\nerDiagram\n" +
+        "```mermaid\n" + MermaidChecklistEr + "```\n";
+
+    // A relationship-heavy schema with a self-relationship: the ER page's second block and the fullscreen viewer's capture.
+    internal const string MermaidChecklistEr =
+        "erDiagram\n" +
         "    CHECKLIST ||--o{ CHECKLIST_ITEM : contains\n" +
         "    CHECKLIST }o--|| RESPONSE_TYPE : \"default response type\"\n" +
         "    CHECKLIST_ITEM }o--o| RESPONSE_TYPE : \"per-item type (multi-response mode)\"\n" +
@@ -3053,31 +3057,71 @@ internal static class HeadlessRenderer
         "    EVENT_CHECKLIST_ROW ||--o{ EVENT_CHECKLIST_DOCUMENT : attachments\n" +
         "    EVENT_CHECKLIST_ROW ||--o{ ACTION_CHECKLIST_LINK : \"actions raised\"\n" +
         "    ACTION_CHECKLIST_LINK }o--|| EVENT_ACTION : links\n" +
-        "    ACTION_CHECKLIST_LINK }o--o| RESPONSE_ACTION : \"triggered by\"\n" +
-        "```\n";
+        "    ACTION_CHECKLIST_LINK }o--o| RESPONSE_ACTION : \"triggered by\"\n";
 
     private static void RenderMermaid(string outDir)
     {
         RenderMermaidPage(outDir, MermaidSample, "mermaid", 760, 2150);
         // Wide enough that the relationship-heavy chart renders at full size rather than scaled to the column.
         RenderMermaidPage(outDir, MermaidErSample, "mermaid_er", 1150, 1420);
+        RenderMermaidViewer(outDir);
+    }
+
+    // The markdown viewer's preview style, light or dark, and the paper it sits on.
+    private static (MarkdownStyle Style, IBrush Paper) MermaidPreviewStyle(bool light)
+    {
+        var p = light ? Windows.MarkdownWindow.MdTheme.Light() : Windows.MarkdownWindow.MdTheme.Dark();
+        return (new MarkdownStyle(
+            Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
+            CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
+            TableBorder: p.Border, TableHeaderBg: p.CodeBg,
+            Syntax: light ? CodeSyntax.Light() : CodeSyntax.Dark()), p.Paper);
+    }
+
+    // The fullscreen diagram viewer: fitted on open, then zoomed in about a point (the toolbar's readout follows), in
+    // light and dark.
+    private static void RenderMermaidViewer(string outDir)
+    {
+        var diagram = Perch.Data.Mermaid.MermaidParser.Parse(MermaidChecklistEr).Diagram!;
+        foreach (var light in new[] { true, false })
+        {
+            var (style, paper) = MermaidPreviewStyle(light);
+            var w = new Windows.MermaidViewerWindow(MermaidDiagramView.TryCreate(diagram, style)!, style, paper, "ER diagram")
+            {
+                Width = 1100, Height = 700,
+            };
+            w.Show();
+            Capture(w, light ? "mermaid_viewer_1x.png" : "mermaid_viewer_dark_1x.png");
+            if (light)
+            {
+                w.ZoomAtForRender(new Point(420, 330), 2.2);
+                Capture(w, "mermaid_viewer_zoomed_1x.png");
+            }
+            w.Close();
+        }
+
+        void Capture(Window w, string file)
+        {
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+        }
     }
 
     private static void RenderMermaidPage(string outDir, string sample, string name, double width, double height)
     {
         foreach (var light in new[] { true, false })
         {
-            var p = light ? Windows.MarkdownWindow.MdTheme.Light() : Windows.MarkdownWindow.MdTheme.Dark();
-            var style = new MarkdownStyle(
-                Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
-                CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
-                TableBorder: p.Border, TableHeaderBg: p.CodeBg,
-                Syntax: light ? CodeSyntax.Light() : CodeSyntax.Dark());
+            var (style, paper) = MermaidPreviewStyle(light);
             // Shown in a window rather than rendered detached: the fallback's code panel is a templated ScrollViewer,
             // which only realises its content once it's in a live tree.
             var w = new Window
             {
-                Width = width, Height = height, Background = p.Paper,
+                Width = width, Height = height, Background = paper,
                 Content = MarkdownView.Build(sample, style),
             };
             w.Show();
