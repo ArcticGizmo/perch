@@ -26,7 +26,7 @@ internal sealed record OverlayEndedMember(string SessionId, string Title, string
 /// Work items in the sessions section (docs/work-items-plan.md W1). When the user has active or paused items, the
 /// session list is grouped: each item is a collapsible header (chevron, colour swatch, name, the most urgent status
 /// among its sessions plus how many want you, and a "+" that starts a session inside it), with its live sessions
-/// below it wearing a thin stripe in its colour, then the ones that have ended as compact faded lines (the newest few;
+/// below it, then the ones that have ended as compact faded lines (the newest few;
 /// the rest are a "N more" line that opens the item). Sessions in no item gather under "Not in a work item", then the
 /// Autonomous group as before. A paused item is one dimmed line that opens the item; a done item isn't shown. With no
 /// items at all, the list is exactly what it was.
@@ -194,7 +194,6 @@ public sealed partial class OverlayCanvas
 
     private const double WorkSwatchSize = 8;
     private const double PausedOpacity = 0.55;
-    private const double WorkStripeWidth = 3;
 
     private void DrawWorkHeaderRow(DrawingContext ctx, int rowIndex, DisplayRow row, double top, double width)
     {
@@ -296,7 +295,6 @@ public sealed partial class OverlayCanvas
     {
         double midY = top + EndedRowHeight / 2;
         if (rowIndex == _hoveredRow) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
-        DrawWorkStripe(ctx, row.Work!, top, EndedRowHeight);
 
         using var dim = ctx.PushOpacity(DormantRowOpacity);
         ctx.DrawEllipse(null, OverlayDraw.Pen(MutedBrush, 1.2), new Point(HorizPad + 4, midY), 3.5, 3.5);
@@ -314,7 +312,6 @@ public sealed partial class OverlayCanvas
         double midY = top + EndedRowHeight / 2;
         bool hover = rowIndex == _hoveredRow;
         if (hover) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
-        DrawWorkStripe(ctx, row.Work!, top, EndedRowHeight);
         var ft = OverlayDraw.Text($"{row.SectionCount} more ended…", FeedCaptionSize, hover ? Palette.AccentBrush : MutedBrush);
         OverlayDraw.TextLeftMid(ctx, ft, HorizPad + 14, midY);
     }
@@ -334,11 +331,6 @@ public sealed partial class OverlayCanvas
         OverlayDraw.Panel(ctx, r, Palette.FormBgBrush, OverlayDraw.Pen(Palette.AccentBrush, 1), 6);
         OverlayDraw.TextLeftMid(ctx, ft, r.X + 8, r.Center.Y);
     }
-
-    // The thin stripe in the item's colour down the left edge of a session (or sub-agent) row inside an item.
-    // Inset from the panel edge so the dev/replay border (2px) and the rounded corner don't swallow it.
-    private static void DrawWorkStripe(DrawingContext ctx, OverlayWorkItem item, double top, double height) =>
-        ctx.FillRectangle(Palette.WorkHueBrush(item.Colour), new Rect(3, top + 2, WorkStripeWidth, height - 3));
 
     // ── Input ──
 

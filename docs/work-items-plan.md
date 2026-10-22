@@ -7,8 +7,9 @@ not started. The interaction exploration this builds on is the artifact "Perch W
 
 ### Where the build differs from the exploration
 
-- **Member rows aren't indented.** They keep the full row width and wear a 3px stripe in the item's colour, so every
-  glyph lines up with the ungrouped rows.
+- **Member rows aren't indented or marked.** They keep the full row width, so every glyph lines up with the ungrouped
+  rows, and the header above them is the only grouping cue. A colour stripe per member row was dropped (2026-10-22) as
+  visual clutter; it can come back later if grouping turns out hard to read.
 - **Ended sessions are faded lines under an expanded item** (changed 2026-10-16, at the user's ask; it was a count on
   the header). The newest five show, one line each, with a "N more ended…" line that opens the window for the rest. A
   click opens Resume in Perch / Resume in terminal / View history / Take out. A collapsed header still says "N ended".

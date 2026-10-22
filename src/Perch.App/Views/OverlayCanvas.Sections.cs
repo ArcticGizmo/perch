@@ -162,8 +162,6 @@ public sealed partial class OverlayCanvas
                 default:
                     if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
                     else DrawSessionRow(ctx, i, r.Session!, y, width);
-                    // A row listed under a work item wears a thin stripe in the item's colour.
-                    if (r.Work is { } work) DrawWorkStripe(ctx, work, y, HeightOf(r));
                     break;
             }
             y += HeightOf(r);

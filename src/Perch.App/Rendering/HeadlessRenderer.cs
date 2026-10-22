@@ -196,7 +196,7 @@ internal static class HeadlessRenderer
         BenchOverlayPaint();
 
         // Work items (docs/work-items-plan.md W1): the roster grouped under item headers (swatch, name, rolled-up
-        // light + count, "+"), member rows striped in the item's colour, a paused item as one dim line, and the
+        // light + count, "+"), member rows under each, a paused item as one dim line, and the
         // leftovers under "Not in a work item"; then with one item and the loose group collapsed.
         var workProbe = new OverlayCanvas();
         workProbe.Update(SampleData.Sessions());

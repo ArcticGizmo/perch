@@ -1711,7 +1711,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A flat render row: a parent session, one of its sub-agents, or a group header ("Autonomous", a work item,
     // "Not in a work item"). Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's
     // own child, …), driving its indent in the tree; 0 for session and header rows. Work is the item a header names,
-    // or the item a session/sub-agent row is listed under (its colour stripe); SectionCount is a header's count (and
+    // or the item a session/sub-agent row is listed under (what a drag moves it out of); SectionCount is a header's count (and
     // the hidden count on a "N more" line); Ended is the member an ended line shows.
     private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0,
         RowHeader Header = RowHeader.None, OverlayWorkItem? Work = null, OverlayEndedMember? Ended = null)
