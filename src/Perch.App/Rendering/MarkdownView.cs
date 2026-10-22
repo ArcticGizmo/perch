@@ -15,6 +15,7 @@ using Markdig.Syntax.Inlines;
 using Perch.Avalonia.Views;
 using Perch.Data;
 using Perch.Data.Control;
+using Perch.Data.Mermaid;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -410,6 +411,74 @@ internal sealed class MarkdownView
     }
 
     private Control Code(CodeBlock code)
+    {
+        if (code is FencedCodeBlock { Info: { } info } fenced && info.Trim().Equals("mermaid", StringComparison.OrdinalIgnoreCase))
+            return Mermaid(fenced);
+        return CodeText(code);
+    }
+
+    // A ```mermaid fence drawn as its diagram, with a toggle to the source. A diagram type the renderer doesn't know
+    // (or one it can't read) shows the source as an ordinary code block, under a line saying why.
+    private Control Mermaid(FencedCodeBlock code)
+    {
+        MarkdownSourceMap.ForLines(_doc, code, out var source);
+        var parse = MermaidParser.Parse(source);
+        var sourcePanel = CodeText(code);
+        var diagram = parse.Diagram is { } d ? MermaidDiagramView.TryCreate(d, _s) : null;
+        if (diagram is null)
+        {
+            var why = parse.Diagram is null && parse.Error is null && parse.Kind.Length > 0
+                ? $"Mermaid “{parse.Kind}” diagrams aren't drawn here yet, so this is the source."
+                : "This Mermaid diagram couldn't be drawn, so this is the source.";
+            return new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = why, Foreground = _s.Muted, FontSize = BodySize * 0.85, TextWrapping = TextWrapping.Wrap,
+                        Margin = new Thickness(0, 0, 0, 4),
+                    },
+                    sourcePanel,
+                },
+            };
+        }
+
+        var card = new Border
+        {
+            BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 14), Margin = new Thickness(0, 0, 0, BlockGap),
+            // Scale a diagram wider than the column down to fit, never up, so small charts keep their natural size.
+            Child = new Viewbox
+            {
+                Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+                HorizontalAlignment = HorizontalAlignment.Center, Child = diagram,
+            },
+        };
+        sourcePanel.IsVisible = false;
+
+        var label = new TextBlock { Text = "Source", FontSize = 11, Foreground = _s.Muted };
+        var toggle = new Border
+        {
+            Background = _s.CodeBg, BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 2), Margin = new Thickness(0, 6, 6, 0),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = label,
+        };
+        ToolTip.SetTip(toggle, "Switch between the diagram and its Mermaid source");
+        toggle.PointerEntered += (_, _) => label.Foreground = _s.Fg;
+        toggle.PointerExited += (_, _) => label.Foreground = _s.Muted;
+        toggle.PointerPressed += (_, e) =>
+        {
+            card.IsVisible = !card.IsVisible;
+            sourcePanel.IsVisible = !card.IsVisible;
+            label.Text = card.IsVisible ? "Source" : "Diagram";
+            e.Handled = true;
+        };
+        return Stamp(new Grid { Children = { card, sourcePanel, toggle } }, code.Line);
+    }
+
+    private Control CodeText(CodeBlock code)
     {
         // The code's text comes from its source map, line for line, so a selection inside it copies verbatim and
         // a whole block takes its fences along.
