@@ -235,8 +235,8 @@ public class WorkItemTests
     {
         var items = new List<WorkItem>
         {
-            new() { Id = "aaaa1111", Name = "Payments refactor", FilePath = @"C:\w\payments-refactor-aaaa1111.md" },
-            new() { Id = "bbbb2222", Name = "macOS port", FilePath = @"C:\w\macos-port-bbbb2222.md" },
+            new() { Id = "aaaa1111", Name = "Payments refactor", FilePath = Path.Combine("w", "payments-refactor-aaaa1111.md") },
+            new() { Id = "bbbb2222", Name = "macOS port", FilePath = Path.Combine("w", "macos-port-bbbb2222.md") },
             new() { Id = "cccc3333", Name = "Payments spike", Status = WorkItemStatus.Done },
         };
 
