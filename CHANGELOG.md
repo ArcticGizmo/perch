@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.41] - 2026-10-22
+
+- Mermaid flowcharts, sequence and ER diagrams draw in Markdown previews
+- Fullscreen diagram viewer with zoom and drag
+- Source toggle on every diagram (for when the drawing is merely approximately right)
+- Other diagram types show their source with a polite apology
+
+---
+
 ## [v0.5.40] - 2026-10-15
 
 - `/resume <id>` jumps straight to that session; other text pre-fills the search

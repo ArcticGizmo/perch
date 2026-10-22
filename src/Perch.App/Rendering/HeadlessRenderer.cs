@@ -598,6 +598,11 @@ internal static class HeadlessRenderer
         // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
         RenderMarkdownWindow(outDir);
 
+        // Mermaid diagrams in the Markdown preview: flowcharts (TD with a decision, a loop and a subgraph; LR with
+        // nested subgraphs, an edge to a subgraph and every link style), a sequence diagram (actor, autonumber,
+        // activations, loop/alt blocks, notes, a self-message) and an unsupported type falling back to its source.
+        RenderMermaid(outDir);
+
         // History viewer's readable transcript view (session-control M1): markdown-rendered prose,
         // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
         RenderHistoryReadable(outDir);
@@ -2951,6 +2956,184 @@ internal static class HeadlessRenderer
             sb.Append($"    if (_pending.TryDequeue(out var job{l})) {{ job{l}.Run(); Interlocked.Increment(ref _done); }} // {l}\n");
         sb.Append("```\n\nThat's the lot.\n");
         return sb.ToString();
+    }
+
+    internal const string MermaidSample =
+        "## Flowchart\n\n" +
+        "```mermaid\nflowchart TD\n" +
+        "    A[Prompt arrives] --> B{Needs a tool?}\n" +
+        "    B -->|yes| C[Ask for permission]\n" +
+        "    B -->|no| D([Reply])\n" +
+        "    C --> E[(Transcript)]\n" +
+        "    C -. denied .-> D\n" +
+        "    E --> F((Done))\n" +
+        "    F -->|next turn| A\n" +
+        "    subgraph Hooks\n" +
+        "        H1[/PreToolUse/] --> H2[\\PostToolUse\\]\n" +
+        "    end\n" +
+        "    C --> H1\n" +
+        "    H2 --> E\n" +
+        "```\n\n" +
+        "## Left to right\n\n" +
+        "```mermaid\ngraph LR\n" +
+        "    subgraph Perch\n" +
+        "        direction LR\n" +
+        "        tray[Tray app] ==> overlay{{Overlay}}\n" +
+        "        subgraph Core\n" +
+        "            reader[Readers] --- stats[Stats]\n" +
+        "        end\n" +
+        "    end\n" +
+        "    hook>perch-hook] --> tray & reader\n" +
+        "    claude[Claude Code] -- writes --> hook\n" +
+        "    claude --o Core\n" +
+        "    overlay --x user((You))\n" +
+        "```\n\n" +
+        "## Sequence\n\n" +
+        "```mermaid\nsequenceDiagram\n" +
+        "    autonumber\n" +
+        "    actor U as You\n" +
+        "    participant P as Perch\n" +
+        "    participant C as Claude Code\n" +
+        "    U->>+P: Open a session\n" +
+        "    P->>+C: stream-json start\n" +
+        "    loop every turn\n" +
+        "        C-->>P: assistant record\n" +
+        "        P->>P: render thread\n" +
+        "    end\n" +
+        "    alt needs permission\n" +
+        "        C->>U: permission card\n" +
+        "        Note right of U: Approve or deny\n" +
+        "    else auto-approved\n" +
+        "        C-)P: tool result\n" +
+        "    end\n" +
+        "    Note over P,C: The session stays open after the window closes\n" +
+        "    C-->>-P: result\n" +
+        "    P-->>-U: done\n" +
+        "```\n\n" +
+        "## Not drawn yet\n\n" +
+        "```mermaid\npie title Tokens\n    \"Input\" : 42\n    \"Output\" : 58\n```\n";
+
+    internal const string MermaidErSample =
+        "## Attributes\n\n" +
+        "```mermaid\nerDiagram\n" +
+        "    CUSTOMER ||--o{ ORDER : places\n" +
+        "    ORDER ||--|{ LINE-ITEM : contains\n" +
+        "    PRODUCT ||..o{ LINE-ITEM : \"ordered in\"\n" +
+        "    CUSTOMER {\n" +
+        "        string id PK\n" +
+        "        string name\n" +
+        "        string email UK \"login\"\n" +
+        "    }\n" +
+        "    ORDER {\n" +
+        "        int number PK\n" +
+        "        string customerId FK\n" +
+        "        date placed\n" +
+        "    }\n" +
+        "    LINE-ITEM {\n" +
+        "        int orderNumber PK, FK\n" +
+        "        string productCode PK, FK\n" +
+        "        int quantity\n" +
+        "    }\n" +
+        "    CUSTOMER only one to zero or more ADDRESS : \"ships to\"\n" +
+        "```\n\n" +
+        "## Relationships only\n\n" +
+        "```mermaid\n" + MermaidChecklistEr + "```\n";
+
+    // A relationship-heavy schema with a self-relationship: the ER page's second block and the fullscreen viewer's capture.
+    internal const string MermaidChecklistEr =
+        "erDiagram\n" +
+        "    CHECKLIST ||--o{ CHECKLIST_ITEM : contains\n" +
+        "    CHECKLIST }o--|| RESPONSE_TYPE : \"default response type\"\n" +
+        "    CHECKLIST_ITEM }o--o| RESPONSE_TYPE : \"per-item type (multi-response mode)\"\n" +
+        "    CHECKLIST_ITEM }o--o| CHECKLIST_ITEM : \"parent (activation condition)\"\n" +
+        "    RESPONSE_TYPE ||--o{ RESPONSE_TYPE_OPTION : offers\n" +
+        "    CHECKLIST_ITEM ||--o{ RESPONSE_ACTION : \"default corrective action\"\n" +
+        "    CHECKLIST_ITEM }o--o{ CONDITION : \"tagged with\"\n" +
+        "    CHECKLIST_ITEM }o--o| SHARED_DOCUMENT : \"supporting document\"\n" +
+        "    EVENT }o--o| CHECKLIST : \"assigned (at most one)\"\n" +
+        "    EVENT ||--o{ EVENT_CHECKLIST_ROW : \"instantiated rows\"\n" +
+        "    EVENT_CHECKLIST_ROW }o--|| CHECKLIST_ITEM : \"answers\"\n" +
+        "    EVENT_CHECKLIST_ROW }o--o| RESPONSE_TYPE_OPTION : \"selected option\"\n" +
+        "    EVENT_CHECKLIST_ROW ||--o{ EVENT_CHECKLIST_DOCUMENT : attachments\n" +
+        "    EVENT_CHECKLIST_ROW ||--o{ ACTION_CHECKLIST_LINK : \"actions raised\"\n" +
+        "    ACTION_CHECKLIST_LINK }o--|| EVENT_ACTION : links\n" +
+        "    ACTION_CHECKLIST_LINK }o--o| RESPONSE_ACTION : \"triggered by\"\n";
+
+    private static void RenderMermaid(string outDir)
+    {
+        RenderMermaidPage(outDir, MermaidSample, "mermaid", 760, 2150);
+        // Wide enough that the relationship-heavy chart renders at full size rather than scaled to the column.
+        RenderMermaidPage(outDir, MermaidErSample, "mermaid_er", 1150, 1420);
+        RenderMermaidViewer(outDir);
+    }
+
+    // The markdown viewer's preview style, light or dark, and the paper it sits on.
+    private static (MarkdownStyle Style, IBrush Paper) MermaidPreviewStyle(bool light)
+    {
+        var p = light ? Windows.MarkdownWindow.MdTheme.Light() : Windows.MarkdownWindow.MdTheme.Dark();
+        return (new MarkdownStyle(
+            Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
+            CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
+            TableBorder: p.Border, TableHeaderBg: p.CodeBg,
+            Syntax: light ? CodeSyntax.Light() : CodeSyntax.Dark()), p.Paper);
+    }
+
+    // The fullscreen diagram viewer: fitted on open, then zoomed in about a point (the toolbar's readout follows), in
+    // light and dark.
+    private static void RenderMermaidViewer(string outDir)
+    {
+        var diagram = Perch.Data.Mermaid.MermaidParser.Parse(MermaidChecklistEr).Diagram!;
+        foreach (var light in new[] { true, false })
+        {
+            var (style, paper) = MermaidPreviewStyle(light);
+            var w = new Windows.MermaidViewerWindow(MermaidDiagramView.TryCreate(diagram, style)!, style, paper, "ER diagram")
+            {
+                Width = 1100, Height = 700,
+            };
+            w.Show();
+            Capture(w, light ? "mermaid_viewer_1x.png" : "mermaid_viewer_dark_1x.png");
+            if (light)
+            {
+                w.ZoomAtForRender(new Point(420, 330), 2.2);
+                Capture(w, "mermaid_viewer_zoomed_1x.png");
+            }
+            w.Close();
+        }
+
+        void Capture(Window w, string file)
+        {
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+        }
+    }
+
+    private static void RenderMermaidPage(string outDir, string sample, string name, double width, double height)
+    {
+        foreach (var light in new[] { true, false })
+        {
+            var (style, paper) = MermaidPreviewStyle(light);
+            // Shown in a window rather than rendered detached: the fallback's code panel is a templated ScrollViewer,
+            // which only realises its content once it's in a live tree.
+            var w = new Window
+            {
+                Width = width, Height = height, Background = paper,
+                Content = MarkdownView.Build(sample, style),
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, light ? $"{name}_1x.png" : $"{name}_dark_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
     }
 
     private static void RenderMarkdownWindow(string outDir)
