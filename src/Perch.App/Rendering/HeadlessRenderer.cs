@@ -205,6 +205,9 @@ internal static class HeadlessRenderer
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_1.5x.png"), 144);
         workProbe.SetCollapsedWorkItems(["w-mac", OverlayCanvas.LooseGroupKey]);
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_collapsed_1x.png"), 96);
+        // The grouping button flipped to the flat list: the roster as it was before items, the button's glyph flat.
+        workProbe.SetGroupByWork(false);
+        RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_flat_1x.png"), 96);
 
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());

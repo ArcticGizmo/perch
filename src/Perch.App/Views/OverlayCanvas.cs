@@ -1698,7 +1698,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Work, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Work, Group, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -4124,6 +4124,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (overRecent != _hoveredRecent) { _hoveredRecent = overRecent; InvalidateVisual(); }
         bool overWork = OverWorkButton(p);
         if (overWork != _hoveredWorkButton) { _hoveredWorkButton = overWork; InvalidateVisual(); }
+        bool overGroup = OverGroupToggle(p);
+        if (overGroup != _hoveredGroupToggle) { _hoveredGroupToggle = overGroup; InvalidateVisual(); }
 
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
@@ -4211,7 +4213,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overWork || overUsageToggle || overGitHub || overTodos || overFeeds || workPlus >= 0)
+               || overRoost || overRecent || overWork || overGroup || overUsageToggle || overGitHub || overTodos || overFeeds || workPlus >= 0)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4245,6 +4247,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             OverRecentButton(p)                       ? (TipKind.Recent, -1) :
             OverWorkButton(p)                         ? (TipKind.Work, -1) :
+            OverGroupToggle(p)                        ? (TipKind.Group, -1) :
             HitTestGitHub(p)                          ? (TipKind.GitHub, -1) :
             HitTestTodos(p)                           ? (TipKind.Todos, -1) :
             HitTestFeedHead(p) is var fh && fh >= 0   ? (TipKind.FeedHead, fh) :
@@ -4296,6 +4299,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Roost:   ShowRoostTooltip();          break;
             case TipKind.Recent:  ShowRecentTooltip();         break;
             case TipKind.Work:    ShowWorkButtonTooltip();     break;
+            case TipKind.Group:   ShowGroupToggleTooltip();    break;
             case TipKind.GitHub:  ShowGitHubTooltip();         break;
             case TipKind.Todos:   ShowTodosTooltip();          break;
             case TipKind.FeedHead: ShowFeedHeadTooltip(_tipRow); break;
@@ -4350,6 +4354,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
         if (_hoveredWorkButton) { _hoveredWorkButton = false; changed = true; }
+        if (_hoveredGroupToggle) { _hoveredGroupToggle = false; changed = true; }
         if (_hoveredWorkPlus != -1) { _hoveredWorkPlus = -1; changed = true; }
         _hoveredNewSession = false;
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
@@ -4748,6 +4753,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (OverWorkButton(p))
         {
             WorkItemOpenRequested?.Invoke(null);
+            return;
+        }
+
+        // The grouping button at the far right: grouped by work item ⇄ flat list.
+        if (OverGroupToggle(p))
+        {
+            ToggleGroupByWork();
             return;
         }
 

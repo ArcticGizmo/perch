@@ -63,9 +63,14 @@ In the window, type a second name in **Name a new work item…** and press Enter
 | Drag a session row onto another item's header | An accent outline marks the item under the pointer and a chip with the session's name follows it. Drop: the session moves to that item (out of the one it was under). The log of each item shows the leave and the join |
 | Drag onto a session or ended line inside an item | Same as dropping on that item's header |
 | Drag onto "Not in a work item" | The session leaves its item |
+| Drag an ended line onto another item | It moves: its ended line now shows under the target item (with its name and folder kept, so Resume still works) and is gone from the first. Each item's log shows the leave and the join |
+| Drag an ended line onto "Not in a work item" | It leaves the item and drops off the overlay (ended sessions only show inside an item). Same as **Take out of this item** |
+| Click an ended line without moving | Still opens its menu |
 | Drag onto its own group, the Autonomous group, or off the list | The no-entry cursor shows, and dropping does nothing |
 | A press on a row that barely moves | Still a click (focuses the session) |
 | Briefcase on the "+ New session" row | Sits left of the clock (Recent) and the Roost. Hover for "Work items · N active"; click opens the window |
+| Grouping button (far right of that row, right of the Roost) | Only there once an item exists. Its glyph is the layout showing: indented lines when grouped, four even lines when flat. Click: the list goes flat, exactly as before work items (no headers, stripes or ended lines, and rows can't be dragged). Click again to regroup. Restart the tray and the choice is kept (`GroupByWorkItem` in settings) |
+| Divider | A thin line above "+ New session", whichever section sits over it |
 
 ## 4. Start a session inside an item
 

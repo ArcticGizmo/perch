@@ -35,8 +35,9 @@ internal sealed record OverlayEndedMember(string SessionId, string Title, string
 /// (<c>AppSettings.CollapsedWorkItems</c>), seeded through <see cref="SetCollapsedWorkItems"/> and written back from
 /// <see cref="WorkItemExpandChanged"/>, the same shape as the Friends section.</para>
 ///
-/// <para>A session row can be dragged onto another group: dropped on an item (its header or any line under it) it
-/// moves there, out of the item it was dragged from; dropped on "Not in a work item" it leaves its item. The "+ New
+/// <para>A session row or an ended line can be dragged onto another group: dropped on an item (its header or any line
+/// under it) it moves there, out of the item it was dragged from; dropped on "Not in a work item" it leaves its item
+/// (an ended one then drops off the overlay, as it would from the window's ✕). The "+ New
 /// session" row carries a Work items button (a briefcase) beside Recent and the Roost.</para>
 /// </summary>
 public sealed partial class OverlayCanvas
@@ -88,6 +89,10 @@ public sealed partial class OverlayCanvas
     /// <summary>"New work item from this session…": create an item named after the session, with it inside.</summary>
     internal event Action<ClaudeSession>? WorkItemFromSessionRequested;
 
+    /// <summary>A session (live or ended) dragged from one group to another: (session id, title, cwd, the item it
+    /// leaves or null, the item it joins or null). Either item may be null, never both.</summary>
+    internal event Action<string, string, string?, string?, string?>? WorkItemMoveRequested;
+
     /// <summary>An ended member's "Take out of this item": (item id, session id).</summary>
     internal event Action<string, string>? WorkItemRemoveEndedRequested;
 
@@ -101,8 +106,21 @@ public sealed partial class OverlayCanvas
     private const int EndedPreview = 5;
     private const double EndedRowHeight = 24;
 
-    // Whether the roster is grouped at all: only once there's an item worth showing.
-    private bool WorkGrouping => _workItems.Count > 0;
+    // Whether the roster is grouped at all: only once there's an item worth showing, and the user hasn't switched to
+    // the flat list (the grouping button, AppSettings.GroupByWorkItem).
+    private bool WorkGrouping => _groupByWork && _workItems.Count > 0;
+    private bool _groupByWork = true;
+
+    /// <summary>Seeds grouped (true) or flat (false) from settings.</summary>
+    internal void SetGroupByWork(bool on)
+    {
+        if (_groupByWork == on) return;
+        _groupByWork = on;
+        Update(_sessions);
+    }
+
+    /// <summary>The grouping button flipped the list: true = grouped by work item, false = flat.</summary>
+    internal event Action<bool>? GroupByWorkChanged;
 
     private bool WorkExpanded(string key) => !_collapsedWork.Contains(key);
 
@@ -309,8 +327,8 @@ public sealed partial class OverlayCanvas
     // The dragged session's name in a small chip beside the pointer, kept inside the panel.
     private void DrawDragGhost(DrawingContext ctx, double width)
     {
-        if (!_dragging || _dragSession is not { } s) return;
-        var ft = OverlayDraw.Text(OverlayDraw.Truncate(s.DisplayName, NameSize, 180), NameSize, Palette.TitleBrush);
+        if (!_dragging || _drag is not { } drag) return;
+        var ft = OverlayDraw.Text(OverlayDraw.Truncate(drag.Title, NameSize, 180), NameSize, Palette.TitleBrush);
         double w = ft.Width + 16, h = ft.Height + 8;
         var r = new Rect(Math.Clamp(_dragAt.X + 12, 2, Math.Max(2, width - w - 2)), _dragAt.Y + 6, w, h);
         OverlayDraw.Panel(ctx, r, Palette.FormBgBrush, OverlayDraw.Pen(Palette.AccentBrush, 1), 6);
@@ -392,31 +410,38 @@ public sealed partial class OverlayCanvas
     private static readonly Cursor NoDropCursor = new(StandardCursorType.No);
     private const double DragThreshold = 4;
 
-    // Armed by a left press on a session (or sub-agent) row; a drag once the pointer passes the threshold.
-    private ClaudeSession? _dragSession;
-    private OverlayWorkItem? _dragFrom;   // the item the pressed row was listed under (null = not in one)
+    // What's being dragged: a session by id, with the name and folder an item keeps for it, and the item its row was
+    // listed under (null = not in one). A live row and an ended line both make one.
+    private sealed record SessionDrag(string SessionId, string Title, string? Cwd, OverlayWorkItem? From);
+
+    // Armed by a left press on a session (or sub-agent) row or an ended line; a drag once the pointer passes the
+    // threshold.
+    private SessionDrag? _drag;
     private Point _dragStart, _dragAt;
     private bool _dragging;
     private int _workDropRow = -1;   // the header the drop would land on (painted as the target)
 
     private void ArmSessionDrag(Point p)
     {
-        _dragSession = null;
-        _dragFrom = null;
+        _drag = null;
         _dragging = false;
         _workDropRow = -1;
         if (!WorkGrouping || RearrangeMode || HitResizeEdge(p) != ResizeEdge.None) return;
         int row = HitTestRow(p);
-        if (row < 0 || _rows[row] is not { Header: RowHeader.None, Session: { } s } r) return;
-        _dragSession = s;
-        _dragFrom = r.Work;
+        if (row < 0) return;
+        _drag = _rows[row] switch
+        {
+            { Header: RowHeader.None, Session: { } s } r => new SessionDrag(s.SessionId, s.DisplayName, s.Cwd, r.Work),
+            { Header: RowHeader.WorkEnded, Ended: { } e } r => new SessionDrag(e.SessionId, e.Title, e.Cwd, r.Work),
+            _ => null,
+        };
         _dragStart = p;
     }
 
     // The pointer moved with a drag armed. False while it's still a click (inside the threshold), so hover goes on.
     private bool UpdateSessionDrag(Point p)
     {
-        if (_dragSession is not { } s) return false;
+        if (_drag is not { } drag) return false;
         if (!_dragging)
         {
             if (Math.Abs(p.X - _dragStart.X) <= DragThreshold && Math.Abs(p.Y - _dragStart.Y) <= DragThreshold) return false;
@@ -425,7 +450,7 @@ public sealed partial class OverlayCanvas
             ArmDwell(TipKind.None, -1);
         }
         _dragAt = p;
-        var target = DropTargetAt(p, s, _dragFrom);
+        var target = DropTargetAt(p, drag.From);
         _workDropRow = target.Valid ? target.HeaderRow : -1;
         Cursor = target.Valid ? DragCursor : NoDropCursor;
         InvalidateVisual();
@@ -436,25 +461,23 @@ public sealed partial class OverlayCanvas
     private bool FinishSessionDrag(Point p)
     {
         bool dragged = _dragging;
-        var s = _dragSession;
-        var from = _dragFrom;
+        var drag = _drag;
         CancelSessionDrag();
-        if (!dragged || s is null) return dragged;
+        if (!dragged || drag is null) return dragged;
         Cursor = Cursor.Default;
 
-        var target = DropTargetAt(p, s, from);
+        var target = DropTargetAt(p, drag.From);
         if (!target.Valid) return true;
-        if (target.Item is { } to && !to.SessionIds.Contains(s.SessionId))
-            WorkItemMembershipRequested?.Invoke(to.Id, s, true);
-        if (from is not null) WorkItemMembershipRequested?.Invoke(from.Id, s, false);
+        // Into the target unless it's already there (a session in both items just leaves the one it came from).
+        string? to = target.Item is { } item && !item.SessionIds.Contains(drag.SessionId) ? item.Id : null;
+        WorkItemMoveRequested?.Invoke(drag.SessionId, drag.Title, drag.Cwd, drag.From?.Id, to);
         return true;
     }
 
     private void CancelSessionDrag()
     {
         bool repaint = _dragging || _workDropRow != -1;
-        _dragSession = null;
-        _dragFrom = null;
+        _drag = null;
         _dragging = false;
         _workDropRow = -1;
         if (repaint) InvalidateVisual();
@@ -463,7 +486,7 @@ public sealed partial class OverlayCanvas
     // Where a drop at p lands: walk up from the row under the pointer to its group's header. An item (its header, one
     // of its sessions, an ended line) or "Not in a work item" is a target; the Autonomous group isn't, and nor is the
     // group the session was dragged from.
-    private (bool Valid, OverlayWorkItem? Item, int HeaderRow) DropTargetAt(Point p, ClaudeSession s, OverlayWorkItem? from)
+    private (bool Valid, OverlayWorkItem? Item, int HeaderRow) DropTargetAt(Point p, OverlayWorkItem? from)
     {
         for (int i = HitTestRow(p); i >= 0; i--)
         {
@@ -485,7 +508,7 @@ public sealed partial class OverlayCanvas
     protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
     {
         base.OnPointerCaptureLost(e);
-        if (_dragSession is not null) { CancelSessionDrag(); Cursor = Cursor.Default; }
+        if (_drag is not null) { CancelSessionDrag(); Cursor = Cursor.Default; }
     }
 
     // ── The Work items button ──
@@ -531,6 +554,61 @@ public sealed partial class OverlayCanvas
             new(detail, OverlayTooltip.MutedColor, false),
         };
         Tooltip().ShowLines(lines, ToScreen(_workButtonRect.Left - 60, _workButtonRect.Bottom + 4));
+    }
+
+    // ── The grouping button ──
+    // At the far right of the "+ New session" row, right of the Roost: switches the list between grouped by work item
+    // and flat. Its glyph is the layout showing now. Only there once there's an item to group by.
+
+    private Rect _groupToggleRect;   // laid out by DrawNewSessionRow each paint
+    private bool _hoveredGroupToggle;
+
+    private bool GroupToggleVisible => _workItems.Count > 0 && !RearrangeMode;
+
+    private void DrawGroupToggle(DrawingContext ctx, Rect box)
+    {
+        var c = box.Center;
+        if (_hoveredGroupToggle) OverlayDraw.Panel(ctx, box, FeedHoverBrush, null, 5);
+        DrawGroupGlyph(ctx, _hoveredGroupToggle ? Palette.AccentBrush : MutedBrush, c.X, c.Y, _groupByWork);
+    }
+
+    // Grouped: two short heading bars, each over an indented line. Flat: four even lines. ~12×10 around (cx, cy).
+    private static void DrawGroupGlyph(DrawingContext ctx, IBrush brush, double cx, double cy, bool grouped)
+    {
+        var pen = OverlayDraw.Pen(brush, 1.2);
+        if (grouped)
+        {
+            ctx.DrawLine(pen, new Point(cx - 6, cy - 4.5), new Point(cx - 1, cy - 4.5));
+            ctx.DrawLine(pen, new Point(cx - 3, cy - 1.5), new Point(cx + 6, cy - 1.5));
+            ctx.DrawLine(pen, new Point(cx - 6, cy + 1.5), new Point(cx - 1, cy + 1.5));
+            ctx.DrawLine(pen, new Point(cx - 3, cy + 4.5), new Point(cx + 6, cy + 4.5));
+        }
+        else
+        {
+            for (int i = 0; i < 4; i++)
+                ctx.DrawLine(pen, new Point(cx - 6, cy - 4.5 + i * 3), new Point(cx + 6, cy - 4.5 + i * 3));
+        }
+    }
+
+    private bool OverGroupToggle(Point p) => ShowFullPanel && _groupToggleRect.Width > 0 && _groupToggleRect.Contains(p);
+
+    private void ToggleGroupByWork()
+    {
+        _groupByWork = !_groupByWork;
+        CancelSessionDrag();
+        Update(_sessions);
+        GroupByWorkChanged?.Invoke(_groupByWork);
+    }
+
+    private void ShowGroupToggleTooltip()
+    {
+        if (_groupToggleRect.Width <= 0) return;
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new(_groupByWork ? "Grouped by work item" : "Flat list", OverlayTooltip.FgColor, true),
+            new(_groupByWork ? "Click for one flat list" : "Click to group by work item", OverlayTooltip.MutedColor, false),
+        };
+        Tooltip().ShowLines(lines, ToScreen(_groupToggleRect.Left - 100, _groupToggleRect.Bottom + 4));
     }
 
     // The right-click menu of an item's header.

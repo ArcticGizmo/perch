@@ -705,6 +705,10 @@ internal sealed class AppSettings
     // item" group (docs/work-items-plan.md). Absent = expanded. Toggled by each group's own header on the overlay.
     public List<string> CollapsedWorkItems { get; set; } = [];
 
+    // Whether the overlay's session list is grouped by work item (true) or a flat list as before work items (false).
+    // Toggled by the grouping button on the "+ New session" row, shown once there's an item.
+    public bool GroupByWorkItem { get; set; } = true;
+
     // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
     // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.

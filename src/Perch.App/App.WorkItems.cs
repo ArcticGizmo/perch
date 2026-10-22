@@ -26,6 +26,13 @@ public partial class App
 
         var canvas = _overlay!.Canvas;
         canvas.SetCollapsedWorkItems(settings.CollapsedWorkItems);
+        canvas.SetGroupByWork(settings.GroupByWorkItem);
+        canvas.GroupByWorkChanged += grouped =>
+        {
+            if (_appSettings is not { } s) return;
+            s.GroupByWorkItem = grouped;
+            s.Save();
+        };
         canvas.WorkItemExpandChanged += (id, expanded) =>
         {
             if (_appSettings is not { } s) return;
@@ -41,6 +48,11 @@ public partial class App
         {
             if (add) _work?.AddSession(id, session.SessionId, session.DisplayName, session.Cwd, WorkJoin.Manual);
             else _work?.RemoveSession(id, session.SessionId);
+        };
+        canvas.WorkItemMoveRequested += (sessionId, title, cwd, from, to) =>
+        {
+            if (to is not null) _work?.AddSession(to, sessionId, title, cwd, WorkJoin.Manual);
+            if (from is not null) _work?.RemoveSession(from, sessionId);
         };
         canvas.WorkItemRemoveEndedRequested += (id, sessionId) => _work?.RemoveSession(id, sessionId);
         canvas.WorkEndedResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
