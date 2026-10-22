@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.42] - 2026-10-22
+
+- Work items (beta): group sessions into named pieces of work
+- Work items window with notes, links, sessions and an activity log
+- Overlay can group sessions by work item (flat until you ask)
+- Drag sessions between work items
+- Ended sessions stay under their item, ready to resume
+- `PERCH_WORK=<item> claude` files a terminal session under an item
+- `perch --work` and `perch work` commands
+- Each item is a markdown file (edit it by hand; Perch will cope)
+
+---
+
 ## [v0.5.41] - 2026-10-22
 
 - Mermaid flowcharts, sequence and ER diagrams draw in Markdown previews
