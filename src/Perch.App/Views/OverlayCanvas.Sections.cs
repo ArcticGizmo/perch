@@ -152,33 +152,53 @@ public sealed partial class OverlayCanvas
         for (int i = 0; i < _rows.Count; i++)
         {
             var r = _rows[i];
-            if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, y, width);
-            else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
-            else DrawSessionRow(ctx, i, r.Session!, y, width);
+            switch (r.Header)
+            {
+                case RowHeader.Autonomous: DrawSectionHeaderRow(ctx, r, y, width); break;
+                case RowHeader.WorkItem: DrawWorkHeaderRow(ctx, i, r, y, width); break;
+                case RowHeader.Loose: DrawLooseHeaderRow(ctx, i, r, y, width); break;
+                case RowHeader.WorkEnded: DrawWorkEndedRow(ctx, i, r, y, width); break;
+                case RowHeader.WorkMore: DrawWorkMoreRow(ctx, i, r, y, width); break;
+                default:
+                    if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
+                    else DrawSessionRow(ctx, i, r.Session!, y, width);
+                    break;
+            }
             y += HeightOf(r);
         }
 
         if (DaemonStripVisible) DrawDaemonStrip(ctx, width, y);
+        DrawDragGhost(ctx, width);   // a session being dragged onto a work item, over everything
     }
 
     // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
     // glyph and an accent caption. Clicking it opens a Perch-controlled session (see NewSessionRequested).
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
-    // split-panes glyph, with its own hover and hit rect (_roostRect); the Recent button (OverlayCanvas.Recent.cs)
-    // takes the next box in, or the far-right one when the Roost button is off.
+    // split-panes glyph, with its own hover and hit rect (_roostRect). The buttons fill ~18px boxes from the right,
+    // each that's on taking the next box in: the work-item grouping toggle (OverlayCanvas.Work.cs, once there's an
+    // item), the Roost, Recent (OverlayCanvas.Recent.cs), then the Work items briefcase. A divider above the row
+    // keeps it from running into the section over it.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
+        ctx.DrawLine(SepPen, new Point(HorizPad, top + 0.5), new Point(width - HorizPad, top + 0.5));
         double midY = top + NewSessionRowHeight / 2;
         const double box = 18, gap = 2;
-        double boxCx = width - HorizPad - box / 2 + 2;
-        var roost = _showRoostButton && !RearrangeMode ? new Rect(boxCx - box / 2, midY - box / 2, box, box) : default;
-        _roostRect = roost;
-        double recentCx = roost.Width > 0 ? boxCx - box - gap : boxCx;
-        var recent = RecentButtonVisible ? new Rect(recentCx - box / 2, midY - box / 2, box, box) : default;
-        _recentRect = recent;
+        double nextCx = width - HorizPad - box / 2 + 2;
+        double bandRight = width + 2;
+        Rect Slot(bool on)
+        {
+            if (!on) return default;
+            var r = new Rect(nextCx - box / 2, midY - box / 2, box, box);
+            nextCx -= box + gap;
+            bandRight = r.Left;
+            return r;
+        }
+        var group = _groupToggleRect = Slot(GroupToggleVisible);
+        var roost = _roostRect = Slot(_showRoostButton && !RearrangeMode);
+        var recent = _recentRect = Slot(RecentButtonVisible);
+        var work = _workButtonRect = Slot(WorkButtonVisible);
 
-        double bandRight = recent.Width > 0 ? recent.Left : roost.Width > 0 ? roost.Left : width + 2;
         var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
 
@@ -193,12 +213,15 @@ public sealed partial class OverlayCanvas
         if (roost.Width > 0)
         {
             if (_hoveredRoost) OverlayDraw.Panel(ctx, roost, FeedHoverBrush, null, 5);
-            DrawRoostGlyph(ctx, _hoveredRoost ? Palette.AccentBrush : MutedBrush, boxCx, midY);
+            double roostCx = roost.Center.X;
+            DrawRoostGlyph(ctx, _hoveredRoost ? Palette.AccentBrush : MutedBrush, roostCx, midY);
             // A session is blocked on the user: a small dot at the glyph's top-right, so the button draws the eye
             // even when the rows that need you are scrolled away or collapsed.
-            if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(boxCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
+            if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(roostCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
         if (recent.Width > 0) DrawRecentButton(ctx, recent);
+        if (work.Width > 0) DrawWorkButton(ctx, work);
+        if (group.Width > 0) DrawGroupToggle(ctx, group);
     }
 
     // A small status dot at a glyph's corner, inside a cut-out ring so it reads on the glyph's stroke.

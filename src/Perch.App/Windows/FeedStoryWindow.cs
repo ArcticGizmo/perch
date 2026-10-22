@@ -40,8 +40,6 @@ internal sealed class FeedStoryWindow : Window
     /// <summary>The opening size (DIP) before the user has resized it; the app clamps it to the screen.</summary>
     public const double DefaultWidth = 560, DefaultHeight = 820;
     public static readonly Size MinSize = new(380, 480);
-    private const double GripThickness = 6;
-
     private readonly FeedsMonitorHost _host;
     private readonly Func<string?, Bitmap?> _icon;
     private readonly SessionPalette _p;
@@ -198,7 +196,7 @@ internal sealed class FeedStoryWindow : Window
             BorderThickness = new Thickness(1.5), Child = root, ClipToBounds = true,
         };
         var layers = new Grid { Children = { frame } };
-        foreach (var grip in ResizeGrips()) layers.Children.Add(grip);
+        foreach (var grip in ResizeGrips.For(this, () => _userResized = true)) layers.Children.Add(grip);
         Content = layers;
 
         // Tunnel, so the keys work wherever focus sits (a selected run of body text, the scroller) and a focused
@@ -874,40 +872,6 @@ internal sealed class FeedStoryWindow : Window
         if (_cardScroll is not { } sv) return;
         double max = Math.Max(0, sv.Extent.Height - sv.Viewport.Height);
         sv.Offset = new Vector(0, Math.Clamp(sv.Offset.Y + dy, 0, max));
-    }
-
-    // Invisible strips along every edge and squares at every corner that start the OS resize loop — the
-    // StickyNoteWindow approach, all the way round. They sit over the frame's outer few pixels only.
-    private IEnumerable<Control> ResizeGrips()
-    {
-        Control Grip(WindowEdge edge, HorizontalAlignment h, VerticalAlignment v, double w, double ht, StandardCursorType cursor)
-        {
-            var grip = new Border
-            {
-                Background = Brushes.Transparent, HorizontalAlignment = h, VerticalAlignment = v,
-                Cursor = new Cursor(cursor),
-            };
-            if (!double.IsNaN(w)) grip.Width = w;
-            if (!double.IsNaN(ht)) grip.Height = ht;
-            grip.PointerPressed += (_, e) =>
-            {
-                if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
-                _userResized = true;
-                BeginResizeDrag(edge, e);
-                e.Handled = true;   // never a move-drag as well
-            };
-            return grip;
-        }
-
-        const double t = GripThickness, c = GripThickness * 2;
-        yield return Grip(WindowEdge.West, HorizontalAlignment.Left, VerticalAlignment.Stretch, t, double.NaN, StandardCursorType.LeftSide);
-        yield return Grip(WindowEdge.East, HorizontalAlignment.Right, VerticalAlignment.Stretch, t, double.NaN, StandardCursorType.RightSide);
-        yield return Grip(WindowEdge.North, HorizontalAlignment.Stretch, VerticalAlignment.Top, double.NaN, t, StandardCursorType.TopSide);
-        yield return Grip(WindowEdge.South, HorizontalAlignment.Stretch, VerticalAlignment.Bottom, double.NaN, t, StandardCursorType.BottomSide);
-        yield return Grip(WindowEdge.NorthWest, HorizontalAlignment.Left, VerticalAlignment.Top, c, c, StandardCursorType.TopLeftCorner);
-        yield return Grip(WindowEdge.NorthEast, HorizontalAlignment.Right, VerticalAlignment.Top, c, c, StandardCursorType.TopRightCorner);
-        yield return Grip(WindowEdge.SouthWest, HorizontalAlignment.Left, VerticalAlignment.Bottom, c, c, StandardCursorType.BottomLeftCorner);
-        yield return Grip(WindowEdge.SouthEast, HorizontalAlignment.Right, VerticalAlignment.Bottom, c, c, StandardCursorType.BottomRightCorner);
     }
 
     // The tray / segments / header band drags the window (buttons and heads keep their clicks).

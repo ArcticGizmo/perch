@@ -196,6 +196,7 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _work?.Dispose();
                 _gitHubHost?.Dispose();
                 _feedsHost?.Dispose();
                 _controlServer?.Dispose();
@@ -329,7 +330,9 @@ public partial class App : Application
             _monitorHost = new SessionMonitorHost(sessions =>
             {
                 _lastSessions = sessions;
-                _overlay!.Canvas.Update(WithDormantRows(sessions));   // + Perch sessions that aren't running
+                var roster = WithDormantRows(sessions);   // + Perch sessions that aren't running
+                ObserveWorkItems(roster);                 // work-item groups first, so the rows below build grouped
+                _overlay!.Canvas.Update(roster);
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
@@ -493,6 +496,9 @@ public partial class App : Application
             _todoHost = new Services.TodoMonitorHost(
                 _todoStore, (lines, total, overdue) => _overlay!.Canvas.SetTopTodos(lines, total, overdue), _notifications, settings);
             _overlay.Canvas.TodosRequested += OpenTodos;
+            // Work items: the markdown files in the profile's work/ folder, grouping the overlay's sessions
+            // (App.WorkItems.cs, docs/work-items-plan.md).
+            InitWorkItems(settings);
             // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
             // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
             _gitHubHost = new Services.GitHubAlertsMonitorHost(GitHubAlertsSeenStore.Load(), GitHubAlertsDismissStore.Load(),
@@ -758,6 +764,7 @@ public partial class App : Application
         _switcher?.Close();
         _projectPicker?.Close();
         _todoWindow?.Close();
+        _workWindow?.Close();
         _gitHubWindow?.Close();
         _feedStoryWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
@@ -2247,10 +2254,11 @@ public partial class App : Application
         w.ResumeReplace(sessionId, cwd);
     }
 
-    // CLI `perch [dir]`: a fresh session started directly in the folder.
-    private void OpenSessionNew(string cwd, string? model, string? mode, MonitorGeometry? origin = null)
+    // CLI `perch [dir]`: a fresh session started directly in the folder (inside a work item for `--work`).
+    private void OpenSessionNew(string cwd, string? model, string? mode, MonitorGeometry? origin = null, string? workId = null)
     {
         var w = NewSessionWindow();
+        if (workId is not null) BindToWork(w, workId);
         PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.StartNew(cwd, model, mode);
@@ -2651,7 +2659,11 @@ public partial class App : Application
             try
             {
                 OpenSessionIntent(intent);
-                tcs.TrySetResult(new Perch.Data.Control.ControlReply(true, "Opening in Perch."));
+                // A --work / PERCH_WORK that names no item still opens the session, and says so.
+                var reply = intent.WorkRef is { } wr && ResolveWork(wr) is null
+                    ? $"Opening in Perch. No work item matches \"{wr}\", so it isn't in one (perch work list shows them)."
+                    : "Opening in Perch.";
+                tcs.TrySetResult(new Perch.Data.Control.ControlReply(true, reply));
             }
             catch (Exception ex)
             {
@@ -2666,14 +2678,18 @@ public partial class App : Application
     // recent transcript (falling back to a fresh session when there is none), else start fresh there.
     private void OpenSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
     {
+        // `--work <item>` (or PERCH_WORK in the launching terminal): the session it opens joins that item.
+        var workId = ResolveWork(intent.WorkRef)?.Id;
         if (intent.ResumeId is { } id)
         {
             OpenSessionResume(id, intent.Cwd, intent.OriginMonitor);
+            if (workId is not null) JoinWork(workId, id, intent.Cwd);
             return;
         }
         if (intent.PickResume)
         {
-            OpenSessionWindow();
+            if (workId is not null) OpenSessionWindowInWork(workId);
+            else OpenSessionWindow();
             return;
         }
         if (intent.Continue)
@@ -2687,13 +2703,17 @@ public partial class App : Application
                     : null;
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (latest is not null) OpenSessionResume(latest.SessionId, latest.Cwd, intent.OriginMonitor);
-                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
+                    if (latest is not null)
+                    {
+                        OpenSessionResume(latest.SessionId, latest.Cwd, intent.OriginMonitor);
+                        if (workId is not null) JoinWork(workId, latest.SessionId, latest.Cwd);
+                    }
+                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor, workId);
                 });
             });
             return;
         }
-        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
+        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor, workId);
     }
 
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
@@ -3218,6 +3238,9 @@ public partial class App : Application
         var todosItem = new NativeMenuItem("Todos…");
         todosItem.Click += (_, _) => OpenTodos();
 
+        var workItem = new NativeMenuItem("Work items…");
+        workItem.Click += (_, _) => OpenWorkItems(focus: WorkFocus.Compose);
+
         var newSessionItem = new NativeMenuItem("New session…");
         newSessionItem.Click += (_, _) => OpenSessionWindow();
 
@@ -3255,6 +3278,7 @@ public partial class App : Application
                 flightItem,
                 achievementsItem,
                 todosItem,
+                workItem,
                 newSessionItem,
                 roostItem,
                 _updateItem,

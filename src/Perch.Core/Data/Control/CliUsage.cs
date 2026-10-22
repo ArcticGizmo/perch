@@ -10,7 +10,7 @@ internal static class CliUsage
     /// <summary>The verbs <c>Program.Main</c> dispatches before any session parsing. Their arguments are theirs.</summary>
     private static readonly HashSet<string> Subcommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "render", "bench-roost", "configdirs", "statusline", "handle", "uninstall", "replay", "artifact",
+        "render", "bench-roost", "configdirs", "statusline", "handle", "uninstall", "replay", "artifact", "work",
     };
 
     /// <summary>True for <c>perch --help</c>, <c>-h</c>, <c>-?</c>, <c>/?</c> or <c>perch help</c>, unless a subcommand leads.</summary>
@@ -40,11 +40,13 @@ internal static class CliUsage
         Session options:
           --model <name>              model to start the session with
           --permission-mode <mode>    default | auto | plan | acceptEdits | bypassPermissions
+          --work <item>               put the session in a work item (PERCH_WORK does the same)
 
         Tray:
           perch --tray                start the tray only, without opening a session
 
         Commands:
+          perch work [verb]           group sessions into work items (perch work help)
           perch statusline [verb]     design and switch Claude Code status lines (perch statusline help)
           perch artifact publish <file>
                                       publish a page as a private claude.ai artifact and print its link

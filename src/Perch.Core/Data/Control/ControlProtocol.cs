@@ -87,7 +87,9 @@ internal static class ControlProtocol
 /// "Open a Perch session window" as parsed from claude-like command-line arguments. Exactly one of the
 /// shapes: resume a specific id (<see cref="ResumeId"/>), pick a session to resume (<see cref="PickResume"/>,
 /// a bare <c>--resume</c>), continue the folder's most recent session (<see cref="Continue"/>), or start
-/// fresh in <see cref="Cwd"/>. <see cref="Model"/> / <see cref="PermissionMode"/> ride along when given.
+/// fresh in <see cref="Cwd"/>. <see cref="Model"/> / <see cref="PermissionMode"/> ride along when given, and so does
+/// <see cref="WorkRef"/>: the work item the session joins (<c>--work</c>, or <c>PERCH_WORK</c> in the launching
+/// terminal's environment; docs/work-items-plan.md).
 /// </summary>
 internal sealed record SessionOpenIntent(
     string Cwd,
@@ -96,7 +98,8 @@ internal sealed record SessionOpenIntent(
     bool Continue = false,
     string? Model = null,
     string? PermissionMode = null,
-    Perch.Platform.MonitorGeometry? OriginMonitor = null)
+    Perch.Platform.MonitorGeometry? OriginMonitor = null,
+    string? WorkRef = null)
 {
     /// <summary>Parses claude-shaped arguments. Returns null when nothing in <paramref name="args"/> asks for
     /// a session (no recognised flag and no existing-directory positional) — unknown flags such as
@@ -105,7 +108,7 @@ internal sealed record SessionOpenIntent(
     /// <paramref name="currentDir"/> is used.</summary>
     public static SessionOpenIntent? FromArgs(IReadOnlyList<string> args, string currentDir)
     {
-        string? cwd = null, resumeId = null, model = null, mode = null;
+        string? cwd = null, resumeId = null, model = null, mode = null, work = null;
         bool pick = false, cont = false, any = false;
 
         for (int i = 0; i < args.Count; i++)
@@ -138,6 +141,9 @@ internal sealed record SessionOpenIntent(
                 case "--permission-mode":
                     if (Next() is { } pm && IsPermissionMode(pm)) { mode = pm; any = true; }
                     break;
+                case "--work":
+                    if (Next() is { } w && IsWorkRef(w)) { work = w.Trim(); any = true; }
+                    break;
                 default:
                     if (!a.StartsWith('-') && cwd is null && Directory.Exists(a))
                     {
@@ -149,8 +155,14 @@ internal sealed record SessionOpenIntent(
         }
 
         if (!any) return null;
-        return new SessionOpenIntent(cwd ?? currentDir, resumeId, pick && resumeId is null, cont && resumeId is null, model, mode);
+        return new SessionOpenIntent(cwd ?? currentDir, resumeId, pick && resumeId is null, cont && resumeId is null, model, mode,
+            WorkRef: work);
     }
+
+    /// <summary>A work-item ref as typed by the user (a name, slug or id): one line, at most 200 characters, no control
+    /// characters. Only ever looked up against the user's own items, never run or used as a path.</summary>
+    internal static bool IsWorkRef(string s) =>
+        s.Trim().Length is > 0 and <= 200 && !s.Any(char.IsControl);
 
     /// <summary>An intent to start a fresh session in <paramref name="cwd"/> — the bare <c>perch</c> case
     /// (nothing on the command line asked for a specific session), synthesised for an interactive launch.</summary>
@@ -164,6 +176,7 @@ internal sealed record SessionOpenIntent(
         if (Continue) o["continue"] = true;
         if (Model is not null) o["model"] = Model;
         if (PermissionMode is not null) o["mode"] = PermissionMode;
+        if (WorkRef is not null) o["work"] = WorkRef;
         if (OriginMonitor is { } m)
             o["monitor"] = new JsonObject
             {
@@ -192,10 +205,12 @@ internal sealed record SessionOpenIntent(
             var resume = TranscriptJson.AsString(o["resume"]);
             var model = TranscriptJson.AsString(o["model"]);
             var mode = TranscriptJson.AsString(o["mode"]);
+            var work = TranscriptJson.AsString(o["work"]);
             if (string.IsNullOrEmpty(cwd) || !Path.IsPathFullyQualified(cwd) || !Directory.Exists(cwd)) return null;
             if (resume is not null && !IsSessionId(resume)) return null;
             if (model is not null && !IsToken(model)) return null;
             if (mode is not null && !IsPermissionMode(mode)) return null;
+            if (work is not null && !IsWorkRef(work)) return null;
             return new SessionOpenIntent(
                 cwd,
                 resume,
@@ -203,7 +218,8 @@ internal sealed record SessionOpenIntent(
                 o["continue"]?.GetValue<bool>() ?? false,
                 model,
                 mode,
-                ParseMonitor(o["monitor"] as JsonObject));
+                ParseMonitor(o["monitor"] as JsonObject),
+                work?.Trim());
         }
         catch
         {

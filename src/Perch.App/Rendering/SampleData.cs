@@ -29,6 +29,26 @@ internal static class SampleData
     /// a needs-attention session that's stuck, remote-controlled and has produced Markdown docs; an idle session; an API-error row; and
     /// a background/SDK session that groups under the Autonomous section.
     /// </summary>
+    /// <summary>
+    /// Work items over <see cref="Sessions"/> (docs/work-items-plan.md): an active item holding a running, an
+    /// awaiting-input and an API-error session plus two that have ended (so its light is red and its count 2), a
+    /// second active item sharing the awaiting session (a session in two items), and a paused one. Whatever's left
+    /// lands under "Not in a work item".
+    /// </summary>
+    public static IReadOnlyList<OverlayWorkItem> WorkItems() =>
+    [
+        new("w-pay", "Payments refactor", "teal", Perch.Data.Work.WorkItemStatus.Active,
+            new HashSet<string> { "s1", "s2", "s6", "gone-1", "gone-2" },
+            [
+                new("gone-2", "Spike: idempotency keys", @"C:\code\payments"),
+                new("gone-1", "Ledger migration", @"C:\code\payments\ledger"),
+            ]),
+        new("w-mac", "macOS port", "violet", Perch.Data.Work.WorkItemStatus.Active,
+            new HashSet<string> { "s7", "s2" }, []),
+        new("w-docs", "Docs site polish", "amber", Perch.Data.Work.WorkItemStatus.Paused,
+            new HashSet<string> { "s3" }, []),
+    ];
+
     public static IReadOnlyList<ClaudeSession> Sessions()
     {
         var now = DateTime.Now;
