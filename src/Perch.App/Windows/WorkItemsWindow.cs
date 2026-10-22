@@ -61,6 +61,7 @@ internal sealed class WorkItemsWindow : Window
 
     private readonly WorkItemsHost _host;
     private readonly Func<IReadOnlyList<ClaudeSession>> _roster;
+    private readonly Func<bool> _overlayGrouped;
 
     private readonly StackPanel _list = new();
     private readonly ContentControl _detailHost = new();
@@ -90,11 +91,14 @@ internal sealed class WorkItemsWindow : Window
     public event Action<string>? HistoryRequested;
     /// <summary>"+ New session" on an item: start a session inside it (item id).</summary>
     public event Action<string>? NewSessionRequested;
+    /// <summary>"Group by work item" under the list: turn the overlay's grouping on.</summary>
+    public event Action? GroupOverlayRequested;
 
-    public WorkItemsWindow(WorkItemsHost host, Func<IReadOnlyList<ClaudeSession>> roster)
+    public WorkItemsWindow(WorkItemsHost host, Func<IReadOnlyList<ClaudeSession>> roster, Func<bool> overlayGrouped)
     {
         _host = host;
         _roster = roster;
+        _overlayGrouped = overlayGrouped;
 
         Title = "Work items";
         WindowDecorations = WindowDecorations.None;
@@ -218,6 +222,9 @@ internal sealed class WorkItemsWindow : Window
         FillSessions(_sessionsPanel, item);
     }
 
+    /// <summary>The overlay's grouping was switched (here or on the overlay): show or drop the list's link.</summary>
+    public void GroupingChanged() => RefreshList();
+
     private void ResetDisclosure()
     {
         _renaming = _editingNotes = _addingLink = _showAllActivity = false;
@@ -296,6 +303,8 @@ internal sealed class WorkItemsWindow : Window
                 Foreground = Muted, FontSize = 12, Margin = new Thickness(16, 10), TextWrapping = TextWrapping.Wrap,
                 LineHeight = 18,
             });
+        else if (!_overlayGrouped())
+            _list.Children.Add(GroupOverlayRow());
 
         if (_host.Store.Unreadable.Count > 0)
             _list.Children.Add(new TextBlock
@@ -338,6 +347,31 @@ internal sealed class WorkItemsWindow : Window
                 Dispatcher.UIThread.Post(() => { _composing = false; RefreshList(); }, DispatcherPriority.Background);
         };
         return _composerBox;
+    }
+
+    // Under the list while the overlay is flat: where grouping lives, offered where you're already looking at items,
+    // and one click to turn it on. The overlay's own button turns it back off.
+    private Control GroupOverlayRow()
+    {
+        var link = new TextBlock
+        {
+            Text = "Group by work item", Foreground = Accent, FontSize = 12, FontWeight = FontWeight.SemiBold,
+            Cursor = new Cursor(StandardCursorType.Hand), Margin = new Thickness(0, 4, 0, 0),
+        };
+        link.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) GroupOverlayRequested?.Invoke(); };
+        return new StackPanel
+        {
+            Margin = new Thickness(16, 18, 16, 6),
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "The overlay lists your sessions flat. Group it to show each item's sessions under it.",
+                    Foreground = Muted, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, LineHeight = 17,
+                },
+                link,
+            },
+        };
     }
 
     private void AddGroup(string name, IEnumerable<WorkItem> items)

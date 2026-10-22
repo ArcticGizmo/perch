@@ -209,6 +209,9 @@ internal static class HeadlessRenderer
         // The grouping button flipped to the flat list: the roster as it was before items, the button's glyph flat.
         workProbe.SetGroupByWork(false);
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_flat_1x.png"), 96);
+        // The first item's one-time hint: the flat list's grouping button lit, with a badge.
+        workProbe.ShowGroupingHint();
+        RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_hint_1.5x.png"), 144);
 
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
@@ -3319,7 +3322,8 @@ internal static class HeadlessRenderer
 
             var host = new WorkItemsHost(store);
             host.LoadNow();
-            var w = new WorkItemsWindow(host, SampleData.Sessions);
+            bool grouped = true;
+            var w = new WorkItemsWindow(host, SampleData.Sessions, () => grouped);
             w.Show();
             void Capture(string itemId, string file)
             {
@@ -3335,6 +3339,10 @@ internal static class HeadlessRenderer
             // A worked item (sessions, notes, links, activity), then a bare one: only what it has is on screen.
             Capture(pay.Id, "work_items_window_1x.png");
             Capture(mac.Id, "work_items_window_empty_1x.png");
+            // With the overlay flat, the list offers to group it.
+            grouped = false;
+            w.GroupingChanged();
+            Capture(pay.Id, "work_items_window_flat_1x.png");
             w.Close();
             host.Dispose();
         }

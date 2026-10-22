@@ -25,6 +25,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.CollapsedWorkItems),
         // Grouped vs flat session list, toggled by the overlay's own grouping button.
         nameof(AppSettings.GroupByWorkItem),
+        // The grouping button's one-time hint, cleared by seeing it on the overlay.
+        nameof(AppSettings.WorkGroupingHintSeen),
         // How long a friend's status stays visible before going stale is set from the Friends window's own
         // "Status visibility" dropdown, not a Settings-window control.
         nameof(AppSettings.SocialStatusFreshnessHours),

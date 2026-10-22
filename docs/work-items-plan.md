@@ -1,8 +1,9 @@
 # Work items — design & checkpoint plan
 
 Status: **W0–W3 built** on branch `work-items` (2026-10-16), each checkpoint green on tests and checked by the
-headless render. **Nothing has been run in a live tray yet**: the owed checks are `docs/work-items-testing.md`. W4 is
-not started. The interaction exploration this builds on is the artifact "Perch Work Items" (local copy
+headless render, plus the overlay refinements below (to 2026-10-22). **Nothing has been run in a live tray yet**: the
+owed checks are `docs/work-items-testing.md`. Of W4 only dragging a row onto a header is built; the rest is not
+started and stays out of the first beta. The interaction exploration this builds on is the artifact "Perch Work Items" (local copy
 `.claude/artefacts/work-items-interaction-patterns.html`).
 
 ### Where the build differs from the exploration
@@ -23,6 +24,12 @@ not started. The interaction exploration this builds on is the artifact "Perch W
   grouped by work item and flat (the pre-work-items list). **Flat by default** (user's call, 2026-10-22): work items
   should be discovered, not forced, so creating one doesn't reshape the list until you turn grouping on. Persisted as
   `AppSettings.GroupByWorkItem`, UI state like the collapse set, so no Settings control.
+- **Grouping is offered twice, never imposed** (2026-10-22). Once a first item exists while the list is flat, the
+  grouping button wears an accent glyph and dot until its tooltip ("Group by work item?") has been read or it's
+  clicked; then `AppSettings.WorkGroupingHintSeen` retires it for good (also set by turning grouping on any other
+  way). It waits to be seen rather than timing out, because the Work items window usually opens over the overlay as
+  the item is created, and it survives a restart. And while the overlay is flat, the Work items window's list ends
+  with a line saying so and a **Group by work item** link.
 - **Marking done asks nothing.** Done is reversible, and the item's still-running sessions just fall under "Not in a
   work item", so a leave/end/take-out prompt would only add a step. "End them" was also the one destructive choice.
 - **No inline name field in the overlay.** "New work item from this session…" creates the item at once and opens the
@@ -114,12 +121,13 @@ Marked **first** (W0–W3) or **later** (W4).
 | Attach | Resume keeps membership (same session id) | free |
 | See | Overlay sessions section grouped by item: header = chevron, name on a band tinted in the item's colour, rolled-up status light + needs-you count, "+"; "Not in a work item" group last | W1 |
 | See | Paused item = one dimmed collapsed line; Done item leaves the overlay; collapse remembered per item | W1 |
-| See | Ended members counted on the header ("· 2 ended"); listed (and resumable) in the window | W1/W3 |
+| See | Ended members as faded lines under an expanded item (a count on a collapsed header); resumable from the line and the window | W1/W3 |
+| Move | Drag a session row or ended line onto another group | W4, built early |
 | Home | Work items window: Active / Paused / Done list; detail with name, colour, status, links, notes, sessions (with via), log | W3 |
 | Log | Perch writes the facts (joined / left / status change / session ended); you write one-liners (window, header menu, `perch work log`) | W1–W3 |
 | Log | "Copy as Markdown" of an item's log | W3 |
 | Finish | Status buttons / header menu → Done (no prompt; reopen any time) | W3 |
-| Later | Drag a row onto a header; folder rules; suggestions; "This week" view; transcript summaries; Roost tab binding; Focus mode | W4 |
+| Later | Folder rules; suggestions; "This week" view; transcript summaries; Roost tab binding; Focus mode | W4 |
 
 If you never create an item, the overlay looks exactly as it did before.
 
@@ -131,7 +139,7 @@ If you never create an item, the overlay looks exactly as it did before.
 | ✅ **W1** | Overlay grouping (`OverlayCanvas.Work.cs`): rows per item, header paint/hit/hover, collapse state (`AppSettings.CollapsedWorkItems`, NotSettings), header right-click menu, session-row **Work items ▸** submenu, "New work item from this session…". App: `WorkItemsHost` (load, watch the folder, push to overlay), auto log of joins/leaves/session end. SampleData + render. | render + tests |
 | ✅ **W2** | Starting inside an item: header "+" → launcher bound to the item; `perch --work`; `perch-hook` `PERCH_WORK` → `{sid}.work` sidecar (cleaned on SessionEnd) → `ClaudeSession.WorkRef` → tray attaches (`via: terminal`). `perch work new/list/add/log/done` CLI. Help text. | tests |
 | ✅ **W3** | `WorkItemsWindow`: list + detail (rename, colour, status, links, notes edit, sessions with open/resume/remove, log + entry box + copy as Markdown). Tray menu entry. | render + manual |
-| **W4** | Later set (see table). Not started. | — |
+| **W4** | Later set (see table). Dragging between groups is built; the rest is not started and stays out of the first beta. | — |
 
 ## Manual testing
 

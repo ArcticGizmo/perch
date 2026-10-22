@@ -710,6 +710,10 @@ internal sealed class AppSettings
     // items are something you find and opt into, not a reshaped list the moment one exists.
     public bool GroupByWorkItem { get; set; }
 
+    // Whether the one-time hint on the grouping button (offered once a first work item exists while the list is flat)
+    // has been seen, or made moot by turning grouping on. Once true it's never offered again.
+    public bool WorkGroupingHintSeen { get; set; }
+
     // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
     // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.

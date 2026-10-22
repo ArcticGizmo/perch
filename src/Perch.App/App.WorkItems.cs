@@ -22,6 +22,7 @@ public partial class App
         {
             PushWorkItems(force: true);
             _workWindow?.RosterChanged();
+            MaybeOfferGrouping();
         };
 
         var canvas = _overlay!.Canvas;
@@ -31,6 +32,14 @@ public partial class App
         {
             if (_appSettings is not { } s) return;
             s.GroupByWorkItem = grouped;
+            if (grouped) s.WorkGroupingHintSeen = true;   // found it unprompted
+            s.Save();
+            _workWindow?.GroupingChanged();
+        };
+        canvas.GroupingHintSeen += () =>
+        {
+            if (_appSettings is not { WorkGroupingHintSeen: false } s) return;
+            s.WorkGroupingHintSeen = true;
             s.Save();
         };
         canvas.WorkItemExpandChanged += (id, expanded) =>
@@ -67,6 +76,26 @@ public partial class App
         _work.Start();
     }
 
+    // Work items stay out of the way until asked for: the list stays flat when the first item appears, so the grouping
+    // button is marked once to say grouping exists. Covers every way an item can arrive (row menu, window, CLI), and a
+    // restart before the hint was seen.
+    private void MaybeOfferGrouping()
+    {
+        if (_appSettings is not { GroupByWorkItem: false, WorkGroupingHintSeen: false }) return;
+        if (_work is { Items.Count: > 0 }) _overlay?.Canvas.ShowGroupingHint();
+    }
+
+    // The Work items window's "Group by work item" link: the same switch as the overlay's grouping button.
+    private void GroupOverlayByWork()
+    {
+        if (_appSettings is not { } s || _overlay is null) return;
+        s.GroupByWorkItem = true;
+        s.WorkGroupingHintSeen = true;
+        s.Save();
+        _overlay.Canvas.SetGroupByWork(true);
+        _workWindow?.GroupingChanged();
+    }
+
     // The roster the overlay shows: the scan plus Perch's not-running rows.
     private IReadOnlyList<ClaudeSession> WorkRoster() => WithDormantRows(_lastSessions);
 
@@ -98,7 +127,8 @@ public partial class App
         _workWindow = WindowHost.ShowOrFocus(_workWindow,
             () =>
             {
-                var w = new WorkItemsWindow(host, WorkRoster);
+                var w = new WorkItemsWindow(host, WorkRoster, () => _appSettings?.GroupByWorkItem ?? false);
+                w.GroupOverlayRequested += GroupOverlayByWork;
                 w.FocusSessionRequested += FocusSession;
                 w.ResumeInPerchRequested += (id, cwd) => OpenSessionResume(id, cwd);
                 w.ResumeInTerminalRequested += (id, cwd) => ReopenSession(cwd, id);

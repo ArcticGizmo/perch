@@ -29,12 +29,14 @@ dev tray installs it on start, so the `PERCH_WORK` checks use the new hook.
 
 ## 1. No items: the overlay is unchanged
 
-Start with an empty (or absent) `work\` folder. If your dev settings already have `"GroupByWorkItem": true` from an
-earlier build, set it to `false` (or delete the key) first, so you see the first-run default.
+Start with an empty (or absent) `work\` folder, and with the tray closed, set `"GroupByWorkItem": false` and
+`"WorkGroupingHintSeen": false` in `%APPDATA%\Perch (Dev)\settings.json` (or delete both keys), so you see what a new
+user sees.
 
 | | Expected |
 |---|---|
 | Overlay session list | Exactly as before: no headers, no "Not in a work item", Autonomous as usual |
+| The "+ New session" row | A briefcase left of the clock (Recent). No grouping button yet |
 | Right-click a session row | A new **Work items ▸** entry at the top of the actions group, holding only "New work item from this session…" and "All work items…" |
 
 ## 2. Create an item from a session
@@ -45,7 +47,14 @@ Right-click a running session → **Work items ▸ → New work item from this s
 |---|---|
 | A file appears | `work\<session-name>-<8 hex>.md`, with the session under `sessions:` and `via: manual` |
 | The Work items window | Opens on the new item with its name selected, so typing renames it. Enter commits the new name |
-| The overlay | Still a flat list, unchanged. The only new thing is the grouping button at the far right of the "+ New session" row (four even lines; hover says "Flat list · Click to group by work item") |
+| The overlay | Still a flat list, unchanged. The only new thing is the grouping button at the far right of the "+ New session" row (four even lines), drawn in the accent colour with a small accent dot at its top-right: the one-time hint |
+| The Work items window's list | Under the items: "The overlay lists your sessions flat. Group it to show each item's sessions under it." and a **Group by work item** link |
+| Hover the grouping button | Tooltip "Group by work item? · Show each work item's sessions under it. · Click to group; click again for the flat list." Move away: the accent and the dot are gone, and `"WorkGroupingHintSeen": true` is in settings |
+| Hover it again | The plain tooltip: "Flat list · Click to group by work item" |
+| Restart the tray before hovering it (redo the setup, create the item, quit) | The hint is back on the next start: it stays until it's been seen |
+| Create a second item (hint already seen) | No hint |
+| Click **Group by work item** in the window (instead of the overlay button) | The overlay groups, the link and the hint both disappear, and the overlay button's tooltip says "Grouped by work item" |
+| Click the overlay button back to flat | The window's link comes back. The hint doesn't |
 | Click the grouping button | A header row tinted faint teal, with the name, a status dot, and **+** at the right (no colour square). The session sits under it, stepped in so its status dot lines up under the header's name, with no colour stripe beside it. Every other row under a header (Not in a work item, Autonomous) steps in the same way. The other sessions are under **Not in a work item**. The rest of this doc assumes grouping is on |
 | The log (window, bottom) | "… joined (manual)" in muted text |
 
@@ -149,12 +158,13 @@ End a session that's in an item (exit claude).
 
 | | Expected |
 |---|---|
-| Overlay header | "1 ended" appears at its right |
+| Overlay, item expanded | Within a scan, the session's row is replaced by a faded "<name> … ended" line at the bottom of the item |
+| Overlay, item collapsed | "1 ended" at the header's right |
 | Log | "<session> ended" |
 | Window → Sessions | The row reads "ended" and is still resumable |
 
 ## Not covered
 
-- **Drag a row onto a header, folder rules, suggestions, a "This week" view, Roost tab binding, focus mode.** These
-  are the plan's W4, not built.
+- **Folder rules, suggestions, a "This week" view, transcript summaries, Roost tab binding, focus mode.** These are
+  the plan's W4, not built. (Dragging a row onto a header, also once W4, is built: section 3.)
 - **macOS.** Nothing here is Windows-specific, but it hasn't been run there.

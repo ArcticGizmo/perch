@@ -117,6 +117,7 @@ public sealed partial class OverlayCanvas
         if (_groupByWork == on) return;
         _groupByWork = on;
         Update(_sessions);
+        if (on) ClearGroupingHint();
     }
 
     /// <summary>The grouping button flipped the list: true = grouped by work item, false = flat.</summary>
@@ -564,13 +565,39 @@ public sealed partial class OverlayCanvas
     private Rect _groupToggleRect;   // laid out by DrawNewSessionRow each paint
     private bool _hoveredGroupToggle;
 
+    // The one-time "you can group these" hint once the first item exists and the list is flat: the button wears an
+    // accent glyph and badge until its tooltip has been read or it's clicked. It waits for the user rather than timing
+    // out, because the Work items window usually opens over the overlay at the moment the item is created.
+    private bool _groupHint;
+
+    /// <summary>The grouping hint was seen (its tooltip shown, or the button clicked): don't offer it again.</summary>
+    internal event Action? GroupingHintSeen;
+
+    /// <summary>Marks the grouping button with the one-time hint, while the list is flat.</summary>
+    internal void ShowGroupingHint()
+    {
+        if (_groupHint || _groupByWork) return;
+        _groupHint = true;
+        InvalidateVisual();
+    }
+
+    private void ClearGroupingHint()
+    {
+        if (!_groupHint) return;
+        _groupHint = false;
+        InvalidateVisual();
+        GroupingHintSeen?.Invoke();
+    }
+
     private bool GroupToggleVisible => _workItems.Count > 0 && !RearrangeMode;
 
     private void DrawGroupToggle(DrawingContext ctx, Rect box)
     {
         var c = box.Center;
         if (_hoveredGroupToggle) OverlayDraw.Panel(ctx, box, FeedHoverBrush, null, 5);
-        DrawGroupGlyph(ctx, _hoveredGroupToggle ? Palette.AccentBrush : MutedBrush, c.X, c.Y, _groupByWork);
+        bool lit = _hoveredGroupToggle || _groupHint;
+        DrawGroupGlyph(ctx, lit ? Palette.AccentBrush : MutedBrush, c.X, c.Y, _groupByWork);
+        if (_groupHint) DrawGlyphBadge(ctx, new Point(c.X + 5.5, c.Y - 4.5), Palette.AccentBrush);
     }
 
     // Grouped: two short heading bars, each over an indented line. Flat: four even lines. ~12×10 around (cx, cy).
@@ -599,17 +626,26 @@ public sealed partial class OverlayCanvas
         CancelSessionDrag();
         Update(_sessions);
         GroupByWorkChanged?.Invoke(_groupByWork);
+        ClearGroupingHint();
     }
 
     private void ShowGroupToggleTooltip()
     {
         if (_groupToggleRect.Width <= 0) return;
-        var lines = new List<OverlayTooltip.Line>
-        {
-            new(_groupByWork ? "Grouped by work item" : "Flat list", OverlayTooltip.FgColor, true),
-            new(_groupByWork ? "Click for one flat list" : "Click to group by work item", OverlayTooltip.MutedColor, false),
-        };
+        var lines = _groupHint
+            ? new List<OverlayTooltip.Line>
+            {
+                new("Group by work item?", OverlayTooltip.FgColor, true),
+                new("Show each work item's sessions under it.", OverlayTooltip.MutedColor, false),
+                new("Click to group; click again for the flat list.", OverlayTooltip.MutedColor, false),
+            }
+            : new List<OverlayTooltip.Line>
+            {
+                new(_groupByWork ? "Grouped by work item" : "Flat list", OverlayTooltip.FgColor, true),
+                new(_groupByWork ? "Click for one flat list" : "Click to group by work item", OverlayTooltip.MutedColor, false),
+            };
         Tooltip().ShowLines(lines, ToScreen(_groupToggleRect.Left - 100, _groupToggleRect.Bottom + 4));
+        ClearGroupingHint();
     }
 
     // The right-click menu of an item's header.
