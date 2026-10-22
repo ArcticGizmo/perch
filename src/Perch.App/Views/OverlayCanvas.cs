@@ -2790,7 +2790,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void DrawSessionRow(DrawingContext ctx, int rowIndex, ClaudeSession session, double top, double width)
     {
         double rowH = SessionRowHeight(session);
-        ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
+        double left = HorizPad + RowIndent;
+        ctx.DrawLine(SepPen, new Point(left, top), new Point(width - HorizPad, top));
 
         // Account guardrail (Layer 2, M2): is this session signed into an org its directory rule forbids?
         // Computed up front so a wrong-account row can wear a faint red wash under its content (here) and a
@@ -2862,7 +2863,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                         : session.IsDesktop ? DesktopOriginKey
                         : session.IsIde     ? session.IdeHost!.Executable
                         : null;
-        double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
+        double dotCx = left + 4;   // the status-dot centre — host icons line up on it
         // A Perch-driven session always wears the Perch mark (it's how you tell it apart from a terminal
         // session, and where a click will land), independent of the IDE-icon preference.
         if (session.IsPerchControlled && !_originIcons.ContainsKey(PerchOriginKey)) _originIcons[PerchOriginKey] = Brand;
@@ -2980,7 +2981,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showDir = dirLabel is not null;
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
-        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
+        double nameMax = width - HorizPad * 3 - RowIndent - 8 - statusW - badgeW - rcW - originW - mailW
                          - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
@@ -2988,48 +2989,48 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Left glyphs, in draw order. Warn + artifact capture generous hit-rects for hover/tooltip.
         if (stuck)
         {
-            DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
-            _warnRects[rowIndex] = new Rect(HorizPad + 12, nameMidY - 9, WarnIconWidth + 2, 18);
+            DrawWarnIcon(ctx, left + 14, nameMidY);
+            _warnRects[rowIndex] = new Rect(left + 12, nameMidY - 9, WarnIconWidth + 2, 18);
         }
         if (hasArtifacts)
         {
-            DrawArtifactIcon(ctx, HorizPad + 14 + warnW, nameMidY, hovered: _hoveredArtifactRow == rowIndex);
-            _artifactRects[rowIndex] = new Rect(HorizPad + 12 + warnW, nameMidY - 9, ArtifactIconWidth + 2, 18);
+            DrawArtifactIcon(ctx, left + 14 + warnW, nameMidY, hovered: _hoveredArtifactRow == rowIndex);
+            _artifactRects[rowIndex] = new Rect(left + 12 + warnW, nameMidY - 9, ArtifactIconWidth + 2, 18);
         }
-        if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
-        if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
+        if (mailW > 0)    DrawMailIcon(ctx, left + 14 + warnW + artW, nameMidY);
+        if (rcW > 0)   DrawRemoteIcon(ctx, left + 16 + warnW + artW + mailW, nameMidY);
         if (originW > 0)
         {
-            double originX = HorizPad + 14 + warnW + artW + mailW + rcW;
+            double originX = left + 14 + warnW + artW + mailW + rcW;
             DrawBotIcon(ctx, originX, nameMidY);
         }
         if (noteW > 0)
         {
-            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW;
+            double noteGlyphX = left + 14 +warnW + artW + mailW + rcW + originW;
             DrawNoteIcon(ctx, noteGlyphX, nameMidY, NoteBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
         {
-            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW;
+            double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
         }
         if (showJira)
         {
-            double jiraGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW;
+            double jiraGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW;
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
         if (showMd)
         {
-            double mdGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW + jiraW;
+            double mdGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW + jiraW;
             DrawMdIcon(ctx, mdGlyphX, nameMidY, hovered: _hoveredMarkdownRow == rowIndex);
             _mdRects[rowIndex] = new Rect(mdGlyphX - 2, nameMidY - 9, MdIconWidth + 2, 18);
         }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW + jiraW + mdW;
+        double nameX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -3086,7 +3087,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _dirRects[rowIndex] = new Rect(dirX, nameMidY - 9, Math.Max(0, dirW - 4), 18);
         }
 
-        double lineLeft = HorizPad + 14;
+        double lineLeft = left + 14;
         if (activityLine)
         {
             double elapsedW = 0;
@@ -3263,8 +3264,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Tree connector: one SubIndent step of indent per nesting level, with the branch dropping from
         // the row above at the parent's marker column and turning in to this node's marker.
-        double branchX = HorizPad + SubIndent * (depth - 1) + 4;
-        double markerX = HorizPad + SubIndent * depth;
+        double branchX = HorizPad + RowIndent + SubIndent * (depth - 1) + 4;
+        double markerX = HorizPad + RowIndent + SubIndent * depth;
         ctx.DrawLine(TreeLinePen, new Point(branchX, top - SubRowHeight / 2), new Point(branchX, midY));
 
         bool hasChildren = sub.Children.Count > 0;

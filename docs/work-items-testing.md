@@ -46,7 +46,7 @@ Right-click a running session → **Work items ▸ → New work item from this s
 | A file appears | `work\<session-name>-<8 hex>.md`, with the session under `sessions:` and `via: manual` |
 | The Work items window | Opens on the new item with its name selected, so typing renames it. Enter commits the new name |
 | The overlay | Still a flat list, unchanged. The only new thing is the grouping button at the far right of the "+ New session" row (four even lines; hover says "Flat list · Click to group by work item") |
-| Click the grouping button | A header row with a teal swatch, the name, a status dot, and **+** at the right. The session sits under it, with no colour stripe beside it. The other sessions are under **Not in a work item**. The rest of this doc assumes grouping is on |
+| Click the grouping button | A header row tinted faint teal, with the name, a status dot, and **+** at the right (no colour square). The session sits under it, stepped in so its status dot lines up under the header's name, with no colour stripe beside it. Every other row under a header (Not in a work item, Autonomous) steps in the same way. The other sessions are under **Not in a work item**. The rest of this doc assumes grouping is on |
 | The log (window, bottom) | "… joined (manual)" in muted text |
 
 ## 3. Several items, several sessions
@@ -72,7 +72,7 @@ In the window, type a second name in **Name a new work item…** and press Enter
 | Drag onto its own group, the Autonomous group, or off the list | The no-entry cursor shows, and dropping does nothing |
 | A press on a row that barely moves | Still a click (focuses the session) |
 | Briefcase on the "+ New session" row | Sits left of the clock (Recent) and the Roost. Hover for "Work items · N active"; click opens the window |
-| Grouping button (far right of that row, right of the Roost) | Only there once an item exists. Its glyph is the layout showing: indented lines when grouped, four even lines when flat. Click: the list goes flat, exactly as before work items (no headers or ended lines, and rows can't be dragged). Click again to regroup. Restart the tray and the choice is kept (`GroupByWorkItem` in settings; off until you first turn it on) |
+| Grouping button (far right of that row, right of the Roost) | Only there once an item exists. Its glyph is the layout showing: indented lines when grouped, four even lines when flat. Click: the list goes flat, exactly as before work items (no headers, indent or ended lines, and rows can't be dragged). Click again to regroup. Restart the tray and the choice is kept (`GroupByWorkItem` in settings; off until you first turn it on) |
 | Divider | A thin line above "+ New session", whichever section sits over it |
 
 ## 4. Start a session inside an item
@@ -134,7 +134,7 @@ Open it from the tray (**Work items…**), a header's right-click (**Open work i
 | List | **+ New work item** at the top turns into a name field (Enter creates, Esc or leaving it empty folds it back). Done items sit folded under **Done · N** at the bottom. A green **● N** shows only on items with running sessions |
 | Name | Click it to rename in place. Enter or clicking away saves, Esc cancels |
 | Status pill | **● Active ▾** opens Active / Paused / Done. Paused turns the overlay header into one dim "· paused" line, and clicking that line opens the item. Done removes the header |
-| Colour swatch | A flyout of 8 colours. Picking one recolours the header's swatch |
+| Colour swatch | A flyout of 8 colours. Picking one re-tints the item's overlay header |
 | **⋯** | Open file, Show in folder, Copy activity as Markdown (`## <name>` then one `- yyyy-MM-dd HH:mm text` line per entry), Delete… (asks first; the sessions themselves are untouched) |
 | Sessions | Running ones first, with their state in colour. Hovering a row shows ✕ (take it out) and a tooltip with how and when it joined. Click a running one to focus it. Click an ended one for Resume in Perch / Resume in terminal / View history. **+ New session** and **Add running ▾** sit on the section header |
 | Notes | **+ Notes** opens a text box. **Save** renders it as markdown, and the section stays from then on. Start editing, then make a change from outside (e.g. `perch work log …`): your unsaved text stays |

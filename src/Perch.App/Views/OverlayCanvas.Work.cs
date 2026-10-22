@@ -24,9 +24,9 @@ internal sealed record OverlayEndedMember(string SessionId, string Title, string
 
 /// <summary>
 /// Work items in the sessions section (docs/work-items-plan.md W1). When the user has active or paused items, the
-/// session list is grouped: each item is a collapsible header (chevron, colour swatch, name, the most urgent status
-/// among its sessions plus how many want you, and a "+" that starts a session inside it), with its live sessions
-/// below it, then the ones that have ended as compact faded lines (the newest few;
+/// session list is grouped: each item is a collapsible header tinted in its colour (chevron, name, the most urgent
+/// status among its sessions plus how many want you, and a "+" that starts a session inside it), with its live
+/// sessions indented below it, then the ones that have ended as compact faded lines (the newest few;
 /// the rest are a "N more" line that opens the item). Sessions in no item gather under "Not in a work item", then the
 /// Autonomous group as before. A paused item is one dimmed line that opens the item; a done item isn't shown. With no
 /// items at all, the list is exactly what it was.
@@ -194,6 +194,14 @@ public sealed partial class OverlayCanvas
 
     private const double WorkSwatchSize = 8;
     private const double PausedOpacity = 0.55;
+    // Puts a row's status dot under its group header's caption, so the list reads as a hierarchy.
+    private const double WorkRowIndent = 10;
+    // How strongly an item's colour tints its header band: enough to tell items apart, faint enough that the name
+    // keeps its contrast on both light and dark themes.
+    private const byte WorkTintAlpha = 46;
+
+    // Grouped, every row sits under a header (an item, "Not in a work item" or Autonomous) and steps in from it.
+    private double RowIndent => WorkGrouping ? WorkRowIndent : 0;
 
     private void DrawWorkHeaderRow(DrawingContext ctx, int rowIndex, DisplayRow row, double top, double width)
     {
@@ -213,10 +221,13 @@ public sealed partial class OverlayCanvas
             _workPlusRects[rowIndex] = plus;
         }
 
+        var band = new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6);
+        var hue = Palette.WorkHue(item.Colour);
+        byte tint = paused ? (byte)(WorkTintAlpha * PausedOpacity) : WorkTintAlpha;
+        OverlayDraw.Panel(ctx, band, OverlayDraw.Brush(Color.FromArgb(tint, hue.R, hue.G, hue.B)), null, 6);
+
         bool hoverPlus = rowIndex == _hoveredWorkPlus;
-        if (rowIndex == _hoveredRow && !hoverPlus)
-            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6),
-                FeedHoverBrush, null, 6);
+        if (rowIndex == _hoveredRow && !hoverPlus) OverlayDraw.Panel(ctx, band, FeedHoverBrush, null, 6);
         if (rowIndex == _workDropRow) DrawDropTarget(ctx, top, width);
 
         using (ctx.PushOpacity(paused ? PausedOpacity : 1))
@@ -229,15 +240,12 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // Everything on a header left of its "+": chevron, swatch, name, and the right-hand status cluster.
+    // Everything on a header left of its "+": chevron, name, and the right-hand status cluster.
     private void DrawWorkHeaderBody(DrawingContext ctx, OverlayWorkItem item, Rect plus, double midY, double width,
         bool expanded, bool paused)
     {
         DrawChevron(ctx, HorizPad + 4, midY, expanded);
         double x = HorizPad + 14;
-        var swatch = new Rect(x, midY - WorkSwatchSize / 2, WorkSwatchSize, WorkSwatchSize);
-        OverlayDraw.Panel(ctx, swatch, Palette.WorkHueBrush(item.Colour), null, 2);
-        x += WorkSwatchSize + 7;
 
         // Right cluster, built inward from the "+": the status light + how many want you, then "N ended".
         double right = plus.Width > 0 ? plus.Left - 4 : width - HorizPad;
@@ -297,11 +305,12 @@ public sealed partial class OverlayCanvas
         if (rowIndex == _hoveredRow) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
 
         using var dim = ctx.PushOpacity(DormantRowOpacity);
-        ctx.DrawEllipse(null, OverlayDraw.Pen(MutedBrush, 1.2), new Point(HorizPad + 4, midY), 3.5, 3.5);
+        double left = HorizPad + RowIndent;
+        ctx.DrawEllipse(null, OverlayDraw.Pen(MutedBrush, 1.2), new Point(left + 4, midY), 3.5, 3.5);
         var tag = OverlayDraw.Text("ended", StatusSize, MutedBrush);
         double right = width - HorizPad - tag.Width;
         OverlayDraw.TextLeftMid(ctx, tag, right, midY);
-        double x = HorizPad + 14;
+        double x = left + 14;
         var shown = OverlayDraw.Truncate(row.Ended!.Title, SubNameSize, Math.Max(0, right - x - 8));
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, SubNameSize, Palette.FgBrush), x, midY);
     }
@@ -313,7 +322,7 @@ public sealed partial class OverlayCanvas
         bool hover = rowIndex == _hoveredRow;
         if (hover) ctx.FillRectangle(RowHoverBrush, new Rect(1, top, width - 2, EndedRowHeight));
         var ft = OverlayDraw.Text($"{row.SectionCount} more ended…", FeedCaptionSize, hover ? Palette.AccentBrush : MutedBrush);
-        OverlayDraw.TextLeftMid(ctx, ft, HorizPad + 14, midY);
+        OverlayDraw.TextLeftMid(ctx, ft, HorizPad + RowIndent + 14, midY);
     }
 
     // The header a dragged session would drop on: an accent outline over the band.

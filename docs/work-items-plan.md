@@ -7,9 +7,11 @@ not started. The interaction exploration this builds on is the artifact "Perch W
 
 ### Where the build differs from the exploration
 
-- **Member rows aren't indented or marked.** They keep the full row width, so every glyph lines up with the ungrouped
-  rows, and the header above them is the only grouping cue. A colour stripe per member row was dropped (2026-10-22) as
-  visual clutter; it can come back later if grouping turns out hard to read.
+- **Grouped rows step in under their header; the header carries the colour** (2026-10-22). With grouping on, every
+  row under a header (an item, "Not in a work item", Autonomous) is indented 10px so its status dot sits under the
+  header's caption, and the item's colour is a faint tint across its header band rather than a swatch. A colour
+  stripe per member row was dropped as visual clutter; it can come back later if grouping turns out hard to read.
+  The flat list is untouched: no indent.
 - **Ended sessions are faded lines under an expanded item** (changed 2026-10-16, at the user's ask; it was a count on
   the header). The newest five show, one line each, with a "N more ended…" line that opens the window for the rest. A
   click opens Resume in Perch / Resume in terminal / View history / Take out. A collapsed header still says "N ended".
@@ -110,7 +112,7 @@ Marked **first** (W0–W3) or **later** (W4).
 | Attach | `PERCH_WORK=<ref>` before `claude` (any terminal): `perch-hook` writes `{sid}.work`, the tray attaches it | W2 |
 | Attach | `perch --work <ref> [dir]` opens a Perch session in the item; `perch work add <ref> <session-id>` | W2 |
 | Attach | Resume keeps membership (same session id) | free |
-| See | Overlay sessions section grouped by item: header = chevron, colour swatch, name, rolled-up status light + needs-you count, "+"; "Not in a work item" group last | W1 |
+| See | Overlay sessions section grouped by item: header = chevron, name on a band tinted in the item's colour, rolled-up status light + needs-you count, "+"; "Not in a work item" group last | W1 |
 | See | Paused item = one dimmed collapsed line; Done item leaves the overlay; collapse remembered per item | W1 |
 | See | Ended members counted on the header ("· 2 ended"); listed (and resumable) in the window | W1/W3 |
 | Home | Work items window: Active / Paused / Done list; detail with name, colour, status, links, notes, sessions (with via), log | W3 |

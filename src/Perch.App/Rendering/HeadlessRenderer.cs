@@ -195,8 +195,8 @@ internal static class HeadlessRenderer
         RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_off_1x.png"), 96);
         BenchOverlayPaint();
 
-        // Work items (docs/work-items-plan.md W1): the roster grouped under item headers (swatch, name, rolled-up
-        // light + count, "+"), member rows under each, a paused item as one dim line, and the
+        // Work items (docs/work-items-plan.md W1): the roster grouped under tinted item headers (name, rolled-up
+        // light + count, "+"), member rows indented under each, a paused item as one dim line, and the
         // leftovers under "Not in a work item"; then with one item and the loose group collapsed.
         var workProbe = new OverlayCanvas();
         workProbe.Update(SampleData.Sessions());
