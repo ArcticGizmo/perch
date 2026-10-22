@@ -17,8 +17,9 @@ not started. The interaction exploration this builds on is the artifact "Perch W
   session in two items, tick the second in its row menu.
 - **A Work items button** (a briefcase) on the "+ New session" row, left of Recent and the Roost, opens the window.
 - **A grouping button** at the far right of that row (right of the Roost, once an item exists) flips the list between
-  grouped by work item and flat (the pre-work-items list). Persisted as `AppSettings.GroupByWorkItem`, UI state like
-  the collapse set, so no Settings control.
+  grouped by work item and flat (the pre-work-items list). **Flat by default** (user's call, 2026-10-22): work items
+  should be discovered, not forced, so creating one doesn't reshape the list until you turn grouping on. Persisted as
+  `AppSettings.GroupByWorkItem`, UI state like the collapse set, so no Settings control.
 - **Marking done asks nothing.** Done is reversible, and the item's still-running sessions just fall under "Not in a
   work item", so a leave/end/take-out prompt would only add a step. "End them" was also the one destructive choice.
 - **No inline name field in the overlay.** "New work item from this session…" creates the item at once and opens the

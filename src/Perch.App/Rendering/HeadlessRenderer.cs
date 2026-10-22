@@ -201,6 +201,7 @@ internal static class HeadlessRenderer
         var workProbe = new OverlayCanvas();
         workProbe.Update(SampleData.Sessions());
         workProbe.SetWorkItems(SampleData.WorkItems());
+        workProbe.SetGroupByWork(true);
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_1x.png"), 96);
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_1.5x.png"), 144);
         workProbe.SetCollapsedWorkItems(["w-mac", OverlayCanvas.LooseGroupKey]);

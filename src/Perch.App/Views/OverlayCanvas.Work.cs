@@ -109,7 +109,7 @@ public sealed partial class OverlayCanvas
     // Whether the roster is grouped at all: only once there's an item worth showing, and the user hasn't switched to
     // the flat list (the grouping button, AppSettings.GroupByWorkItem).
     private bool WorkGrouping => _groupByWork && _workItems.Count > 0;
-    private bool _groupByWork = true;
+    private bool _groupByWork;
 
     /// <summary>Seeds grouped (true) or flat (false) from settings.</summary>
     internal void SetGroupByWork(bool on)

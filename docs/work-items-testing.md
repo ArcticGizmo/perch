@@ -5,8 +5,9 @@ run. What's covered:
 
 - **Storage.** One markdown file per item in `%APPDATA%\Perch (Dev)\work\` for a dev run (`Perch\work\` installed).
   Front matter for the structure, the body for notes, a `## Log` at the end.
-- **Overlay.** Once any item is active or paused, the session list groups by item. Each item has a header row, its
-  member rows get a stripe in its colour, and the rest go under "Not in a work item".
+- **Overlay.** The session list stays flat by default. Once any item is active or paused, a grouping button appears;
+  turned on, the list groups by item. Each item has a header row, its member rows get a stripe in its colour, and the
+  rest go under "Not in a work item".
 - **Joining.** A session joins through the row menu's **Work items ▸**, the header's **+**, `PERCH_WORK` in any
   terminal, `perch --work`, or `perch work add`.
 - **The Work items window.** It shows each item's name, colour, status, links, notes, sessions and log.
@@ -28,7 +29,8 @@ dev tray installs it on start, so the `PERCH_WORK` checks use the new hook.
 
 ## 1. No items: the overlay is unchanged
 
-Start with an empty (or absent) `work\` folder.
+Start with an empty (or absent) `work\` folder. If your dev settings already have `"GroupByWorkItem": true` from an
+earlier build, set it to `false` (or delete the key) first, so you see the first-run default.
 
 | | Expected |
 |---|---|
@@ -43,7 +45,8 @@ Right-click a running session → **Work items ▸ → New work item from this s
 |---|---|
 | A file appears | `work\<session-name>-<8 hex>.md`, with the session under `sessions:` and `via: manual` |
 | The Work items window | Opens on the new item with its name selected, so typing renames it. Enter commits the new name |
-| The overlay | A header row with a teal swatch, the name, a status dot, and **+** at the right. The session sits under it with a teal stripe on its left edge. The other sessions are under **Not in a work item** |
+| The overlay | Still a flat list, unchanged. The only new thing is the grouping button at the far right of the "+ New session" row (four even lines; hover says "Flat list · Click to group by work item") |
+| Click the grouping button | A header row with a teal swatch, the name, a status dot, and **+** at the right. The session sits under it with a teal stripe on its left edge. The other sessions are under **Not in a work item**. The rest of this doc assumes grouping is on |
 | The log (window, bottom) | "… joined (manual)" in muted text |
 
 ## 3. Several items, several sessions
@@ -69,7 +72,7 @@ In the window, type a second name in **Name a new work item…** and press Enter
 | Drag onto its own group, the Autonomous group, or off the list | The no-entry cursor shows, and dropping does nothing |
 | A press on a row that barely moves | Still a click (focuses the session) |
 | Briefcase on the "+ New session" row | Sits left of the clock (Recent) and the Roost. Hover for "Work items · N active"; click opens the window |
-| Grouping button (far right of that row, right of the Roost) | Only there once an item exists. Its glyph is the layout showing: indented lines when grouped, four even lines when flat. Click: the list goes flat, exactly as before work items (no headers, stripes or ended lines, and rows can't be dragged). Click again to regroup. Restart the tray and the choice is kept (`GroupByWorkItem` in settings) |
+| Grouping button (far right of that row, right of the Roost) | Only there once an item exists. Its glyph is the layout showing: indented lines when grouped, four even lines when flat. Click: the list goes flat, exactly as before work items (no headers, stripes or ended lines, and rows can't be dragged). Click again to regroup. Restart the tray and the choice is kept (`GroupByWorkItem` in settings; off until you first turn it on) |
 | Divider | A thin line above "+ New session", whichever section sits over it |
 
 ## 4. Start a session inside an item
