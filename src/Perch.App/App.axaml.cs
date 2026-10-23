@@ -541,6 +541,7 @@ public partial class App : Application
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
+            _updateService.ProgressChanged += OnUpdateProgressChanged;
             _overlay.Canvas.UpdateRequested += () => StartUpdate();
             _overlay.Canvas.DndToggleRequested += OnDndToggleRequested;
             // Secret: press and hold the brand mark (~700ms) to open the little arcade chooser (Invaders /
@@ -721,9 +722,17 @@ public partial class App : Application
         _settings?.SetUpdateAvailable(available, version);
     }
 
-    // Closes the auxiliary windows before an update applies (the closing windows signal the update is
-    // under way and stop a button being clicked again mid-download). The overlay stays up so the app
-    // survives the awaits — ApplyUpdatesAndRestart tears everything down when it relaunches. The Perch sessions it
+    // Shows a running update on the overlay's progress strip and greys out every way of starting another: the
+    // overlay badge, the Settings buttons and the tray item. Fires on the UI thread.
+    private void OnUpdateProgressChanged(UpdateProgress? progress)
+    {
+        _overlay?.Canvas.SetUpdateProgress(progress?.Caption, progress?.Percent);
+        _settings?.SetUpdateProgress(progress);
+        if (_updateItem is not null) _updateItem.IsEnabled = progress is null;
+    }
+
+    // Closes the auxiliary windows once an update has downloaded and is about to apply. The overlay stays up
+    // to show the "Installing" stage — ApplyUpdatesAndRestart tears everything down when it relaunches. The Perch sessions it
     // stops stay held: not-running rows now, and in the next run (App.DormantRows.cs).
     private void CloseAuxWindows()
     {
@@ -3206,9 +3215,20 @@ public partial class App : Application
         });
     }
 
+    // A dev instance gets a colour-inverted mark so its tray icon can't be mistaken for the installed Perch's.
+    private static WindowIcon TrayIconImage()
+    {
+        if (AppProfile.IsDev)
+        {
+            try { return new WindowIcon(Rendering.InvertedIcon.Load(new Uri("avares://perch/Assets/icon.png"), 64)); }
+            catch { /* fall back to the normal mark */ }
+        }
+        return new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
+    }
+
     private void SetUpTray(IClassicDesktopStyleApplicationLifetime desktop)
     {
-        var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
+        var icon = TrayIconImage();
 
         // Read-only version indicator (dense mode is still toggled via the global hotkey Alt+Shift+W).
         // The (Dev) suffix marks an isolated development instance running alongside an installed Perch.
@@ -3519,6 +3539,7 @@ public partial class App : Application
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
             TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),
             PreviewChangelog = PreviewChangelogWindow,
+            TestUpdateProgress = () => _updateService?.SimulateUpdate(),
 #endif
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
@@ -3546,6 +3567,7 @@ public partial class App : Application
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
+        _settings.SetUpdateProgress(_updateService?.Progress);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
         if (page is not null) _settings.NavigateTo(page);

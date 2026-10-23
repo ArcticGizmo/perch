@@ -87,7 +87,8 @@ public partial class App
     /// <summary>Every "update now" (overlay badge, toast, tray item, Settings).</summary>
     private async void StartUpdate(Window? requester = null)
     {
-        if (_updateService is not { } updater) return;
+        // Already running (an old toast clicked mid-download): don't ask about stopping turns for nothing.
+        if (_updateService is not { Progress: null } updater) return;
         if (InstallChannel.SelfUpdates && !await ConfirmStopTurnsAsync("Updating", "Update now", requester)) return;
         updater.PerformUpdate(CloseAuxWindows);
     }

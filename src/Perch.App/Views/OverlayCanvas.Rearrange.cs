@@ -195,7 +195,7 @@ public sealed partial class OverlayCanvas
             if (i == dropIndex) return top;
             i++;
         }
-        double bottom = HeaderHeight;
+        double bottom = BodyTop;
         foreach (var kv in _sectionTop) bottom = Math.Max(bottom, kv.Value + SectionHeight(kv.Key));
         return bottom;
     }

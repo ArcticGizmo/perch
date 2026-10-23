@@ -71,6 +71,10 @@ internal sealed class SettingsHooks
     /// <summary>Pop the post-update "what's new" window for an arbitrary (from, to) version range, to
     /// preview exactly what an update from one version to another would surface (debug only).</summary>
     public Action<string, string>? PreviewChangelog;
+
+    /// <summary>Run a fake update through the progress strip and greyed update controls, without downloading,
+    /// closing anything or restarting (debug only).</summary>
+    public Action? TestUpdateProgress;
 #endif
 
     /// <summary>Reconfigure the system/per-session/subprocess metrics sampler.</summary>
@@ -172,8 +176,10 @@ internal sealed partial class SettingsWindow : Window
     // while the window is open — or the state read at open time — reflects on the About page live).
     private TextBlock? _updateStatus;
     private Button? _updateNowBtn;
+    private Button? _checkUpdatesBtn;
     private bool _updateAvailable;
     private string? _updateVersion;
+    private UpdateProgress? _updateProgress;
 
     public SettingsWindow(AppSettings settings, UsageMonitorHost usageHost, SettingsHooks hooks,
         IAppIconProvider icons, ISocialClient? social = null)
@@ -2421,9 +2427,9 @@ internal sealed partial class SettingsWindow : Window
         page.Children.Add(_updateStatus);
 
         var buttons = SettingsUi.ButtonRow();
-        var checkBtn = SettingsUi.FlatButton("Check for updates");
-        checkBtn.Click += (_, _) => _hooks.CheckForUpdates?.Invoke();
-        buttons.Children.Add(checkBtn);
+        _checkUpdatesBtn = SettingsUi.FlatButton("Check for updates");
+        _checkUpdatesBtn.Click += (_, _) => _hooks.CheckForUpdates?.Invoke();
+        buttons.Children.Add(_checkUpdatesBtn);
 
         // Only a self-updating (Velopack) install gets "Update now" — a portable copy is replaced by hand,
         // and RefreshUpdateUi says so instead. See InstallChannel.
@@ -2434,6 +2440,17 @@ internal sealed partial class SettingsWindow : Window
             buttons.Children.Add(_updateNowBtn);
         }
         page.Children.Add(buttons);
+
+#if DEBUG
+        var simRow = SettingsUi.ButtonRow();
+        var simBtn = SettingsUi.FlatButton("Simulate an update");
+        simBtn.Click += (_, _) => _hooks.TestUpdateProgress?.Invoke();
+        simRow.Children.Add(simBtn);
+        page.Children.Add(simRow);
+        page.Children.Add(SettingsUi.BodyText(
+            "(debug) Play a fake ~9s update through the overlay's progress strip and the greyed update controls. " +
+            "Nothing is downloaded, closed or restarted."));
+#endif
 
         RefreshUpdateUi();
     }
@@ -2447,16 +2464,32 @@ internal sealed partial class SettingsWindow : Window
         RefreshUpdateUi();
     }
 
+    /// <summary>Reflects a running update (null once it ends without restarting): the status line follows its
+    /// stage and both update buttons grey out so it can't be started twice.</summary>
+    public void SetUpdateProgress(UpdateProgress? progress)
+    {
+        _updateProgress = progress;
+        RefreshUpdateUi();
+    }
+
     // The wording follows the install channel: a Velopack install talks about "Update now", a portable copy
     // says it's replaced by hand. "Update now" only exists on the former, so the button may legitimately be
     // absent.
     private void RefreshUpdateUi()
     {
         if (_updateStatus is null) return;
-        _updateStatus.Text = _updateAvailable
-            ? $"Version {_updateVersion} is available. {InstallChannel.Instruction}"
-            : $"Currently running v{AppInfo.Version}. {InstallChannel.OwnershipNote}";
-        if (_updateNowBtn is not null) _updateNowBtn.IsVisible = _updateAvailable;
+        _updateStatus.Text = _updateProgress is { } p
+            ? p.Percent is { } pct ? $"{p.Caption} {pct}%" : p.Caption
+            : _updateAvailable
+                ? $"Version {_updateVersion} is available. {InstallChannel.Instruction}"
+                : $"Currently running v{AppInfo.Version}. {InstallChannel.OwnershipNote}";
+        bool idle = _updateProgress is null;
+        if (_updateNowBtn is not null)
+        {
+            _updateNowBtn.IsVisible = _updateAvailable;
+            _updateNowBtn.IsEnabled = idle;
+        }
+        if (_checkUpdatesBtn is not null) _checkUpdatesBtn.IsEnabled = idle;
     }
 
     private Control LinkRow(string text, string url)

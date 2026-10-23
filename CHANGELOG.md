@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.43] - 2026-10-23
+
+- Update progress bar under the overlay header (updating is no longer a secret)
+- Update buttons grey out while an update runs
+- Windows and sessions stay open until the download finishes
+
+---
+
 ## [v0.5.42] - 2026-10-22
 
 - Work items (beta): group sessions into named pieces of work
