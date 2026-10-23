@@ -734,7 +734,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
     // the size the dense popup and the floating expanded panel both use.
-    private double FullPanelHeight() => HeaderHeight + PanelBodyHeight() + (ShowFooter ? FooterHeight : 0);
+    private double FullPanelHeight() => BodyTop + PanelBodyHeight() + (ShowFooter ? FooterHeight : 0);
 
     // Everything the open panel shows below the header: the strips, one line per display row, then the
     // trailing mic/now-playing strips. An empty roster simply contributes no rows — the strips stand on
@@ -745,16 +745,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         // Walk the movable sections in the user's chosen order, recording each visible section's absolute top
         // so the paint pass and every hit-test read the same geometry. Returns the total body height (below
-        // the header, above any outage footer). See OverlayCanvas.Sections.cs.
+        // the header and any update progress strip, above any outage footer). See OverlayCanvas.Sections.cs.
         _sectionTop.Clear();
-        double top = HeaderHeight;
+        double top = BodyTop;
         foreach (var s in _sectionOrder)
         {
             if (!SectionVisible(s)) continue;
             _sectionTop[s] = top;
             top += SectionHeight(s);
         }
-        return top - HeaderHeight;
+        return top - BodyTop;
     }
 
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
@@ -1906,7 +1906,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // no Claude is working right now".
         bool showBody = ShowFullPanel;
 
-        double height = HeaderHeight;
+        // The update progress strip rides under the header even when the panel is collapsed to it.
+        double height = BodyTop;
         if (showBody) height += PanelBodyHeight();
         // The outage footer sits below everything; shown only when enabled and there's an issue. Reached
         // only past the closed-strip early-return, so the header is always present to anchor it to.
@@ -1934,6 +1935,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
             DrawHeader(ctx, width);
             if (_autoCloseActive) DrawAutoCloseBar(ctx, width);
+            if (UpdateInProgress) DrawUpdateStrip(ctx, width);
 
             if (showBody)
             {
@@ -2108,13 +2110,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         // Update badge — only while an update is pending. Drawn in the perch-logo colour so it stands out
-        // from the muted glyphs; clicking it (see RouteClick) applies the update.
+        // from the muted glyphs; clicking it (see RouteClick) applies the update. Greyed out while that update
+        // is already running (the progress strip under the header shows how far along it is).
         if (_updateAvailable)
         {
             double ux = clusterLeft - IconGap - IconBoxW;
             double uy = (HeaderHeight - IconBoxH) / 2;
             _updateIconRect = new Rect(ux, uy, IconBoxW, IconBoxH);
-            DrawUpdateIcon(ctx, _updateIconRect, _hoveredUpdateIcon);
+            DrawUpdateIcon(ctx, _updateIconRect, _hoveredUpdateIcon, disabled: UpdateInProgress);
             clusterLeft = ux;
         }
         else
@@ -2127,12 +2130,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // The update badge: a filled perch-orange disc with a white "download" arrow (a down arrow over a
-    // short tray line), brightened a touch while hovered. Mirrors the WinForms OverlayForm badge.
-    private static void DrawUpdateIcon(DrawingContext ctx, Rect r, bool hovered)
+    // short tray line), brightened a touch while hovered and faded to grey while disabled. Mirrors the
+    // WinForms OverlayForm badge.
+    private static void DrawUpdateIcon(DrawingContext ctx, Rect r, bool hovered, bool disabled)
     {
-        ctx.DrawEllipse(hovered ? UpdateHover : UpdateBrush, null, r.Center, r.Width / 2, r.Height / 2);
+        var fill = disabled ? OverlayDraw.Brush(MutedColor, 0.45) : hovered ? UpdateHover : UpdateBrush;
+        ctx.DrawEllipse(fill, null, r.Center, r.Width / 2, r.Height / 2);
 
-        var pen = OverlayDraw.Pen(Brushes.White, 1.5, lineCap: PenLineCap.Round);
+        var pen = OverlayDraw.Pen(disabled ? OverlayDraw.Brush(Colors.White, 0.6) : Brushes.White, 1.5,
+            lineCap: PenLineCap.Round);
         double cx = r.Left + r.Width / 2;
         double midY = r.Top + r.Height / 2;
         double top = midY - 4, bot = midY + 2;
@@ -4161,7 +4167,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The Jira glyph doesn't change on hover, so it needs no repaint — just the hand cursor + tooltip.
         int jiraIcon = HitRect(_jiraRects, p);
 
-        bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
+        bool overUpdate = _updateAvailable && !UpdateInProgress && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
         bool overDnd = OverDndButton(p);
@@ -4639,10 +4645,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         // Update badge (header, floating): apply the pending update. Checked before the header-toggle
-        // fallback below, since the badge sits inside the header band.
+        // fallback below, since the badge sits inside the header band. A click while the update is already
+        // running is swallowed rather than toggling the header.
         if (_updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p))
         {
-            UpdateRequested?.Invoke();
+            if (!UpdateInProgress) UpdateRequested?.Invoke();
             return;
         }
 

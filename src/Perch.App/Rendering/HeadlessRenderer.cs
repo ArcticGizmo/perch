@@ -141,6 +141,21 @@ internal static class HeadlessRenderer
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1.5x.png"), 144);
 
+        // The dev instance's tray mark (colour-inverted), at the size the tray loads it.
+        using (var devTray = InvertedIcon.Load(new Uri("avares://perch/Assets/icon.png"), 64))
+            devTray.Save(Path.Combine(outDir, "tray_icon_dev.png"));
+
+        // Update under way: the progress strip under the header (mid-download, then the indeterminate
+        // "Installing" stage) with the badge greyed out beside it. Rendered wide so the header cluster and the
+        // strip's percent are inside the bitmap.
+        canvas.SetFloatingWidth(460);
+        canvas.SetUpdateProgress("Downloading v0.5.43…", 42);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_update_progress_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_update_progress_1.5x.png"), 144);
+        canvas.SetUpdateProgress("Installing v0.5.43 — Perch will restart", null);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_update_installing_1.5x.png"), 144);
+        canvas.SetUpdateProgress(null, null);
+
         // Do Not Disturb header button: off (muted outline), on (accent fill), hovered, and next to the update
         // badge so the cluster spacing reads right. Rendered wide: at the default width the sample's header runs
         // past the bitmap's right edge, which is where the cluster sits.

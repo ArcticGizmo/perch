@@ -5,6 +5,10 @@ using Velopack;
 
 namespace Perch.Avalonia.Services;
 
+/// <summary>Where a running update is: a caption for the stage and the download percent (0–100), or null when
+/// the stage has no measurable progress.</summary>
+internal readonly record struct UpdateProgress(string Caption, int? Percent);
+
 /// <summary>
 /// The in-app updater: a startup + hourly background check against the GitHub release source, plus the
 /// user-initiated "Check for Updates" / "Update now" flows. Ported from the WinForms
@@ -36,6 +40,14 @@ internal sealed class UpdateService
     /// <summary>Raised on the UI thread whenever the pending-update state changes, so the tray item,
     /// overlay badge and open Settings window can light up (or clear) together.</summary>
     public event Action<bool, string?>? AvailabilityChanged;
+
+    /// <summary>Raised on the UI thread as an update runs, so the overlay can show its progress strip and the
+    /// update controls can grey out; null once a run ends without restarting (drift or failure).</summary>
+    public event Action<UpdateProgress?>? ProgressChanged;
+
+    /// <summary>The running update's progress, or null when none is running. Lets a window opened mid-update
+    /// pick up the current state.</summary>
+    public UpdateProgress? Progress { get; private set; }
 
     public UpdateService(AppSettings settings, NotificationService notifications)
     {
@@ -149,9 +161,49 @@ internal sealed class UpdateService
         AvailabilityChanged?.Invoke(false, null);
     }
 
-    /// <summary>Downloads and applies the pending update, then restarts. <paramref name="closeWindows"/>
-    /// is invoked up front to tear down open windows — the closing windows are the visible signal the
-    /// update is under way. On drift (already latest / release pulled) it self-heals the UI instead.
+    private void Report(UpdateProgress? progress)
+    {
+        Progress = progress;
+        ProgressChanged?.Invoke(progress);
+    }
+
+#if DEBUG
+    /// <summary>Walks every update surface through a fake run (check, a ~6s download, install) via the same
+    /// <see cref="ProgressChanged"/> path a real update uses, so the progress strip and greyed controls can be
+    /// seen in a dev run, which has no update feed. Lights the badge for the duration and restores the real
+    /// pending state after. Downloads nothing, closes nothing and never restarts (debug only).</summary>
+    public async void SimulateUpdate()
+    {
+        if (_inProgress) return;
+        _inProgress = true;
+        const string version = "9.9.9";
+        AvailabilityChanged?.Invoke(true, version);
+        try
+        {
+            Report(new UpdateProgress("Checking for the update…", null));
+            await Task.Delay(1200);
+            string downloading = $"Downloading v{version}…";
+            for (int pct = 0; pct <= 100; pct += 2)
+            {
+                Report(new UpdateProgress(downloading, pct));
+                await Task.Delay(120);
+            }
+            Report(new UpdateProgress($"Installing v{version} — Perch will restart", null));
+            await Task.Delay(1500);
+        }
+        finally
+        {
+            _inProgress = false;
+            Report(null);
+            AvailabilityChanged?.Invoke(HasPendingUpdate, PendingVersion);
+        }
+    }
+#endif
+
+    /// <summary>Downloads and applies the pending update, then restarts, reporting each stage through
+    /// <see cref="ProgressChanged"/>. <paramref name="closeWindows"/> runs only once the download has landed,
+    /// so open windows and sessions keep working through it and a failed download tears nothing down. On
+    /// drift (already latest / release pulled) it self-heals the UI instead.
     ///
     /// On a channel Perch doesn't own (the portable zip) it applies nothing and explains what to do instead
     /// — the pending state stays lit so the badge keeps nagging until the new version is actually in
@@ -169,10 +221,9 @@ internal sealed class UpdateService
             return;
         }
         _inProgress = true;
+        Report(new UpdateProgress("Checking for the update…", null));
         try
         {
-            _notifications.ShowInfo("Perch — Updating", "Preparing update…", ToastLevel.Info);
-
             var mgr = InstallChannel.CreateManager();
             var update = await mgr.CheckForUpdatesAsync();
             if (update == null)
@@ -182,17 +233,36 @@ internal sealed class UpdateService
                 return;
             }
 
-            _notifications.ShowInfo("Perch — Updating",
-                $"Downloading v{update.TargetFullRelease.Version}…", ToastLevel.Info);
+            // The toast still matters when the overlay is down to its edge strip, where the progress strip
+            // has nowhere to show.
+            string version = update.TargetFullRelease.Version.ToString();
+            _notifications.ShowInfo("Perch — Updating", $"Downloading v{version}…", ToastLevel.Info);
 
-            // Clear the persisted record up front: the process is about to be replaced, and we want a
-            // clean slate so the next startup re-detects any version drift from scratch.
+            string downloading = $"Downloading v{version}…";
+            Report(new UpdateProgress(downloading, 0));
+            // Velopack reports from a worker thread, and many times per percent; a post that lands after the
+            // download finished must not drag the strip back from "Installing".
+            bool downloadDone = false;
+            int lastPercent = 0;
+            await mgr.DownloadUpdatesAsync(update, pct => Dispatcher.UIThread.Post(() =>
+            {
+                if (downloadDone || pct == lastPercent) return;
+                lastPercent = pct;
+                Report(new UpdateProgress(downloading, Math.Clamp(pct, 0, 100)));
+            }));
+            downloadDone = true;
+
+            Report(new UpdateProgress($"Installing v{version} — Perch will restart", null));
+
+            // Clear the persisted record now the process is about to be replaced, so the next startup
+            // re-detects any version drift from scratch. A failed download above leaves it in place.
             _settings.PendingUpdateVersion = null;
             _settings.Save();
 
             closeWindows();
-
-            await mgr.DownloadUpdatesAsync(update);
+            // ApplyUpdatesAndRestart blocks the UI thread until the process exits, so give the overlay a
+            // moment to paint the "Installing" stage first.
+            await Task.Delay(300);
             mgr.ApplyUpdatesAndRestart(update); // exits the process
         }
         catch (Exception ex)
@@ -204,6 +274,7 @@ internal sealed class UpdateService
             // ApplyUpdatesAndRestart exits the process, so this only runs on the drift/failure paths —
             // both of which should allow another attempt later.
             _inProgress = false;
+            Report(null);
         }
     }
 }
