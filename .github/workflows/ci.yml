@@ -9,11 +9,14 @@ name: CI
 #   macos   - the cross-platform app head (the macOS port) and the .NET suite, which is meant to be portable.
 #
 # Pull requests only (opened, new commits, reopened); a plain branch push doesn't run it. workflow_dispatch runs it
-# by hand on any branch. Docs, captures and the Supabase backend (tested separately with pgTAP) don't trigger a
-# run. Root-level *.md only: fixture .md files under tests/ must still trigger one.
+# by hand on any branch. A PR touching only docs, captures, the docs site or the Supabase backend (tested separately
+# with pgTAP) skips the build. Root-level *.md only: fixture .md files under tests/ must still build.
+#
+# That filter is the `changes` job, not a trigger-level paths-ignore: windows and macos are required checks on main,
+# and a path-filtered workflow never reports them, which leaves the PR blocked. A job skipped by `if:` reports
+# Skipped, which the ruleset accepts.
 on:
   pull_request:
-    paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**', 'site/**']
   workflow_dispatch:
 
 # Read-only: nothing here writes to the repo. Every action is pinned to a commit SHA (the version is in the
@@ -31,7 +34,32 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -z "$PR" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+          if echo "$files" | grep -qvE '^([^/]+\.md|docs/|captures/|backend/|site/)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   windows:
+    needs: changes
+    # Only an explicit "false" skips, so a failed filter job builds rather than waving the PR through.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -68,6 +96,8 @@ jobs:
           if-no-files-found: ignore
 
   macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: macos-14
     timeout-minutes: 30
     steps:

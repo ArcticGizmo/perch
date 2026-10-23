@@ -24,6 +24,8 @@ on:
       - 'site/**'
       - 'CHANGELOG.md'
       - 'PRIVACY.md'
+      - 'install.ps1'
+      - 'landing-icon.png'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
