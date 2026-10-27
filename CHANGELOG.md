@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.44] - 2026-10-27
+
+- Account pickers list every config dir, not just distinct accounts
+- Dirs sharing an account read "Account | dir" (two folders, one login, no longer one entry)
+- Optional expected account per config dir
+- Drifted logins flagged in Settings, the pickers and the session-row chip
+- Tooltips no longer sit on right-click menus (they were eating the clicks)
+
+---
+
 ## [v0.5.43] - 2026-10-23
 
 - Update progress bar under the overlay header (updating is no longer a secret)
