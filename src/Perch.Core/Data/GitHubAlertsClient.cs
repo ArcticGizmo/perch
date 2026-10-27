@@ -274,9 +274,15 @@ internal static class GitHubAlertsClient
                 FileName = ExecutableResolver.Resolve("gh"),     // absolute, like PrStatusService (CP7)
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                RedirectStandardInput = stdin is not null,
+                // Always a pipe of its own: a tray started from a terminal would otherwise hand gh that console's stdin,
+                // invalid in gh's hidden console, and gh then fails to start git ("The handle is invalid").
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // gh speaks UTF-8 both ways; left to the ANSI code page, emoji in PR titles decode as "ðŸ”".
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+                StandardInputEncoding = stdin is not null ? new System.Text.UTF8Encoding(false) : null,
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
 
@@ -285,10 +291,8 @@ internal static class GitHubAlertsClient
             var stdout = proc.StandardOutput.ReadToEndAsync();
             var stderr = proc.StandardError.ReadToEndAsync();
             if (stdin is not null)
-            {
                 proc.StandardInput.Write(stdin);
-                proc.StandardInput.Close();
-            }
+            proc.StandardInput.Close();
             if (!proc.WaitForExit(timeoutMs))
             {
                 try { proc.Kill(entireProcessTree: true); } catch { }

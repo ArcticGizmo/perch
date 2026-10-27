@@ -6,9 +6,10 @@ namespace Perch.Tests;
 /// <summary>
 /// Covers <see cref="PrStatusService.ParsePrJson"/> — the one piece of branching logic in the PR feature:
 /// folding <c>gh pr view --json …</c> output into a <see cref="PullRequestInfo"/>, and mapping
-/// <c>state</c> + <c>isDraft</c> onto <see cref="PrState"/>. The gh spawning, TTL caching and concurrency
-/// gate around it can only be exercised against a real repo + gh install, so they're left to manual
-/// testing; this pins the parsing that would otherwise silently drop or mis-colour a PR.
+/// <c>state</c> + <c>isDraft</c> onto <see cref="PrState"/> — plus <see cref="PrStatusService.Classify"/>, which
+/// decides whether a gh run answered at all. The gh spawning and concurrency gate can only be exercised against a
+/// real repo + gh install, so they're left to manual testing; this pins the parsing that would otherwise silently
+/// drop or mis-colour a PR.
 /// </summary>
 public class PrStatusServiceTests
 {
@@ -298,6 +299,35 @@ public class PrStatusServiceTests
             """);
         Assert.NotEqual(PrStatusService.ParsePrJson(json), changed);
     }
+
+    [Fact]
+    public void TimeoutOrLaunchFailureIsAFailedLookup()
+    {
+        Assert.Equal(new PrStatusService.Fetch(null, Failed: true), PrStatusService.Classify(-1, ""));
+    }
+
+    [Fact]
+    public void NonZeroExitIsGhsAnswerNotAFailure()
+    {
+        // "no pull requests found", no GitHub remote, not signed in: all cached for the full interval.
+        Assert.Equal(new PrStatusService.Fetch(null, Failed: false), PrStatusService.Classify(1, ""));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{not json")]
+    public void SuccessWithUnreadableOutputIsAFailedLookup(string stdout)
+    {
+        Assert.True(PrStatusService.Classify(0, stdout).Failed);
+    }
+
+    [Fact]
+    public void SuccessWithAPrIsNotAFailure()
+    {
+        var fetch = PrStatusService.Classify(0, """{"number":7,"state":"OPEN"}""");
+        Assert.False(fetch.Failed);
+        Assert.Equal(7, fetch.Pr!.Value.Number);
+    }
 }
 
 /// <summary>
@@ -440,5 +470,77 @@ public sealed class PrStatusServiceBranchTests : IDisposable
         File.WriteAllText(Path.Combine(wt, ".git"), $@"gitdir: \\?\{gitDir}" + "\n");
 
         Assert.Null(PrStatusService.ReadHeadRef(wt));
+    }
+}
+
+/// <summary>
+/// Covers the cache's split between gh's answer and no answer, with the gh run swapped for a scripted fetch: a
+/// lookup that got no answer is retried after <see cref="PrStatusService.RetryTtl"/>, while a real "no PR" holds
+/// for the full poll interval. A transient failure used to hide a PR for the whole interval.
+/// </summary>
+public sealed class PrStatusServiceRetryTests : IDisposable
+{
+    private readonly string _repo =
+        Path.Combine(Path.GetTempPath(), "perch-pr-retry-" + Guid.NewGuid().ToString("N"));
+
+    public PrStatusServiceRetryTests()
+    {
+        Directory.CreateDirectory(Path.Combine(_repo, ".git"));
+        File.WriteAllText(Path.Combine(_repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_repo, recursive: true); } catch { }
+    }
+
+    private static readonly PullRequestInfo Pr = new(30, "https://github.com/o/r/pull/30", "t", PrState.Open);
+
+    // Keeps reading until the service has run `calls` fetches (refreshes land on the thread pool).
+    private static async Task<int> GetUntil(PrStatusService svc, string cwd, Func<int> fetches, int calls, double seconds = 5)
+    {
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        while (fetches() < calls && DateTime.UtcNow < until)
+        {
+            svc.Get(cwd);
+            await Task.Delay(20);
+        }
+        return fetches();
+    }
+
+    [Fact]
+    public async Task FailedLookupIsRetriedAndThenShowsThePr()
+    {
+        int n = 0;
+        using var svc = new PrStatusService(_ =>
+            Interlocked.Increment(ref n) == 1 ? new PrStatusService.Fetch(null, Failed: true) : new PrStatusService.Fetch(Pr, Failed: false))
+        {
+            Enabled = true,
+            RetryTtl = TimeSpan.Zero,
+        };
+
+        Assert.Equal(2, await GetUntil(svc, _repo, () => Volatile.Read(ref n), 2));
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (svc.Get(_repo) is null && DateTime.UtcNow < until) await Task.Delay(20);
+        Assert.Equal(Pr, svc.Get(_repo));
+    }
+
+    [Fact]
+    public async Task NoPrAnswerIsNotRetried()
+    {
+        int n = 0;
+        using var svc = new PrStatusService(_ =>
+        {
+            Interlocked.Increment(ref n);
+            return new PrStatusService.Fetch(null, Failed: false);
+        })
+        {
+            Enabled = true,
+            RetryTtl = TimeSpan.Zero,
+        };
+
+        await GetUntil(svc, _repo, () => Volatile.Read(ref n), 1);
+        await GetUntil(svc, _repo, () => Volatile.Read(ref n), 2, seconds: 0.5);   // gives a retry every chance to happen
+        Assert.Equal(1, Volatile.Read(ref n));
     }
 }
