@@ -115,6 +115,7 @@ internal sealed class PrStatusService : IDisposable
     // lookups instead of forking a process per row simultaneously.
     private const int MaxConcurrent = 3;
 
+    private readonly Func<string, Fetch> _fetch;
     private readonly ConcurrentDictionary<PrKey, Entry> _cache = new();
     // Keys with a refresh in flight, so concurrent scans don't pile up duplicate gh processes.
     private readonly ConcurrentDictionary<PrKey, byte> _fetching = new();
@@ -153,6 +154,14 @@ internal sealed class PrStatusService : IDisposable
 
     private TimeSpan Ttl => TimeSpan.FromMinutes(Math.Max(1, _intervalMinutes));
 
+    /// <summary>How soon a lookup that got no answer (gh timed out or failed to launch) is retried. Without it a
+    /// transient failure — e.g. the burst of lookups as Perch starts — hid a PR for the whole poll interval.</summary>
+    internal TimeSpan RetryTtl { get; init; } = TimeSpan.FromSeconds(30);
+
+    public PrStatusService() : this(RunGhPrView) { }
+
+    internal PrStatusService(Func<string, Fetch> fetch) => _fetch = fetch;
+
     /// <summary>
     /// The last-known pull request for <paramref name="cwd"/>'s current branch, or null when disabled, not
     /// yet known, not a GitHub repo, or the branch simply has no PR. Never blocks: a missing/stale entry
@@ -176,7 +185,7 @@ internal sealed class PrStatusService : IDisposable
         var key = new PrKey(gitDir, ReadHead(gitDir) ?? "");
 
         bool cached = _cache.TryGetValue(key, out var entry);
-        if (cached && DateTime.UtcNow - entry.FetchedAt < Ttl)
+        if (cached && DateTime.UtcNow - entry.FetchedAt < (entry.Failed ? RetryTtl : Ttl))
             return entry.Pr;
 
         ScheduleRefresh(key, cwd);
@@ -203,11 +212,14 @@ internal sealed class PrStatusService : IDisposable
                         return;
                     // Any session directory under the worktree resolves the same PR, so cwd is just where
                     // gh runs; the (worktree, branch) key is what the result is filed under.
-                    PullRequestInfo? result = RunGhPrView(cwd);
+                    var fetch = _fetch(cwd);
                     if (_disposed || !_enabled)
                         return;
-                    bool changed = !_cache.TryGetValue(key, out var old) || !Nullable.Equals(old.Pr, result);
-                    _cache[key] = new Entry(result, DateTime.UtcNow);
+                    bool had = _cache.TryGetValue(key, out var old);
+                    // No answer isn't "no PR": keep showing the last known one until a retry succeeds.
+                    var result = fetch.Failed && had ? old.Pr : fetch.Pr;
+                    bool changed = !had || !Nullable.Equals(old.Pr, result);
+                    _cache[key] = new Entry(result, DateTime.UtcNow, fetch.Failed);
                     if (changed)
                         Updated?.Invoke();
                 }
@@ -227,19 +239,32 @@ internal sealed class PrStatusService : IDisposable
         });
     }
 
-    // Runs `gh pr view --json …` in cwd and parses the PR for its current branch. Returns null on any
-    // failure (gh missing, not a git repo, no GitHub remote, no PR for the branch, timeout) — best-effort,
-    // so the overlay just shows no glyph. A cheap ".git" walk skips gh entirely for non-repos.
-    private static PullRequestInfo? RunGhPrView(string cwd)
+    // Runs `gh pr view --json …` in cwd and parses the PR for its current branch. Best-effort, so the overlay
+    // just shows no glyph. A cheap ".git" walk skips gh entirely for non-repos.
+    private static Fetch RunGhPrView(string cwd)
     {
         if (!Directory.Exists(cwd) || !HasGitRepo(cwd))
-            return null;
+            return new Fetch(null, Failed: false);
 
         var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews", cwd, GhTimeoutMs);
-        if (exit != 0 || string.IsNullOrWhiteSpace(stdout))
-            return null; // non-zero == no PR for the branch (or an error) — either way, no glyph.
+        return Classify(exit, stdout);
+    }
 
-        return ParsePrJson(stdout);
+    /// <summary>
+    /// Folds a <c>gh pr view</c> run into a <see cref="Fetch"/>. Only a run that gave no answer — timed out or
+    /// failed to launch (exit -1), or exited 0 with unparseable output — is <see cref="Fetch.Failed"/>. A real
+    /// non-zero exit is gh's answer (no PR for the branch, no GitHub remote, not signed in) and is cached for the
+    /// full interval, so a repo that will never have a PR isn't re-probed every <see cref="RetryTtl"/>.
+    /// Internal for unit testing.
+    /// </summary>
+    internal static Fetch Classify(int exit, string stdout)
+    {
+        if (exit == -1)
+            return new Fetch(null, Failed: true);
+        if (exit != 0)
+            return new Fetch(null, Failed: false);
+        var pr = string.IsNullOrWhiteSpace(stdout) ? null : ParsePrJson(stdout);
+        return new Fetch(pr, Failed: pr is null);
     }
 
     /// <summary>
@@ -419,6 +444,9 @@ internal sealed class PrStatusService : IDisposable
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // gh emits UTF-8 JSON; left to the ANSI code page, emoji in check names and PR titles decode as "ðŸ”".
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             if (!string.IsNullOrEmpty(workingDir))
                 psi.WorkingDirectory = workingDir;
@@ -531,7 +559,12 @@ internal sealed class PrStatusService : IDisposable
     // visited, and cleared wholesale when the feature is toggled off.
     private readonly record struct PrKey(string GitDir, string Branch);
 
-    // One cached result: the PR (null = no PR / not GitHub / unreadable) and when it was fetched. The
-    // branch and worktree it belongs to are carried by the cache key, not stored here.
-    private readonly record struct Entry(PullRequestInfo? Pr, DateTime FetchedAt);
+    // One cached result: the PR (null = no PR / not GitHub / unreadable), when it was fetched, and whether that
+    // fetch got no answer (so it's retried after RetryTtl). The branch and worktree it belongs to are carried by
+    // the cache key, not stored here.
+    private readonly record struct Entry(PullRequestInfo? Pr, DateTime FetchedAt, bool Failed);
+
+    /// <summary>One lookup's outcome: the PR gh reported (null = none), or <see cref="Failed"/> when gh gave no
+    /// answer at all. See <see cref="Classify"/>.</summary>
+    internal readonly record struct Fetch(PullRequestInfo? Pr, bool Failed);
 }

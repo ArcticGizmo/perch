@@ -5284,7 +5284,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _              => "Open",
         };
         string title = string.IsNullOrWhiteSpace(pr.Title) ? "(untitled)" : pr.Title;
-        if (title.Length > 60) title = title[..59].TrimEnd() + "…";
+        title = TextFit.Truncate(title, 60, s => s.Length);
 
         var lines = new List<OverlayTooltip.Line>
         {
@@ -5306,7 +5306,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     _                    => ('•', PrCheckPendingColor),
                 };
                 string name = chk.Name.Length > 0 ? chk.Name : "(unnamed check)";
-                if (name.Length > 48) name = name[..47].TrimEnd() + "…";
+                name = TextFit.Truncate(name, 48, s => s.Length);
                 lines.Add(new($"    {glyph}  {name}", color, false));
             }
         }

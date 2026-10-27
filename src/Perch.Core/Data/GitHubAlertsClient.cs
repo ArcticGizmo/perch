@@ -277,6 +277,10 @@ internal static class GitHubAlertsClient
                 RedirectStandardInput = stdin is not null,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // gh speaks UTF-8 both ways; left to the ANSI code page, emoji in PR titles decode as "ðŸ”".
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+                StandardInputEncoding = stdin is not null ? new System.Text.UTF8Encoding(false) : null,
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
 
