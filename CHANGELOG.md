@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.45] - 2026-10-27
+
+- Emoji in PR check names and titles render (no more `ðŸ”`)
+- PR glyph works when Perch is started from a terminal
+- A PR lookup that times out retries in 30s, not 5 minutes
+- Failed PR lookups logged to `logs/pr.log`
+
+---
+
 ## [v0.5.44] - 2026-10-27
 
 - Account pickers list every config dir, not just distinct accounts

@@ -246,8 +246,20 @@ internal sealed class PrStatusService : IDisposable
         if (!Directory.Exists(cwd) || !HasGitRepo(cwd))
             return new Fetch(null, Failed: false);
 
-        var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews", cwd, GhTimeoutMs);
-        return Classify(exit, stdout);
+        var (exit, stdout, stderr) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews", cwd, GhTimeoutMs);
+        var fetch = Classify(exit, stdout);
+        if (fetch.Pr is null && !stderr.Contains("no pull requests found", StringComparison.OrdinalIgnoreCase))
+            LogFailure(cwd, exit, stderr);
+        return fetch;
+    }
+
+    // A missing PR glyph is otherwise silent, so record why gh didn't produce one. gh's error line names the cause
+    // (no GitHub remote, auth, network); it carries no secrets.
+    private static void LogFailure(string cwd, int exit, string stderr)
+    {
+        var line = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "";
+        if (line.Length > 300) line = line[..300];
+        DiagnosticLog.Append("pr.log", $"gh pr view exit={exit} cwd={cwd} {line}");
     }
 
     /// <summary>
@@ -430,9 +442,9 @@ internal sealed class PrStatusService : IDisposable
         return (true, authed);
     }
 
-    // Runs `gh <args>` (optionally in workingDir), returning its exit code and stdout. Exit is -1 on any
-    // failure to launch/complete (gh not on PATH, timeout, …). stderr is drained but discarded.
-    private static (int Exit, string Stdout) RunGh(string args, string? workingDir, int timeoutMs)
+    // Runs `gh <args>` (optionally in workingDir), returning its exit code, stdout and stderr. Exit is -1 on any
+    // failure to launch/complete (gh not on PATH, timeout, …).
+    private static (int Exit, string Stdout, string Stderr) RunGh(string args, string? workingDir, int timeoutMs)
     {
         try
         {
@@ -442,6 +454,9 @@ internal sealed class PrStatusService : IDisposable
                 Arguments = args,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // A tray started from a terminal would hand gh that console's stdin, which is invalid in gh's hidden
+                // console: gh then can't start git ("fork/exec git.exe: The handle is invalid"). Give it its own pipe.
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 // gh emits UTF-8 JSON; left to the ANSI code page, emoji in check names and PR titles decode as "ðŸ”".
@@ -453,22 +468,23 @@ internal sealed class PrStatusService : IDisposable
 
             using var proc = Process.Start(psi);
             if (proc == null)
-                return (-1, "");
+                return (-1, "", "gh did not start");
+            proc.StandardInput.Close();
 
             // Read both pipes async so a chatty gh can't fill a buffer and deadlock before it exits.
             var stdout = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
 
             if (!proc.WaitForExit(timeoutMs))
             {
                 try { proc.Kill(entireProcessTree: true); } catch { }
-                return (-1, "");
+                return (-1, "", $"timed out after {timeoutMs} ms");
             }
-            return (proc.ExitCode, stdout.GetAwaiter().GetResult());
+            return (proc.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
         }
-        catch
+        catch (Exception ex)
         {
-            return (-1, "");
+            return (-1, "", $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
