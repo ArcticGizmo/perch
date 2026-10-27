@@ -2113,8 +2113,9 @@ internal sealed partial class SettingsWindow : Window
 
     /// <summary>The accounts offered in the rule dialog: every org currently signed into a discovered config
     /// dir (keyed by uuid), unioned with any accounts already on the rule being edited (so an account that
-    /// isn't signed in anywhere right now stays visible and selectable).</summary>
-    private static IReadOnlyList<AccountRef> DiscoverKnownAccounts(AccountRule? existing)
+    /// isn't signed in anywhere right now stays visible and selectable). Shared with the config-dir dialog's expected
+    /// account, where <paramref name="expected"/> plays the same part.</summary>
+    private static IReadOnlyList<AccountRef> DiscoverKnownAccounts(AccountRule? existing, ExpectedAccount? expected = null)
     {
         var byUuid = new Dictionary<string, AccountRef>(StringComparer.Ordinal);
         foreach (var dir in ClaudeConfigSet.Instance.All)
@@ -2127,6 +2128,8 @@ internal sealed partial class SettingsWindow : Window
             foreach (var a in existing.Allowed)
                 if (!string.IsNullOrWhiteSpace(a.Uuid) && !byUuid.ContainsKey(a.Uuid))
                     byUuid[a.Uuid] = a;
+        if (expected is not null && !string.IsNullOrWhiteSpace(expected.OrgUuid) && !byUuid.ContainsKey(expected.OrgUuid))
+            byUuid[expected.OrgUuid] = new AccountRef { Uuid = expected.OrgUuid, Name = expected.OrgName };
         return byUuid.Values.OrderBy(a => a.Name ?? a.Email ?? a.Uuid, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -2181,12 +2184,26 @@ internal sealed partial class SettingsWindow : Window
         // Live sign-in (Layer 2): what this dir's credential is signed into right now, read best-effort
         // from its .claude.json. Always shown — including the primary and signed-out/personal dirs — so
         // it's always clear what each directory is doing.
+        var signIn = ClaudeJsonReader.ReadSignIn(d);
         textStack.Children.Add(new TextBlock
         {
-            Text = OrgDisplay.SignInText(ClaudeJsonReader.ReadSignIn(d)),
+            Text = OrgDisplay.SignInText(signIn),
             FontSize = 12, Foreground = Palette.MutedBrush,
             Margin = new Thickness(0, 1, 0, 0),
         });
+        // The expected account, if set: a plain line while the login matches, a red warning once it drifts.
+        if (ExpectedAccounts.For(d, _settings.ExpectedAccounts) is { } expected)
+        {
+            var drift = ExpectedAccounts.Evaluate(expected, signIn.Org);
+            textStack.Children.Add(new TextBlock
+            {
+                Text = drift == AccountDrift.None
+                    ? $"Expected: {ExpectedAccounts.Label(expected)}"
+                    : "⚠ " + ExpectedAccounts.Describe(drift, expected, signIn.Org) + " — the login may be broken",
+                FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 0),
+                Foreground = drift == AccountDrift.None ? Palette.MutedBrush : new SolidColorBrush(Palette.Danger),
+            });
+        }
         // Hooks state as a plain status line (matching the other meta lines); the on/off control lives in the
         // Edit dialog. Primary is always hooked; added dirs default on.
         bool hooksOn = HookPolicy.IsEnabled(d.Provenance, d.RealRoot, HooksDisabledList);
@@ -2320,6 +2337,18 @@ internal sealed partial class SettingsWindow : Window
         if (_settings.HooksDisabledDirs is { Count: 0 }) _settings.HooksDisabledDirs = null;
     }
 
+    // Records (or clears) a config dir's expected account, keyed by real path like its label.
+    private void SetExpectedAccount(string realRootKey, ExpectedAccount? expected)
+    {
+        _settings.ExpectedAccounts?.RemoveAll(e => ClaudeConfigDir.SameRoot(e.Path, realRootKey));
+        if (expected is not null)
+        {
+            expected.Path = realRootKey;
+            (_settings.ExpectedAccounts ??= new()).Add(expected);
+        }
+        if (_settings.ExpectedAccounts is { Count: 0 }) _settings.ExpectedAccounts = null;
+    }
+
     private void RemoveConfigDir(ClaudeConfigDir d)
     {
         // Un-declare it; the primary has no Remove button. Membership is explicit, so that's all it takes to
@@ -2330,8 +2359,10 @@ internal sealed partial class SettingsWindow : Window
         // Strip our hooks from the dir we're dropping (once it leaves the set ReconcileAll can't reach it) and
         // clear its hooks override so a later re-add starts clean.
         SetConfigDirHooksState(d.RealRoot, enabled: true);
+        SetExpectedAccount(d.RealRoot, null);
         _ = System.Threading.Tasks.Task.Run(() => Perch.Avalonia.Services.HookInstaller.RemoveFromDir(d));
         PersistConfigDirs();
+        _hooks.DisplayChanged?.Invoke();
     }
 
     // The add/edit transaction: a modal collects the directory (add only — prefilled with suggestedPath when
@@ -2347,8 +2378,10 @@ internal sealed partial class SettingsWindow : Window
             ? "The primary directory is always hooked — the accept-edits badge, session control and auto-start depend on it."
             : "Perch's hooks power the accept-edits badge, session control and auto-start for sessions in this directory.";
 
+        var expected = existing is null ? null : ExpectedAccounts.For(existing, _settings.ExpectedAccounts);
         var dlg = new ConfigDirDialog(existing, existing is null ? null : CurrentConfigDirLabel(existing),
-            hooksEnabled, hooksEditable: !isPrimary, hooksNote, suggestedPath);
+            hooksEnabled, hooksEditable: !isPrimary, hooksNote, DiscoverKnownAccounts(null, expected), expected,
+            suggestedPath);
         if (!await dlg.ShowDialog<bool>(this)) return;
 
         if (existing is null)
@@ -2363,13 +2396,16 @@ internal sealed partial class SettingsWindow : Window
             var real = Path.TrimEndingDirectorySeparator(ClaudeConfigSet.ResolveReal(path));
             SetConfigDirHooksState(real, dlg.HooksEnabled);
             SetConfigDirLabel(real, dlg.DirLabel);
+            SetExpectedAccount(real, dlg.Expected);
         }
         else
         {
             if (!isPrimary) SetConfigDirHooksState(existing.RealRoot, dlg.HooksEnabled);
             SetConfigDirLabel(existing.RealRoot, dlg.DirLabel);
+            SetExpectedAccount(existing.RealRoot, dlg.Expected);
         }
         PersistConfigDirs();
+        _hooks.DisplayChanged?.Invoke();   // re-push ExpectedAccounts onto the live overlay via OverlaySettingsGates
         // A hooks change on an already-present dir doesn't move discovery membership (so no Changed →
         // auto-reconcile fires); reconcile explicitly so the toggle takes effect now.
         _ = System.Threading.Tasks.Task.Run(Perch.Avalonia.Services.HookInstaller.ReconcileAll);

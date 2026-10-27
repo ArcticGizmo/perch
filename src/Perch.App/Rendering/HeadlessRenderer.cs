@@ -199,6 +199,18 @@ internal static class HeadlessRenderer
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_still_1x.png"), 96);
         Pulse.Override = null;
 
+        // Expected-account drift (org-discovery M3): the primary is expected on Acme Corp but the stub provider has it
+        // on Contoso, so every session row from it wears a red "⚠ <dir>" config-dir chip.
+        var driftProbe = new OverlayCanvas();
+        driftProbe.SetOrgProvider(new OrgProvider(
+            _ => new Org("contoso-uuid") { Name = "Contoso", AccountEmail = "jon@contoso.com" }, _ => 0L));
+        driftProbe.Update(SampleData.Sessions());
+        driftProbe.SetExpectedAccounts(new[]
+        {
+            new ExpectedAccount { Path = ClaudeConfigSet.Instance.Primary.RealRoot, OrgUuid = "acme-uuid", OrgName = "Acme Corp" },
+        });
+        RenderControl(driftProbe, Path.Combine(outDir, "overlay_account_drift_1.5x.png"), 144);
+
         // The Roost entry point on the "+ New session" row (docs/roost-plan.md CP9): hovered (the sample has
         // sessions awaiting input, so it's badged), and gated off by its setting.
         var roostProbe = new OverlayCanvas();
@@ -2476,11 +2488,15 @@ internal static class HeadlessRenderer
         };
         var acmeAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude"),
             new Perch.Data.Org("acme") { Name = "Acme Corp" });
+        // A second dir on the same org, so the chip reads "Acme Corp | work".
+        var acmeWorkAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude-work") { CustomLabel = "work" },
+            new Perch.Data.Org("acme") { Name = "Acme Corp" });
         var personalAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude-personal"),
             null, "me@example.com");
         var resumeAccounts = new Dictionary<string, Perch.Data.ResumeAccountSet>
         {
-            [resumeRows[0].SessionId] = new(new[] { acmeAccount, personalAccount }, acmeAccount),
+            [resumeRows[0].SessionId] = new(new[] { acmeAccount, acmeWorkAccount, personalAccount }, acmeWorkAccount)
+                { All = new[] { acmeAccount, acmeWorkAccount, personalAccount } },
         };
         CaptureResume(Theming.SessionPalette.For(dark: true), "session_resume_1x.png", resumeRows, resumeAccounts, allProjects: false);
         CaptureResume(Theming.SessionPalette.For(dark: false), "session_resume_all_light_1x.png", resumeRows, resumeAccounts, allProjects: true);

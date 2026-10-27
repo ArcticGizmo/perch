@@ -323,6 +323,10 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     /// reflects the current rules. Null/absent = no guardrails.</summary>
     public Func<IReadOnlyList<AccountRule>?>? AccountRulesProvider { get; set; }
 
+    /// <summary>Each config dir's expected account (<see cref="AppSettings.ExpectedAccounts"/>), read live so the account
+    /// pickers can flag a dir whose login has drifted. Null/absent = no expectations.</summary>
+    public Func<IReadOnlyList<ExpectedAccount>?>? ExpectedAccountsProvider { get; set; }
+
     /// <summary>The user's preferred terminal (<see cref="AppSettings.ReopenTerminal"/>) for "Open in terminal",
     /// read live from the app. Null/absent = Auto.</summary>
     public Func<TerminalApp>? TerminalProvider { get; set; }
@@ -2747,7 +2751,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         if (!_resumeAccounts.TryGetValue(e.SessionId, out var set) || !set.CanSwitch) return null;
         if (e.IsActive || LiveLookup?.Invoke(e.SessionId) is { IsPerchControlled: true }) return null;
-        var label = set.Current?.Label ?? "account";
+        var warning = set.Current is { } cur ? ExpectedAccounts.WarningFor(cur, ExpectedAccountsProvider?.Invoke()) : null;
+        var label = ExpectedAccounts.Flag(set.Current is { } current ? set.LabelOf(current) : "account", warning);
         var chip = Pill(new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
@@ -2760,7 +2765,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         chip.Padding = new Thickness(8, 2);
         chip.Margin = new Thickness(8, 0, 0, 0);
         chip.Cursor = new Cursor(StandardCursorType.Hand);
-        chip[ToolTip.TipProperty] = $"Resumes under {label} — click to resume under another account";
+        chip[ToolTip.TipProperty] = $"Resumes under {label} — click to resume under another account" +
+                                    (warning is null ? "" : $"\n⚠ {warning}");
         chip.PointerReleased += (_, ev) =>
         {
             if (ev.InitialPressMouseButton != MouseButton.Left) return;
@@ -2773,10 +2779,13 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void ShowResumeAccountMenu(Control anchor, HistoryEntry e, ResumeAccountSet set)
     {
         var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in set.Options)
         {
             bool current = set.IsCurrent(choice);
-            var item = new MenuItem { Header = (current ? "✓  " : "     ") + "Resume under " + choice.Label };
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var item = new MenuItem { Header = (current ? "✓  " : "     ") + "Resume under " + ExpectedAccounts.Flag(set.LabelOf(choice), warning) };
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += async (_, _) =>
             {
@@ -3673,7 +3682,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
                 _accountPill.Cursor = new Cursor(_accountLocked ? StandardCursorType.Arrow : StandardCursorType.Hand);
                 _accountPill[ToolTip.TipProperty] = _accountLocked
                     ? "Account is restricted by account guardrails"
-                    : "Which Claude account this session runs under — click to change";
+                    : "Which config dir (and the Claude account signed into it) this session runs under — click to change";
                 UpdateAccountPill();
             });
         });
@@ -3682,8 +3691,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     /// <summary>Every discovered config dir paired with the account it is currently signed into (org + email).
     /// Pure IO — reads each dir's <c>.claude.json</c>; called on a background thread by
     /// <see cref="RefreshAccounts"/> and once synchronously by <see cref="EffectiveConfigDir"/> so a
-    /// single-allowed guardrail is honoured even on the quick CLI path where the selector was never shown. The
-    /// resolver de-duplicates, so two dirs signed into the same account collapse to one choice.</summary>
+    /// single-allowed guardrail is honoured even on the quick CLI path where the selector was never shown. Two dirs
+    /// signed into the same account stay two choices (<see cref="AccountChoice.LabelAmong"/> tells them apart).</summary>
     // Every config dir with its live sign-in. File IO: call off the UI thread. Shared with PrSessionWindow.
     internal static IReadOnlyList<AccountChoice> ReadSignIns()
     {
@@ -3704,16 +3713,18 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // menu still names the account the session will run under.
         var items = set.Options.Count > 0 ? set.Options
                   : set.Default is { } d ? new[] { d } : System.Array.Empty<AccountChoice>();
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in items)
         {
-            // "(default)" marks the account tied to the primary config dir — the real default — never a
-            // guardrail-forced pick.
+            // "(default)" marks the primary config dir — the real default — never a guardrail-forced pick.
             bool isDefault = set.Primary is { } prim && prim.Key == choice.Key;
             var email = choice.Org?.AccountEmail ?? choice.Email;
-            var name = choice.Label + (isDefault ? "  (default)" : "");
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var name = ExpectedAccounts.Flag(set.LabelOf(choice), warning) + (isDefault ? "  (default)" : "");
             var header = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
                 ? name : $"{name}  ·  {email}";
             var item = new MenuItem { Header = header };
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += (_, _) => PickAccount(picked);
             flyout.Items.Add(item);
@@ -3745,10 +3756,18 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         if (_accountChoices is not { } set) return;
         var choice = SelectedChoice(set, _accountPicked, _accountPickKey);
         if (choice is null) { _accountPillText.Text = ""; return; }
-        // "(default)" marks only the primary config dir's account, and never in the locked (guardrail-forced)
-        // state where the lock already explains the choice.
+        // "(default)" marks only the primary config dir, and never in the locked (guardrail-forced) state where the
+        // lock already explains the choice.
         bool isDefault = !_accountLocked && set.Primary is { } d && d.Key == choice.Key;
-        _accountPillText.Text = isDefault ? $"{choice.Label} (default)" : choice.Label;
+        var label = set.LabelOf(choice);
+        var warning = ExpectedAccounts.WarningFor(choice, ExpectedAccountsProvider?.Invoke());
+        _accountPillText.Text = ExpectedAccounts.Flag(isDefault ? $"{label} (default)" : label, warning);
+        // The warning line under the pill names a drifted login; the guardrail's own warning keeps the line when set.
+        if (!set.GuardrailUnsatisfiable)
+        {
+            _accountWarning.IsVisible = warning is not null;
+            _accountWarning.Text = warning is null ? "" : $"⚠ {warning} — its login may be broken.";
+        }
     }
 
     /// <summary>The config dir this window's launch runs under. A fresh session honours the account selector
@@ -3792,20 +3811,24 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             // The other accounts this session could run under: those whose config dir reads the same transcript.
             var switchable = sessionId is null ? ResumeAccountSet.None
                 : ResumeAccountChoice.Resolve(cwd, TranscriptLocator.ResumableDirs(sessionId, cwd), dir, signIns, rules);
-            return (Root: root, Choice: choice, Switch: switchable);
+            return (Root: root, Choice: choice, Label: choice.LabelAmong(signIns), Switch: switchable);
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (_closed || gen != _accountChipGen) return;
             if (!t.IsCompletedSuccessfully) { _accountChip.IsVisible = false; return; }
-            var (resolvedRoot, choice, switchable) = t.Result;
+            var (resolvedRoot, choice, label, switchable) = t.Result;
             if (dormantId is not null) _dormantAccountDir = resolvedRoot;
             _accountSwitch = switchable;
-            _accountChipText.Text = choice.Label;
+            var warning = ExpectedAccounts.WarningFor(choice, ExpectedAccountsProvider?.Invoke());
+            _accountChipText.Text = ExpectedAccounts.Flag(label, warning);
+            _accountChipText.Foreground = warning is null ? _p.Muted : new SolidColorBrush(Palette.Danger);
             var email = choice.Org?.AccountEmail ?? choice.Email;
             var verb = dormantId is not null ? "Resumes under account" : "Running under account";
             var tip = string.IsNullOrWhiteSpace(email)
-                ? $"{verb}: {choice.Label}"
-                : $"{verb}: {choice.Label} · {email}";
+                ? $"{verb}: {label}"
+                : $"{verb}: {label} · {email}";
+            tip += $"\nConfig dir: {choice.Dir.Root}";
+            if (warning is not null) tip += $"\n⚠ {warning} — its login may be broken";
             _accountChip[ToolTip.TipProperty] = switchable.CanSwitch ? tip + "\nClick to switch to another account" : tip;
             _accountChip.Cursor = new Cursor(switchable.CanSwitch ? StandardCursorType.Hand : StandardCursorType.Arrow);
             _accountChip.IsVisible = true;
@@ -3816,13 +3839,17 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void ShowAccountSwitchMenu()
     {
         var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in _accountSwitch.Options)
         {
             bool current = _accountSwitch.IsCurrent(choice);
             var email = choice.Org?.AccountEmail ?? choice.Email;
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var label = ExpectedAccounts.Flag(_accountSwitch.LabelOf(choice), warning);
             var name = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
-                ? choice.Label : $"{choice.Label}  ·  {email}";
+                ? label : $"{label}  ·  {email}";
             var item = new MenuItem { Header = (current ? "✓  " : "     ") + name, IsEnabled = !current };
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += async (_, _) => await SwitchAccountAsync(picked);
             flyout.Items.Add(item);
@@ -3837,11 +3864,12 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         if (_session is not { SessionId: { Length: > 0 } id } session) return;
         var root = TranscriptLocator.InjectRoot(choice.Dir);
+        var label = _accountSwitch.LabelOf(choice);
         if (!session.IsRunning)
         {
             if (session.IsRestarting) return;
             SessionAccounts.Remember(id, root);
-            Conv.AddNote($"will resume under {choice.Label}");
+            Conv.AddNote($"will resume under {label}");
             RefreshAccountChipAsync();
             return;
         }
@@ -3854,14 +3882,14 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
 
         var conv = session.Conversation;
         bool busy = conv.TurnActive || conv.PendingPermission is not null || conv.BackgroundTasks.RunningCount > 0;
-        if (!await ConfirmDialog.ShowAsync(this, $"Switch to {choice.Label}?",
+        if (!await ConfirmDialog.ShowAsync(this, $"Switch to {label}?",
                 "Restarts the Claude process on the same conversation under this account. The prompt cache doesn't " +
                 "carry across accounts, so the next message re-sends the whole context." +
                 (busy ? " The turn in progress and any background tasks are stopped." : ""),
                 "Switch", "Cancel", anchor: _accountChip))
             return;
         if (!ReferenceEquals(_session, session) || !session.IsRunning) return;   // it moved on while a dialog was up
-        conv.AddNote($"switching to {choice.Label}…");
+        conv.AddNote($"switching to {label}…");
         LaunchLog.Write($"perch session switch account: session={id} -> CLAUDE_CONFIG_DIR={LaunchLog.Show(root)}");
         session.Restart(root);
     }

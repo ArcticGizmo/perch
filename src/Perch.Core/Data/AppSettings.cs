@@ -562,6 +562,12 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<AccountRule>? AccountRules { get; set; }
 
+    // The account each config dir is meant to be signed into (see ExpectedAccount), set in the config-dir Edit dialog.
+    // A dir whose live sign-in drifts from it is flagged on its Settings row, in the account pickers and on its
+    // session-row chip. Null/empty means no expectations. A missing key keeps it empty.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExpectedAccount>? ExpectedAccounts { get; set; }
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

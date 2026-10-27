@@ -2057,6 +2057,7 @@ public partial class App : Application
                 s.Save();
             },
             rules: () => _appSettings?.AccountRules,
+            expected: () => _appSettings?.ExpectedAccounts,
             launch: LaunchPrSession,
             customTemplates: _appSettings?.PrSessionCustomTemplates,
             // The "⋯" menu's Save as / Rename / Save / Delete: the whole list, written back at once.
@@ -2316,6 +2317,7 @@ public partial class App : Application
             DormantRequested = OpenDormantPerchSession,
             // Live account guardrails so the launcher's account selector reflects the current rules.
             AccountRulesProvider = () => _appSettings?.AccountRules,
+            ExpectedAccountsProvider = () => _appSettings?.ExpectedAccounts,
             TerminalProvider = () => _appSettings?.ReopenTerminal ?? TerminalApp.Auto,
         };
         // The context readout mirrors the floating overlay's context-pressure thresholds so the two read alike
