@@ -1207,7 +1207,7 @@ internal sealed class PrSessionWindow : Window
                 var set = t.Result;
                 _accountOptions = set.Options;
                 _accountRow.IsVisible = set.ShowSelector && set.Options.Count > 0;
-                _accountBox.ItemsSource = set.Options.Select(o => o == set.Default ? $"{o.Label} (default)" : o.Label).ToList();
+                _accountBox.ItemsSource = set.Options.Select(o => o == set.Default ? $"{set.LabelOf(o)} (default)" : set.LabelOf(o)).ToList();
                 _accountBox.SelectedIndex = set.Default is { } d ? set.Options.ToList().IndexOf(d) : 0;
             }));
     }

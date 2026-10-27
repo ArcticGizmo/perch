@@ -2476,11 +2476,15 @@ internal static class HeadlessRenderer
         };
         var acmeAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude"),
             new Perch.Data.Org("acme") { Name = "Acme Corp" });
+        // A second dir on the same org, so the chip reads "Acme Corp | work".
+        var acmeWorkAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude-work") { CustomLabel = "work" },
+            new Perch.Data.Org("acme") { Name = "Acme Corp" });
         var personalAccount = new Perch.Data.AccountChoice(new Perch.Data.ClaudeConfigDir(@"C:\Users\me\.claude-personal"),
             null, "me@example.com");
         var resumeAccounts = new Dictionary<string, Perch.Data.ResumeAccountSet>
         {
-            [resumeRows[0].SessionId] = new(new[] { acmeAccount, personalAccount }, acmeAccount),
+            [resumeRows[0].SessionId] = new(new[] { acmeAccount, acmeWorkAccount, personalAccount }, acmeWorkAccount)
+                { All = new[] { acmeAccount, acmeWorkAccount, personalAccount } },
         };
         CaptureResume(Theming.SessionPalette.For(dark: true), "session_resume_1x.png", resumeRows, resumeAccounts, allProjects: false);
         CaptureResume(Theming.SessionPalette.For(dark: false), "session_resume_all_light_1x.png", resumeRows, resumeAccounts, allProjects: true);
