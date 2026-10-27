@@ -11,7 +11,13 @@ namespace Perch.Tests;
 /// </summary>
 public class SessionAccountChoiceTests
 {
-    private static ClaudeConfigDir Dir(string root) => new(root, realRoot: root);
+    // Roots are written Windows-style but mapped to the host's separator, so a label's folder name (Path.GetFileName)
+    // reads the same on macOS, where a backslash isn't a separator.
+    private static ClaudeConfigDir Dir(string root, string? customLabel = null)
+    {
+        var native = OperatingSystem.IsWindows() ? root : root.Replace('\\', '/');
+        return new(native, realRoot: native) { CustomLabel = customLabel };
+    }
 
     private static AccountChoice SignedIn(string root, string orgUuid, string? name = null, string? email = null) =>
         new(Dir(root), new Org(orgUuid) { Name = name, AccountEmail = email }, email);
@@ -101,8 +107,7 @@ public class SessionAccountChoiceTests
     public void Label_DropsTheDirName_WhenItMatchesTheAccount()
     {
         var acme = SignedIn(@"C:\Users\me\.claude", "acme", name: "Acme");
-        var named = new AccountChoice(new ClaudeConfigDir(@"C:\Users\me\.claude-acme", realRoot: @"C:\Users\me\.claude-acme")
-            { CustomLabel = "acme" }, new Org("acme") { Name = "Acme" });
+        var named = new AccountChoice(Dir(@"C:\Users\me\.claude-acme", customLabel: "acme"), new Org("acme") { Name = "Acme" });
 
         var set = SessionAccountChoice.Resolve(@"C:\anywhere", new[] { acme, named }, rules: null);
 
@@ -114,8 +119,7 @@ public class SessionAccountChoiceTests
     public void Label_PrefersTheDirsCustomLabel()
     {
         var acme = SignedIn(@"C:\Users\me\.claude", "acme", name: "Acme");
-        var work = new AccountChoice(new ClaudeConfigDir(@"C:\Users\me\.claude-w", realRoot: @"C:\Users\me\.claude-w")
-            { CustomLabel = "Work laptop" }, new Org("acme") { Name = "Acme" });
+        var work = new AccountChoice(Dir(@"C:\Users\me\.claude-w", customLabel: "Work laptop"), new Org("acme") { Name = "Acme" });
 
         Assert.Equal("Acme | Work laptop", work.LabelAmong(new[] { acme, work }));
     }
