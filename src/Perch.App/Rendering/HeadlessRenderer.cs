@@ -93,6 +93,19 @@ internal static class HeadlessRenderer
         RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_mixed_1x.png"), 96);
         RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_mixed_1.5x.png"), 144);
 
+        // "Login required": the refresher reports the second (expanded) account's refresh token rejected, so the button
+        // sits centred over its bars; the idle "umbrella" chip's lapsed login shows the compact button over its mini bars.
+        var loginProbe = new OverlayCanvas();
+        loginProbe.Update(SampleData.Sessions());
+        var loginSets = SampleData.OrgUsagesMany();
+        loginProbe.UpdateUsage(loginSets);
+        loginProbe.SetLoginRequired(new Dictionary<string, string>
+        {
+            [loginSets[1].Dir.RealRoot] = "The sign-in server rejected the refresh token (invalid_grant).",
+        });
+        RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1x.png"), 96);
+        RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1.5x.png"), 144);
+
         // All accounts collapsed to chips (org-{0}/org-{1} are the two active ones the user collapsed).
         usageManyProbe.SetUsageCollapsedAccounts(new Dictionary<string, bool>
         {

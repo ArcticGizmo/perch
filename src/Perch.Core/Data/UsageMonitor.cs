@@ -239,7 +239,7 @@ internal sealed class UsageMonitor
 
     // Use the version from the most recently-updated session file so our User-Agent matches the
     // installed CLI (the endpoint throttles unknown agents harder). Falls back to a constant.
-    private string ReadCliVersion()
+    internal static string ReadCliVersion()
     {
         try
         {

@@ -13,8 +13,8 @@ namespace Perch.Data;
 ///
 /// <para>Perch only <em>reads</em> these. An interactive CLI refreshes the access token on a request made near
 /// expiry, but a headless (stream-json) session — every Perch-controlled one — doesn't, and a running process
-/// never re-reads the file, so Perch surfaces the clocks rather than refreshing them itself (a refresh rotates the
-/// refresh token and would log out any process still holding the old one).</para>
+/// never re-reads the file, so Perch surfaces the clocks. Only the opt-in <see cref="SignInRefresher"/> renews the
+/// stored token, under Claude Code's own refresh lock; a running headless session still keeps the token it loaded.</para>
 /// </summary>
 internal sealed record AuthExpiry(DateTime? AccessExpiresAt, DateTime? RefreshExpiresAt)
 {
@@ -154,6 +154,14 @@ internal static class AuthExpiryRules
     /// access token, which a restart replaces. A login that needs <c>/login</c> isn't fixed by restarting.</summary>
     public static bool OffersRestart(AuthExpiry process, bool running, DateTime now) =>
         running && process.AccessExpiresAt is { } access && Level(access, now, SessionAccessSoon) != AuthExpiryLevel.Normal;
+
+    /// <summary>Whether the account can only be fixed by logging in again: its login clock has run out, or the refresher
+    /// reported the login dead (<paramref name="refresherReason"/>, null when it hasn't). Returns the reason to show.</summary>
+    public static string? LoginRequired(AuthExpiry auth, string? refresherReason, DateTime now) =>
+        refresherReason
+        ?? (auth.RefreshExpiresAt is { } login && login <= now
+            ? $"The login expired on {login:ddd d MMM} at {login:t}, so the sign-in can't be renewed."
+            : null);
 
     /// <summary>A sentence-friendly span for tooltips and the banner: <c>12 min</c>, <c>5 h 20 min</c>, <c>3 days</c>.</summary>
     public static string Long(TimeSpan remaining)

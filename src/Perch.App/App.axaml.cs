@@ -26,6 +26,7 @@ public partial class App : Application
 {
     private SessionMonitorHost? _monitorHost;
     private UsageMonitorHost? _usageHost;
+    private SignInRefreshHost? _signInHost;
     private MetricsMonitorHost? _metricsHost;
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
@@ -188,6 +189,7 @@ public partial class App : Application
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
+                _signInHost?.Dispose();
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
@@ -280,6 +282,13 @@ public partial class App : Application
                 settings.Save();
             }
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
+            // The opt-in sign-in refresher (started from ApplyDisplaySettings per AutoRefreshSignIn). A renewal or a
+            // recovered login re-polls usage so the strip leaves its stale/expired state without waiting 5 minutes.
+            _signInHost = new SignInRefreshHost(PlatformServices.ClaudeCredentials);
+            _signInHost.Changed += map => _overlay?.Canvas.SetLoginRequired(map);
+            _signInHost.LoginLost += OnLoginLost;
+            _signInHost.Refreshed += () => { if (_appSettings?.ShowUsage == true) _ = _usageHost?.RefreshAsync(); };
+            _overlay.Canvas.LoginRequested += OpenLoginTerminal;
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
@@ -1094,6 +1103,9 @@ public partial class App : Application
 
         // Feeds: subscriptions + interval + on/off into the engine (idempotent; off fetches nothing).
         _feedsHost?.Apply(s);
+
+        // The experimental sign-in refresher runs only while opted in (idempotent).
+        _signInHost?.SetEnabled(s.AutoRefreshSignIn);
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
@@ -2119,8 +2131,10 @@ public partial class App : Application
     }
 
     private const string FeedToastPrefix = "feed:";
+    private const string LoginToastPrefix = "login:";
 
-    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news).
+    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news); "login:<root>"
+    // opens the login terminal for that config dir.
     private void OnToastAction(string action)
     {
         if (action.StartsWith(FeedToastPrefix, StringComparison.Ordinal))
@@ -2128,6 +2142,43 @@ public partial class App : Application
             var id = action[FeedToastPrefix.Length..];
             OpenFeedStory(id.Length > 0 ? id : null);
         }
+        else if (action.StartsWith(LoginToastPrefix, StringComparison.Ordinal)
+                 && ClaudeConfigSet.Instance.ForRoot(action[LoginToastPrefix.Length..]) is { } dir)
+        {
+            OpenLoginTerminal(dir);
+        }
+    }
+
+    // The sign-in refresher found an account's login dead: say so once (the overlay's button stays until it's fixed).
+    // Held by the notifications master switch like every other toast, but not by Quiet mode — it isn't playful.
+    private void OnLoginLost(ClaudeConfigDir dir, string reason)
+    {
+        if (Effective is not { NotificationsEnabled: true } || _notifier is null) return;
+        var name = _usageHost?.Last.FirstOrDefault(r => ClaudeConfigDir.PathComparer.Equals(r.Dir.RealRoot, dir.RealRoot))?.Header
+                   ?? dir.DisplayLabel ?? dir.Label;
+        _notifier.ShowAction($"Claude login required - {name}",
+            $"{reason} Perch won't log in for you. Click to run claude auth login in a terminal.",
+            ToastLevel.Warning, LoginToastPrefix + dir.RealRoot);
+    }
+
+    // "Login required" (the overlay button or its toast): a terminal running `claude auth login` under that account's
+    // config dir. The primary inherits Perch's environment, as every launch does (SessionAccountChoice.InjectRootFor):
+    // pinning ~/.claude explicitly would move Claude's .claude.json lookup.
+    private void OpenLoginTerminal(ClaudeConfigDir dir)
+    {
+        string? configDir = dir.Equals(ClaudeConfigSet.Instance.Primary) ? null : dir.Root;
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(home, "auth login",
+                _appSettings?.ReopenTerminal ?? TerminalApp.Auto, configDir))
+        {
+            _signInHost?.Nudge();
+            return;
+        }
+        _notifier?.Show("Couldn't open a terminal",
+            configDir is null
+                ? "Run claude auth login in a terminal to log in again."
+                : $"Run claude auth login in a terminal with CLAUDE_CONFIG_DIR set to {configDir} to log in again.",
+            ToastLevel.Warning, null, null);
     }
 
     // A head (or the "+N" chip, null) was clicked: play its story in the one story window, opened centred on the

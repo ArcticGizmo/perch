@@ -28,6 +28,12 @@ public sealed class KeychainClaudeCredentials : IClaudeCredentials
         return string.IsNullOrWhiteSpace(json) ? _file.ReadCredentialsJson() : json;
     }
 
+    // Writing the Keychain item isn't built yet (the `security` CLI would take the secret on its command line, where
+    // any local process can read it), so a Keychain-held sign-in is refused and the refresher leaves it alone. Only
+    // the file fallback is writable.
+    public bool WriteCredentialsJson(string json) =>
+        string.IsNullOrWhiteSpace(ReadFromKeychain()) && _file.WriteCredentialsJson(json);
+
     // `security find-generic-password -s "<service>" -w` prints just the secret (the JSON blob) to stdout,
     // or exits non-zero if the item is absent / access is denied. Queried by service alone (it's unique)
     // so a mismatched account name can't hide it.

@@ -2295,6 +2295,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var now = DateTime.Now;
         _usageSetBounds.Clear();
         _usageToggleRects.Clear();
+        _loginButtonRects.Clear();
         double rowTop = UsageStripTop + 2;
 
         // 1. Expanded accounts: the full stacked bars, one block per account (active accounts by default).
@@ -2321,6 +2322,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             OverlayDraw.TextLeftMid(ctx, nameFt, HorizPad, rowTop + UsageHeaderHeight / 2);
             _usageToggleRects.Add((nameRect, set));
             rowTop += UsageHeaderHeight;
+            double barsTop = rowTop;
 
             if (_usageEnabled)
             {
@@ -2350,6 +2352,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     captionW: 24, pctW: 90, trackH: 7, valueText: e.Compact);
                 rowTop += BarRowHeight;
             }
+
+            if (rowTop > barsTop && LoginRequiredReason(set, now) is not null)
+                DrawLoginRequired(ctx, new Rect(HorizPad, barsTop, width - 2 * HorizPad, rowTop - barsTop), set, compact: false);
 
             rowTop += UsageSetGap;
             // A full-width band from this set's heading to the next — the hover/click resolves by Y here.
@@ -2424,6 +2429,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
         if (SpendBarFor(set))
             DrawMiniBar(ctx, innerL, barY, barW, u.ExtraUsage!.Percent, null, stale);
+
+        double barsTop = chip.Y + ChipPadV + ChipNameH;
+        if (chip.Bottom - ChipPadV > barsTop && LoginRequiredReason(set, now) is not null)
+            DrawLoginRequired(ctx, new Rect(innerL, barsTop, barW, chip.Bottom - ChipPadV - barsTop), set, compact: true);
     }
 
     // One label-free metric bar for a chip: a pill track, a fill coloured like the full bar (pace-relative
@@ -4259,10 +4268,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
         // Clickable only over an account's collapse/expand target — its name (expanded) or its chip (collapsed).
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
+        bool overLogin = UpdateLoginButtonHover(p);
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overWork || overGroup || overUsageToggle || overGitHub || overTodos || overFeeds || workPlus >= 0)
+               || overRoost || overRecent || overWork || overGroup || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds || workPlus >= 0)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4401,6 +4411,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
+        changed |= ClearLoginButtonHover();
         _hoveredSocial = false;
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
@@ -4860,6 +4871,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The Todo strip: anywhere on the line opens the Todos window.
         if (HitTestTodos(p)) { TodosRequested?.Invoke(); return; }
+
+        // A "Login required" button over an account's bars (or chip) wins over the chip's expand toggle beneath it.
+        if (RouteLoginButtonClick(p)) return;
 
         // The usage strip: clicking an account's NAME collapses just it to a chip; clicking its chip expands
         // it back (per-account, persisted). Clicking the bars themselves (or the strip padding) does nothing.
@@ -6100,6 +6114,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 lines.Add(new(reason, OverlayTooltip.MutedColor, false));
             }
             AddAuthTooltipLines(lines, u.Auth, now);
+            AddLoginRequiredTooltipLines(lines, set, now);
         }
         // Open to the left of the overlay's left edge so it never covers the strip — or, against the screen's left
         // edge, past its right edge.

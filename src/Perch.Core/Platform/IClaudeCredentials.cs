@@ -16,4 +16,11 @@ public interface IClaudeCredentials
 {
     /// <summary>The raw credentials JSON, or null when unavailable.</summary>
     string? ReadCredentialsJson();
+
+    /// <summary>
+    /// Replaces the stored blob with <paramref name="json"/> — only the opt-in sign-in refresher writes, after it has
+    /// rotated the tokens. Returns false when the write failed or this store can't be written yet, in which case the
+    /// stored blob is unchanged. Never throws.
+    /// </summary>
+    bool WriteCredentialsJson(string json);
 }
