@@ -73,36 +73,25 @@ public sealed class SessionLauncher : ISessionLauncher
 
     private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
 
-    public bool OpenTerminal(string cwd, TerminalApp terminal, string? configDir = null)
+    public bool OpenTerminal(string cwd, TerminalApp terminal)
     {
         if (string.IsNullOrWhiteSpace(cwd) || !Directory.Exists(cwd)) return false;
-        if (string.IsNullOrEmpty(configDir)) configDir = null;
-        if (configDir is not null && ClaudeCli.WindowsShellCmdLine(configDir) is null) return false;
-        if (TryStart(ShellStartInfo(terminal, cwd, configDir))) return true;
-        return terminal != TerminalApp.CommandPrompt && TryStart(ShellStartInfo(TerminalApp.CommandPrompt, cwd, configDir));
+        if (TryStart(ShellStartInfo(terminal, cwd))) return true;
+        return terminal != TerminalApp.CommandPrompt && TryStart(ShellStartInfo(TerminalApp.CommandPrompt, cwd));
     }
 
-    // A bare shell in cwd — the hosts are absolute paths for the same reason as StartInfo's. A config dir rides the
-    // command line, as in StartInfo, so Windows Terminal runs cmd rather than its default profile: a wt tab takes the
-    // running WT's environment, and there's no profile-agnostic way to set a variable in it.
-    private static ProcessStartInfo ShellStartInfo(TerminalApp terminal, string cwd, string? configDir)
+    // A bare shell in cwd — the hosts are absolute paths for the same reason as StartInfo's.
+    private static ProcessStartInfo ShellStartInfo(TerminalApp terminal, string cwd) => terminal switch
     {
-        string cmd = ExecutableResolver.SystemTool("cmd.exe");
-        string? cmdArgs = configDir is null ? null : $"/k {ClaudeCli.WindowsShellCmdLine(configDir)}";
-        return terminal switch
-        {
-            TerminalApp.PowerShell =>
-                new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-                        configDir is null ? "" : $"-NoExit -Command \"{ClaudeCli.WindowsPowerShellShellScript(configDir)}\"")
-                    { UseShellExecute = true, WorkingDirectory = cwd },
-            TerminalApp.CommandPrompt =>
-                new ProcessStartInfo(cmd, cmdArgs ?? "") { UseShellExecute = true, WorkingDirectory = cwd },
-            _ => // WindowsTerminal, and Auto → Windows Terminal's default profile (falling back to Command Prompt)
-                new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"),
-                        $"-d {ClaudeCli.WindowsTerminalStartDir(cwd)}" + (cmdArgs is null ? "" : $" {QuoteIfSpaced(cmd)} {cmdArgs}"))
-                    { UseShellExecute = true },
-        };
-    }
+        TerminalApp.PowerShell =>
+            new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"))
+                { UseShellExecute = true, WorkingDirectory = cwd },
+        TerminalApp.CommandPrompt =>
+            new ProcessStartInfo(ExecutableResolver.SystemTool("cmd.exe")) { UseShellExecute = true, WorkingDirectory = cwd },
+        _ => // WindowsTerminal, and Auto → Windows Terminal's default profile (falling back to Command Prompt)
+            new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"), $"-d {ClaudeCli.WindowsTerminalStartDir(cwd)}")
+                { UseShellExecute = true },
+    };
 
     // Claude Desktop ships as an MSIX-packaged (Store) app, so its exe lives under the ACL-protected,
     // version-stamped C:\Program Files\WindowsApps\... — you can't launch it by path. The supported way is

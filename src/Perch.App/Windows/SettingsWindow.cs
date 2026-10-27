@@ -2149,7 +2149,7 @@ internal sealed partial class SettingsWindow : Window
         bool isPrimary = d.Provenance == ConfigDirProvenance.Primary;
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
             Margin = new Thickness(0, 0, 0, 10),
         };
 
@@ -2198,27 +2198,10 @@ internal sealed partial class SettingsWindow : Window
         Grid.SetColumn(textStack, 0);
         grid.Children.Add(textStack);
 
-#if WINDOWS
-        // A shell with CLAUDE_CONFIG_DIR already pointing here, for poking at this account by hand (`claude`,
-        // `claude auth status`, …). Opens in the dir itself; macOS can't pass the variable yet, so Windows only.
-        var terminal = SettingsUi.FlatButton("Terminal");
-        terminal.VerticalAlignment = VerticalAlignment.Center;
-        terminal.Margin = new Thickness(0, 0, 6, 0);
-        terminal.IsEnabled = Directory.Exists(d.Root);
-        ToolTip.SetTip(terminal, $"Open a terminal with CLAUDE_CONFIG_DIR={d.Root}");
-        terminal.Click += (_, _) =>
-        {
-            if (!PlatformServices.SessionLauncher.OpenTerminal(d.Root, _settings.ReopenTerminal, d.Root))
-                terminal.Content = "Couldn't open";
-        };
-        Grid.SetColumn(terminal, 1);
-        grid.Children.Add(terminal);
-#endif
-
         var edit = SettingsUi.FlatButton("Edit");
         edit.VerticalAlignment = VerticalAlignment.Center;
         edit.Click += async (_, _) => await AddOrEditConfigDir(d);
-        Grid.SetColumn(edit, 2);
+        Grid.SetColumn(edit, 1);
         grid.Children.Add(edit);
 
         if (!isPrimary)
@@ -2228,7 +2211,7 @@ internal sealed partial class SettingsWindow : Window
             remove.Margin = new Thickness(6, 0, 0, 0);
             remove.VerticalAlignment = VerticalAlignment.Center;
             remove.Click += (_, _) => RemoveConfigDir(d);
-            Grid.SetColumn(remove, 3);
+            Grid.SetColumn(remove, 2);
             grid.Children.Add(remove);
         }
 

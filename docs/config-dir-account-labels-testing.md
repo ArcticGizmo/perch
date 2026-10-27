@@ -16,7 +16,7 @@ The account picker in the new-session launcher, the PR session launcher, the com
 - **Before:** the installed Perch (0.5.43).
 - **After:** this branch, run with `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0` (quit the installed tray first).
 
-You need two config dirs signed into the **same** account plus one on a different account, e.g. `~/.claude` (Acme), `~/.claude-work` (Acme), `~/.claude-personal` (personal). Sign a dir in from Settings → Config directories → **Terminal**, then `claude auth login`.
+You need two config dirs signed into the **same** account plus one on a different account, e.g. `~/.claude` (Acme), `~/.claude-work` (Acme), `~/.claude-personal` (personal). To sign a dir in, start a session under it from the account picker and type `/login`; the terminal it opens runs under that dir.
 
 ## 1. New-session launcher
 
