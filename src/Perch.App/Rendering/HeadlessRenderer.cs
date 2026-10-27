@@ -106,6 +106,18 @@ internal static class HeadlessRenderer
         RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1x.png"), 96);
         RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1.5x.png"), 144);
 
+        // The refresher at work: the first (expanded) account renewing, the idle "cyberdyne" chip just renewed.
+        var renewProbe = new OverlayCanvas();
+        renewProbe.Update(SampleData.Sessions());
+        renewProbe.UpdateUsage(loginSets);
+        renewProbe.SetSignInActivity(new Dictionary<string, SignInActivity>
+        {
+            [loginSets[0].Dir.RealRoot] = SignInActivity.Renewing,
+            [loginSets[2].Dir.RealRoot] = SignInActivity.Renewed,
+        });
+        RenderControl(renewProbe, Path.Combine(outDir, "overlay_usage_renewing_1x.png"), 96);
+        RenderControl(renewProbe, Path.Combine(outDir, "overlay_usage_renewing_1.5x.png"), 144);
+
         // All accounts collapsed to chips (org-{0}/org-{1} are the two active ones the user collapsed).
         usageManyProbe.SetUsageCollapsedAccounts(new Dictionary<string, bool>
         {

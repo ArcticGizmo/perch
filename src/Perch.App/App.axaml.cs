@@ -286,6 +286,7 @@ public partial class App : Application
             // recovered login re-polls usage so the strip leaves its stale/expired state without waiting 5 minutes.
             _signInHost = new SignInRefreshHost(PlatformServices.ClaudeCredentials);
             _signInHost.Changed += map => _overlay?.Canvas.SetLoginRequired(map);
+            _signInHost.ActivityChanged += map => _overlay?.Canvas.SetSignInActivity(map);
             _signInHost.LoginLost += OnLoginLost;
             _signInHost.Refreshed += () => { if (_appSettings?.ShowUsage == true) _ = _usageHost?.RefreshAsync(); };
             _overlay.Canvas.LoginRequested += OpenLoginTerminal;

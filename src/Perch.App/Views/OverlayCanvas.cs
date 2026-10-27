@@ -2353,8 +2353,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 rowTop += BarRowHeight;
             }
 
-            if (rowTop > barsTop && LoginRequiredReason(set, now) is not null)
-                DrawLoginRequired(ctx, new Rect(HorizPad, barsTop, width - 2 * HorizPad, rowTop - barsTop), set, compact: false);
+            if (rowTop > barsTop)
+                DrawSignInOverlay(ctx, new Rect(HorizPad, barsTop, width - 2 * HorizPad, rowTop - barsTop), set, now, compact: false);
 
             rowTop += UsageSetGap;
             // A full-width band from this set's heading to the next — the hover/click resolves by Y here.
@@ -2431,8 +2431,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawMiniBar(ctx, innerL, barY, barW, u.ExtraUsage!.Percent, null, stale);
 
         double barsTop = chip.Y + ChipPadV + ChipNameH;
-        if (chip.Bottom - ChipPadV > barsTop && LoginRequiredReason(set, now) is not null)
-            DrawLoginRequired(ctx, new Rect(innerL, barsTop, barW, chip.Bottom - ChipPadV - barsTop), set, compact: true);
+        if (chip.Bottom - ChipPadV > barsTop)
+            DrawSignInOverlay(ctx, new Rect(innerL, barsTop, barW, chip.Bottom - ChipPadV - barsTop), set, now, compact: true);
     }
 
     // One label-free metric bar for a chip: a pill track, a fill coloured like the full bar (pace-relative

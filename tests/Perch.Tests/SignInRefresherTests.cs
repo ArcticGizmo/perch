@@ -93,6 +93,21 @@ public sealed class SignInRefresherTests
     }
 
     [Fact]
+    public async Task OnRun_FiresOnlyWhenClaudeActuallyRuns_AndBeforeIt()
+    {
+        var fake = new Fake { Json = Blob(Now.AddMinutes(4)) };
+        int runsWhenSignalled = -1;
+        var refresher = Runs(fake, _ => Blob(Now.AddHours(8)));
+
+        await refresher.RefreshIfDueAsync(fake.Store, Now, onRun: () => runsWhenSignalled = fake.Runs);
+        Assert.Equal(0, runsWhenSignalled);
+
+        bool signalled = false;
+        await refresher.RefreshIfDueAsync(fake.Store, Now, onRun: () => signalled = true);   // now 8 h out: not due
+        Assert.False(signalled);
+    }
+
+    [Fact]
     public async Task NotDue_RunsNothing()
     {
         var fake = new Fake { Json = Blob(Now.AddHours(2)) };

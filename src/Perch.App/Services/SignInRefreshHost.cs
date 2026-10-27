@@ -19,6 +19,8 @@ internal sealed class SignInRefreshHost : IDisposable
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromMinutes(2);
+    // A renewal takes about a second, so its confirmation lingers long enough to be seen.
+    private static readonly TimeSpan RenewedShownFor = TimeSpan.FromSeconds(10);
     private const string Log = "signin.log";
 
     private readonly SignInRefresher _refresher = new();
@@ -26,6 +28,7 @@ internal sealed class SignInRefreshHost : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, DateTime> _retryAt = new(ClaudeConfigDir.PathComparer);
     private Dictionary<string, string> _loginRequired = new(ClaudeConfigDir.PathComparer);
+    private readonly Dictionary<string, SignInActivity> _activity = new(ClaudeConfigDir.PathComparer);
     private bool _started;
     private bool _running;
 
@@ -40,6 +43,10 @@ internal sealed class SignInRefreshHost : IDisposable
 
     /// <summary>Raised on the UI thread after a pass renewed at least one sign-in, or found a lost login back.</summary>
     public event Action? Refreshed;
+
+    /// <summary>Raised on the UI thread when an account starts renewing, finishes, or its "renewed" confirmation lapses —
+    /// with every account's current activity, by <see cref="ClaudeConfigDir.RealRoot"/>.</summary>
+    public event Action<IReadOnlyDictionary<string, SignInActivity>>? ActivityChanged;
 
     public SignInRefreshHost(IClaudeCredentials primary)
     {
@@ -62,6 +69,11 @@ internal sealed class SignInRefreshHost : IDisposable
         }
         _timer.Stop();
         _retryAt.Clear();
+        if (_activity.Count > 0)
+        {
+            _activity.Clear();
+            ActivityChanged?.Invoke(new Dictionary<string, SignInActivity>(_activity, ClaudeConfigDir.PathComparer));
+        }
         if (_loginRequired.Count > 0)
         {
             _loginRequired = new(ClaudeConfigDir.PathComparer);
@@ -89,7 +101,11 @@ internal sealed class SignInRefreshHost : IDisposable
             {
                 var list = new List<(ClaudeConfigDir Dir, RefreshResult Result)>(due.Count);
                 foreach (var dir in due)
-                    list.Add((dir, await _refresher.RefreshIfDueAsync(SignInStore.For(dir, _primary), Clock.UtcNow)));
+                {
+                    string root = dir.RealRoot;
+                    void Renewing() => Dispatcher.UIThread.Post(() => { if (_started) SetActivity(root, SignInActivity.Renewing); });
+                    list.Add((dir, await _refresher.RefreshIfDueAsync(SignInStore.For(dir, _primary), Clock.UtcNow, Renewing)));
+                }
                 return list;
             });
             if (_started) Apply(results);
@@ -108,6 +124,16 @@ internal sealed class SignInRefreshHost : IDisposable
         foreach (var (dir, r) in results)
         {
             string root = dir.RealRoot;
+            if (r.Outcome == RefreshOutcome.Refreshed)
+            {
+                SetActivity(root, SignInActivity.Renewed);
+                DispatcherTimer.RunOnce(() => ClearRenewed(root), RenewedShownFor);
+            }
+            else if (_activity.ContainsKey(root))
+            {
+                SetActivity(root, null);
+            }
+
             if (r.Outcome == RefreshOutcome.LoginRequired)
             {
                 next[root] = r.Reason ?? "The sign-in can't be renewed.";
@@ -141,6 +167,19 @@ internal sealed class SignInRefreshHost : IDisposable
             LoginLost?.Invoke(dir, next[dir.RealRoot]);
         }
         if (refreshed || recovered) Refreshed?.Invoke();
+    }
+
+    private void SetActivity(string root, SignInActivity? activity)
+    {
+        if (activity is { } a) _activity[root] = a;
+        else if (!_activity.Remove(root)) return;
+        ActivityChanged?.Invoke(new Dictionary<string, SignInActivity>(_activity, ClaudeConfigDir.PathComparer));
+    }
+
+    // Only the confirmation lapses on its timer; a renewal that started again since keeps its "renewing".
+    private void ClearRenewed(string root)
+    {
+        if (_activity.TryGetValue(root, out var a) && a == SignInActivity.Renewed) SetActivity(root, null);
     }
 
     public void Dispose()

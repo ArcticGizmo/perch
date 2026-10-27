@@ -11,6 +11,7 @@ namespace Perch.Avalonia.Views;
 /// clock ran out, or the sign-in refresher had its refresh token rejected — its bars are washed out and a button sits
 /// centred over them (over the mini bars on a collapsed chip). Clicking it raises <see cref="LoginRequested"/>, which
 /// opens a terminal running <c>claude auth login</c> under that account's config dir. Perch never logs in itself.
+/// The same spot carries the refresher's non-clickable "Renewing sign-in…" / "Sign-in renewed" pill.
 /// </summary>
 public sealed partial class OverlayCanvas
 {
@@ -24,6 +25,52 @@ public sealed partial class OverlayCanvas
     private const double LoginButtonPadH = 10, LoginButtonChipPadH = 5;
     // A chip's bars are only ~9px tall, so its button keeps a slim vertical pad to stay clear of the name row above.
     private const double LoginButtonPadV = 3, LoginButtonChipPadV = 1;
+
+    // What the sign-in refresher is doing per account (by real root): renewing, or just renewed.
+    private IReadOnlyDictionary<string, SignInActivity> _signInActivity = new Dictionary<string, SignInActivity>();
+
+    /// <summary>The sign-in refresher's per-account activity, by real root. A pill over bars already laid out, so this
+    /// only repaints.</summary>
+    internal void SetSignInActivity(IReadOnlyDictionary<string, SignInActivity> byRoot)
+    {
+        _signInActivity = byRoot;
+        if (UsageStripVisible) InvalidateVisual();
+    }
+
+    // Draws over `bars` whichever sign-in state applies to the account: the Login required button wins, else the
+    // refresher's renewing / renewed pill. Nothing when neither applies.
+    private void DrawSignInOverlay(DrawingContext ctx, Rect bars, OrgUsage set, DateTime now, bool compact)
+    {
+        if (LoginRequiredReason(set, now) is not null)
+            DrawLoginRequired(ctx, bars, set, compact);
+        else if (_signInActivity.TryGetValue(set.Dir.RealRoot, out var activity))
+            DrawSignInActivity(ctx, bars, activity, compact);
+    }
+
+    // A non-interactive status pill centred over the bars, on a lighter wash than the button's: the accent while the CLI
+    // runs, the running green once renewed. A tinted fill under coloured text, like the sign-in chips.
+    private void DrawSignInActivity(DrawingContext ctx, Rect bars, SignInActivity activity, bool compact)
+    {
+        OverlayDraw.Panel(ctx, bars.Inflate(new Thickness(2, 1)), OverlayDraw.Brush(BgColor, 0.55), null, 4);
+
+        var color = activity == SignInActivity.Renewing ? Palette.Accent : Palette.Green;
+        double font = compact ? LoginButtonChipFont : LoginButtonFont;
+        double padH = compact ? LoginButtonChipPadH : LoginButtonPadH;
+        var fg = OverlayDraw.Brush(color);
+        var (full, brief) = activity == SignInActivity.Renewing
+            ? ("Renewing sign-in…", "Renewing…")
+            : ("Sign-in renewed", "Renewed");
+        var ft = OverlayDraw.Text(full, font, fg, FontWeight.SemiBold);
+        if (ft.Width + 2 * padH > bars.Width)
+            ft = OverlayDraw.Text(brief, font, fg, FontWeight.SemiBold);
+
+        double w = Math.Min(bars.Width, ft.Width + 2 * padH);
+        double h = ft.Height + 2 * (compact ? LoginButtonChipPadV : LoginButtonPadV);
+        var pill = new Rect(bars.Center.X - w / 2, bars.Center.Y - h / 2, w, h);
+        OverlayDraw.Panel(ctx, pill, OverlayDraw.Brush(BgColor), null, h / 2);
+        OverlayDraw.Panel(ctx, pill, OverlayDraw.Brush(color, 0.22), null, h / 2);
+        OverlayDraw.TextLeftMid(ctx, ft, pill.Center.X - ft.Width / 2, pill.Center.Y);
+    }
 
     /// <summary>Raised when a "Login required" button is clicked, with the account's config dir.</summary>
     internal event Action<ClaudeConfigDir>? LoginRequested;

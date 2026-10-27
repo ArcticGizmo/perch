@@ -21,6 +21,10 @@ internal enum RefreshOutcome { NotSignedIn, NotDue, Refreshed, Failed, LoginRequ
 
 internal sealed record RefreshResult(RefreshOutcome Outcome, string? Reason = null);
 
+/// <summary>What the overlay shows over an account's usage bars while the refresher works on it: the CLI run in
+/// flight, then a short-lived confirmation once it renewed.</summary>
+internal enum SignInActivity { Renewing, Renewed }
+
 /// <summary>
 /// The opt-in sign-in refresher: gets a config dir's OAuth access token renewed <see cref="Lead"/> before it expires,
 /// so the usage poll keeps working and a session started or restarted later picks up a live token even when no
@@ -94,8 +98,10 @@ internal sealed class SignInRefresher
     }
 
     /// <summary>Gets <paramref name="store"/>'s sign-in renewed if it's within <see cref="Lead"/> of expiring. File IO and
-    /// a short CLI run — call off the UI thread. Never throws.</summary>
-    public async Task<RefreshResult> RefreshIfDueAsync(SignInStore store, DateTime utcNow, CancellationToken ct = default)
+    /// a short CLI run — call off the UI thread. <paramref name="onRun"/> is called (on the calling thread) just before
+    /// the CLI starts, so a caller can show the renewal in progress. Never throws.</summary>
+    public async Task<RefreshResult> RefreshIfDueAsync(SignInStore store, DateTime utcNow, Action? onRun = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -103,6 +109,7 @@ internal sealed class SignInRefresher
             var plan = PlanFor(before, utcNow);
             if (plan != Plan.Due) return Settled(plan, before);
 
+            onRun?.Invoke();
             if (await _runClaude(store, ct).ConfigureAwait(false) is { } error)
                 return new(RefreshOutcome.Failed, error);
 

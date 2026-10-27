@@ -8,10 +8,11 @@ Manual checks for the opt-in sign-in refresher and the **Login required** button
 - **Never a login.** An expired login, a missing refresh token or a signed-out account is marked **login required**, and the CLI isn't run for it.
 - **The nudge.** A one-off toast, "Claude login required - <account>", says what happened (it's held by the notifications master switch). A **Login required** button sits centred over that account's usage bars, which are washed out. On a collapsed chip the button is a smaller version over the mini bars. The usage tooltip gets a "Login required" section with the reason. Clicking the button or the toast opens a terminal running `claude auth login`. The primary account inherits Perch's environment; any other account gets `CLAUDE_CONFIG_DIR=<its dir>`.
 - **A lapsed login clock shows the button even with the setting off**, since that account needs `/login` either way.
+- **You can watch it happen.** While the CLI runs for an account, a **Renewing sign-in…** pill sits centred over its usage bars; once renewed it turns into **Sign-in renewed** for 10 seconds. Not clickable, and the Login required button takes the spot when that applies.
 
 Outcomes go to `logs/signin.log` (renewed / failed / login required). Token values are never logged.
 
-The headless render (`render <dir>` → `overlay_usage_login_required_*.png`) covers the button on an expanded account and on a chip. Only a real tray covers the refresh.
+The headless render (`render <dir>` → `overlay_usage_login_required_*.png`, `overlay_usage_renewing_*.png`) covers the button and both pills, on an expanded account and on a chip. Only a real tray covers the refresh.
 
 ## Setup
 
@@ -55,7 +56,7 @@ A refresh issues a new refresh token, so an open Claude Code holding the old one
 | `C:\tmp\perch-signin-test\.credentials.json` | Modified time updated, `expiresAt` about 8 h out. Key names unchanged (check with a key-only grep, never print the values) |
 | `~/.claude/.credentials.json` | Untouched |
 | Usage strip | The test account re-polls straight away. Its hourglass chip clears, and the tooltip shows about 8 h left |
-| Overlay while it renews | At most a ~1 s blip of a background session under Autonomous (the CLI run's own session file) |
+| Overlay while it renews | A **Renewing sign-in…** pill (accent) centred over the test account's bars for the ~1 s the CLI runs, then **Sign-in renewed** (green) for 10 s. On a collapsed chip: the same pills, smaller (**Renewing…** / **Renewed** when narrow). Possibly a ~1 s blip of a background session under Autonomous (the CLI run's own session file) |
 | The prompt in step 4 | Answers normally. No `/login` prompt, now or later in that session |
 | A Perch-controlled session on that dir started **after** the refresh | Its sign-in banner (if any) shows the new expiry |
 | Next pass | Not due again, so no new `renewed` line |
