@@ -323,6 +323,10 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     /// reflects the current rules. Null/absent = no guardrails.</summary>
     public Func<IReadOnlyList<AccountRule>?>? AccountRulesProvider { get; set; }
 
+    /// <summary>Each config dir's expected account (<see cref="AppSettings.ExpectedAccounts"/>), read live so the account
+    /// pickers can flag a dir whose login has drifted. Null/absent = no expectations.</summary>
+    public Func<IReadOnlyList<ExpectedAccount>?>? ExpectedAccountsProvider { get; set; }
+
     /// <summary>The user's preferred terminal (<see cref="AppSettings.ReopenTerminal"/>) for "Open in terminal",
     /// read live from the app. Null/absent = Auto.</summary>
     public Func<TerminalApp>? TerminalProvider { get; set; }
@@ -2747,7 +2751,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         if (!_resumeAccounts.TryGetValue(e.SessionId, out var set) || !set.CanSwitch) return null;
         if (e.IsActive || LiveLookup?.Invoke(e.SessionId) is { IsPerchControlled: true }) return null;
-        var label = set.Current is { } current ? set.LabelOf(current) : "account";
+        var warning = set.Current is { } cur ? ExpectedAccounts.WarningFor(cur, ExpectedAccountsProvider?.Invoke()) : null;
+        var label = ExpectedAccounts.Flag(set.Current is { } current ? set.LabelOf(current) : "account", warning);
         var chip = Pill(new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
@@ -2760,7 +2765,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         chip.Padding = new Thickness(8, 2);
         chip.Margin = new Thickness(8, 0, 0, 0);
         chip.Cursor = new Cursor(StandardCursorType.Hand);
-        chip[ToolTip.TipProperty] = $"Resumes under {label} — click to resume under another account";
+        chip[ToolTip.TipProperty] = $"Resumes under {label} — click to resume under another account" +
+                                    (warning is null ? "" : $"\n⚠ {warning}");
         chip.PointerReleased += (_, ev) =>
         {
             if (ev.InitialPressMouseButton != MouseButton.Left) return;
@@ -2773,10 +2779,13 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void ShowResumeAccountMenu(Control anchor, HistoryEntry e, ResumeAccountSet set)
     {
         var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in set.Options)
         {
             bool current = set.IsCurrent(choice);
-            var item = new MenuItem { Header = (current ? "✓  " : "     ") + "Resume under " + set.LabelOf(choice) };
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var item = new MenuItem { Header = (current ? "✓  " : "     ") + "Resume under " + ExpectedAccounts.Flag(set.LabelOf(choice), warning) };
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += async (_, _) =>
             {
@@ -3704,16 +3713,18 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // menu still names the account the session will run under.
         var items = set.Options.Count > 0 ? set.Options
                   : set.Default is { } d ? new[] { d } : System.Array.Empty<AccountChoice>();
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in items)
         {
             // "(default)" marks the primary config dir — the real default — never a guardrail-forced pick.
             bool isDefault = set.Primary is { } prim && prim.Key == choice.Key;
             var email = choice.Org?.AccountEmail ?? choice.Email;
-            var name = set.LabelOf(choice) + (isDefault ? "  (default)" : "");
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var name = ExpectedAccounts.Flag(set.LabelOf(choice), warning) + (isDefault ? "  (default)" : "");
             var header = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
                 ? name : $"{name}  ·  {email}";
             var item = new MenuItem { Header = header };
-            ToolTip.SetTip(item, choice.Dir.Root);
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += (_, _) => PickAccount(picked);
             flyout.Items.Add(item);
@@ -3749,7 +3760,14 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // lock already explains the choice.
         bool isDefault = !_accountLocked && set.Primary is { } d && d.Key == choice.Key;
         var label = set.LabelOf(choice);
-        _accountPillText.Text = isDefault ? $"{label} (default)" : label;
+        var warning = ExpectedAccounts.WarningFor(choice, ExpectedAccountsProvider?.Invoke());
+        _accountPillText.Text = ExpectedAccounts.Flag(isDefault ? $"{label} (default)" : label, warning);
+        // The warning line under the pill names a drifted login; the guardrail's own warning keeps the line when set.
+        if (!set.GuardrailUnsatisfiable)
+        {
+            _accountWarning.IsVisible = warning is not null;
+            _accountWarning.Text = warning is null ? "" : $"⚠ {warning} — its login may be broken.";
+        }
     }
 
     /// <summary>The config dir this window's launch runs under. A fresh session honours the account selector
@@ -3801,13 +3819,16 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             var (resolvedRoot, choice, label, switchable) = t.Result;
             if (dormantId is not null) _dormantAccountDir = resolvedRoot;
             _accountSwitch = switchable;
-            _accountChipText.Text = label;
+            var warning = ExpectedAccounts.WarningFor(choice, ExpectedAccountsProvider?.Invoke());
+            _accountChipText.Text = ExpectedAccounts.Flag(label, warning);
+            _accountChipText.Foreground = warning is null ? _p.Muted : new SolidColorBrush(Palette.Danger);
             var email = choice.Org?.AccountEmail ?? choice.Email;
             var verb = dormantId is not null ? "Resumes under account" : "Running under account";
             var tip = string.IsNullOrWhiteSpace(email)
                 ? $"{verb}: {label}"
                 : $"{verb}: {label} · {email}";
             tip += $"\nConfig dir: {choice.Dir.Root}";
+            if (warning is not null) tip += $"\n⚠ {warning} — its login may be broken";
             _accountChip[ToolTip.TipProperty] = switchable.CanSwitch ? tip + "\nClick to switch to another account" : tip;
             _accountChip.Cursor = new Cursor(switchable.CanSwitch ? StandardCursorType.Hand : StandardCursorType.Arrow);
             _accountChip.IsVisible = true;
@@ -3818,15 +3839,17 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void ShowAccountSwitchMenu()
     {
         var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        var expected = ExpectedAccountsProvider?.Invoke();
         foreach (var choice in _accountSwitch.Options)
         {
             bool current = _accountSwitch.IsCurrent(choice);
             var email = choice.Org?.AccountEmail ?? choice.Email;
-            var label = _accountSwitch.LabelOf(choice);
+            var warning = ExpectedAccounts.WarningFor(choice, expected);
+            var label = ExpectedAccounts.Flag(_accountSwitch.LabelOf(choice), warning);
             var name = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
                 ? label : $"{label}  ·  {email}";
             var item = new MenuItem { Header = (current ? "✓  " : "     ") + name, IsEnabled = !current };
-            ToolTip.SetTip(item, choice.Dir.Root);
+            ToolTip.SetTip(item, warning is null ? choice.Dir.Root : $"{choice.Dir.Root}\n⚠ {warning}");
             var picked = choice;
             item.Click += async (_, _) => await SwitchAccountAsync(picked);
             flyout.Items.Add(item);

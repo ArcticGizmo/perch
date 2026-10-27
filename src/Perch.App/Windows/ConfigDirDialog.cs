@@ -15,7 +15,8 @@ namespace Perch.Avalonia.Windows;
 /// shown on that dir's session rows. The label edit is transactional: nothing is written until Save, unlike
 /// an inline field that commits on every keystroke. Dark-themed to match the settings window; on Save it
 /// closes with <c>true</c> and exposes the chosen values via <see cref="DirPath"/> / <see cref="DirLabel"/>.
-/// Modelled on <see cref="QuickLinkDialog"/>. Org-free: a label is a display string, nothing more.
+/// Modelled on <see cref="QuickLinkDialog"/>. The label is a display string only; the optional expected account
+/// (<see cref="Expected"/>) is the one org-aware field, and only ever drives a drift warning.
 /// </summary>
 internal sealed class ConfigDirDialog : Window
 {
@@ -23,11 +24,30 @@ internal sealed class ConfigDirDialog : Window
     private readonly TextBox _labelBox;
     private readonly TextBlock _statusLabel;
     private readonly PerchToggle _hooksToggle;
+    private readonly ComboBox _accountBox;
+    private readonly TextBox _emailBox;
+    private readonly List<AccountRef> _accounts;
     private readonly Button _ok;
     private readonly bool _editing;
 
     public string DirPath => _pathBox.Text?.Trim() ?? "";
     public string DirLabel => _labelBox.Text?.Trim() ?? "";
+
+    /// <summary>The account this dir is expected to be signed into (path left for the caller to fill), or null for none.</summary>
+    public ExpectedAccount? Expected
+    {
+        get
+        {
+            int i = _accountBox.SelectedIndex - 1;   // index 0 is "None"
+            if (i < 0 || i >= _accounts.Count) return null;
+            var email = _emailBox.Text?.Trim();
+            return new ExpectedAccount
+            {
+                OrgUuid = _accounts[i].Uuid, OrgName = _accounts[i].Name,
+                Email = string.IsNullOrEmpty(email) ? null : email,
+            };
+        }
+    }
 
     /// <summary>Whether the user wants Perch's hooks installed into this directory. Only meaningful when the
     /// toggle was editable (see the ctor); the caller ignores it otherwise.</summary>
@@ -39,15 +59,19 @@ internal sealed class ConfigDirDialog : Window
     /// <param name="hooksEditable">Whether that toggle can be changed (false for the always-on primary).</param>
     /// <param name="hooksNote">One-line explanation shown under the hooks toggle.</param>
     /// <param name="suggestedPath">Add mode only: the directory to prefill (a scan suggestion), still editable.</param>
+    /// <param name="accounts">The orgs offered for the expected account (signed in somewhere, plus the current one).</param>
+    /// <param name="expected">The dir's current expected account, or null.</param>
     public ConfigDirDialog(ClaudeConfigDir? existing, string? existingLabel,
-        bool hooksEnabled, bool hooksEditable, string hooksNote, string? suggestedPath = null)
+        bool hooksEnabled, bool hooksEditable, string hooksNote, IReadOnlyList<AccountRef> accounts,
+        ExpectedAccount? expected, string? suggestedPath = null)
     {
         _editing = existing is not null;
+        _accounts = accounts.ToList();
         bool isPrimary = existing?.Provenance == ConfigDirProvenance.Primary;
 
         Title = _editing ? "Edit config directory" : "Add config directory";
         Width = 480;
-        Height = 380;
+        Height = 540;
         CanResize = false;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -105,6 +129,24 @@ internal sealed class ConfigDirDialog : Window
         hooksRow.Children.Add(hooksLabel);
         hooksRow.Children.Add(_hooksToggle);
 
+        // Expected account: an org (required for an expectation) and optionally the email that must be signed in.
+        int selected = expected is null ? 0 : _accounts.FindIndex(a => a.Uuid == expected.OrgUuid) + 1;
+        _accountBox = SettingsUi.Dropdown(AccountNames(_accounts), selected);
+        _accountBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _emailBox = SettingsUi.ThemedTextBox(expected?.Email ?? "");
+        _emailBox.PlaceholderText = "Optional — any account in the org";
+        _emailBox.Margin = new Thickness(0, 6, 0, 0);
+        _accountBox.SelectionChanged += (_, _) => _emailBox.IsEnabled = _accountBox.SelectedIndex > 0;
+        _emailBox.IsEnabled = _accountBox.SelectedIndex > 0;
+        var useCurrent = SettingsUi.FlatButton("Use current sign-in");
+        useCurrent.Margin = new Thickness(8, 0, 0, 0);
+        useCurrent.Click += (_, _) => UseCurrentSignIn();
+        var accountRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(_accountBox, 0);
+        Grid.SetColumn(useCurrent, 1);
+        accountRow.Children.Add(_accountBox);
+        accountRow.Children.Add(useCurrent);
+
         _ok = SettingsUi.FlatButton("Save");
         _ok.Width = 92;
         _ok.Click += (_, _) => Close(true);
@@ -129,6 +171,11 @@ internal sealed class ConfigDirDialog : Window
         layout.Children.Add(new Border { Height = 10 });
         layout.Children.Add(hooksRow);
         layout.Children.Add(SettingsUi.BodyText(hooksNote));
+        layout.Children.Add(SettingsUi.FieldCaption("Expected account (optional)"));
+        layout.Children.Add(accountRow);
+        layout.Children.Add(_emailBox);
+        layout.Children.Add(SettingsUi.BodyText(
+            "If this directory's login drifts from it — signed out, another org, or another email — Perch flags it."));
         // Buttons sit outside the scroller so they stay visible however tall the form gets.
         var root = new DockPanel();
         DockPanel.SetDock(buttons, Dock.Bottom);
@@ -166,6 +213,31 @@ internal sealed class ConfigDirDialog : Window
             SetStatus("⚠  Doesn't look like a Claude config directory yet (no sessions/, .claude.json, or "
                       + "settings.json + projects/).", Palette.Orange);
     }
+
+    // Fills the expectation from what the directory is signed into now. An org not yet in the list is appended:
+    // a dir being added isn't in the config set yet, so its org may not have been offered.
+    private void UseCurrentSignIn()
+    {
+        if (DirPath.Length == 0) return;
+        var signIn = ClaudeJsonReader.ReadSignIn(new ClaudeConfigDir(DirPath));
+        if (signIn.Org is not { } org || string.IsNullOrWhiteSpace(org.Uuid))
+        {
+            SetStatus("⚠  This directory isn't signed in to an org, so there's nothing to expect.", Palette.Orange);
+            return;
+        }
+        int i = _accounts.FindIndex(a => a.Uuid == org.Uuid);
+        if (i < 0)
+        {
+            _accounts.Add(new AccountRef { Uuid = org.Uuid, Name = org.Name, Email = org.AccountEmail });
+            _accountBox.ItemsSource = AccountNames(_accounts);
+            i = _accounts.Count - 1;
+        }
+        _accountBox.SelectedIndex = i + 1;
+        _emailBox.Text = org.AccountEmail ?? "";
+    }
+
+    private static List<string> AccountNames(IEnumerable<AccountRef> accounts) =>
+        accounts.Select(a => string.IsNullOrWhiteSpace(a.Name) ? a.Uuid : a.Name!).Prepend("None").ToList();
 
     private void SetStatus(string text, Color color)
     {

@@ -74,6 +74,7 @@ internal sealed class PrSessionWindow : Window
     private readonly Action<string, string> _remember;
     private readonly Action<string, string?> _rememberLayout;
     private readonly Func<IReadOnlyList<AccountRule>?> _rules;
+    private readonly Func<IReadOnlyList<ExpectedAccount>?> _expected;
     private readonly Func<PrSessionLaunch, string?> _launch;
 
     // Workspace: Checkout | No checkout, and the summary card's rows
@@ -145,8 +146,10 @@ internal sealed class PrSessionWindow : Window
     public PrSessionWindow(GhPrItem item, Func<IReadOnlyList<string>> knownFolders, string? remembered,
         string? rememberedLayout, Action<string, string> remember, Action<string, string?> rememberLayout,
         Func<IReadOnlyList<AccountRule>?> rules, Func<PrSessionLaunch, string?> launch,
-        IReadOnlyList<PrCustomTemplate>? customTemplates = null, Action<List<PrCustomTemplate>>? saveCustomTemplates = null)
+        IReadOnlyList<PrCustomTemplate>? customTemplates = null, Action<List<PrCustomTemplate>>? saveCustomTemplates = null,
+        Func<IReadOnlyList<ExpectedAccount>?>? expected = null)
     {
+        _expected = expected ?? (() => null);
         _item = item;
         _repo = RepoOf(item.Pr);
         _knownFolders = knownFolders;
@@ -1207,7 +1210,10 @@ internal sealed class PrSessionWindow : Window
                 var set = t.Result;
                 _accountOptions = set.Options;
                 _accountRow.IsVisible = set.ShowSelector && set.Options.Count > 0;
-                _accountBox.ItemsSource = set.Options.Select(o => o == set.Default ? $"{set.LabelOf(o)} (default)" : set.LabelOf(o)).ToList();
+                var expected = _expected();
+                _accountBox.ItemsSource = set.Options.Select(o => ExpectedAccounts.Flag(
+                    o == set.Default ? $"{set.LabelOf(o)} (default)" : set.LabelOf(o),
+                    ExpectedAccounts.WarningFor(o, expected))).ToList();
                 _accountBox.SelectedIndex = set.Default is { } d ? set.Options.ToList().IndexOf(d) : 0;
             }));
     }

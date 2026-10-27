@@ -1424,6 +1424,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         RecomputeMismatches();
         InvalidateVisual();
     }
+    // Each config dir's expected account (org-discovery M3). A dir whose live login drifts from it turns its session
+    // rows' config-dir chip red with a ⚠. Pushed in from AppSettings via OverlaySettingsGates. Empty ⇒ inert.
+    private IReadOnlyList<ExpectedAccount> _expectedAccounts = System.Array.Empty<ExpectedAccount>();
+    public void SetExpectedAccounts(IReadOnlyList<ExpectedAccount>? expected)
+    {
+        _expectedAccounts = expected ?? System.Array.Empty<ExpectedAccount>();
+        RecomputeMismatches();
+        InvalidateVisual();
+    }
     // Set during paint whenever a mismatch row is drawn, so the pulse timer runs only while one is on screen.
     private bool _anyMismatchThisFrame;
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
@@ -2984,6 +2993,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // one config dir is in play — otherwise every session shares the primary and the label is noise.
         // Org-free: it labels by directory (slug / dir name), never an org. See ClaudeSession.AttributedConfigDir.
         string? dirLabel = _showConfigDirLabels && ClaudeConfigSet.Instance.IsMulti && session.AttributedConfigDir is { DisplayLabel: { Length: > 0 } l } ? l : null;
+        // A dir whose login has drifted from its expected account always gets its chip (chips on), red with a ⚠ — even
+        // the unlabelled primary or a lone dir, whose chip is otherwise left off as noise.
+        bool dirAlert = _showConfigDirLabels && DirDrift(session) is not null;
+        if (dirAlert)
+        {
+            var driftDir = session.AttributedConfigDir ?? ClaudeConfigSet.Instance.Primary;
+            dirLabel = "⚠ " + (dirLabel ?? (driftDir.DisplayLabel is { Length: > 0 } dl ? dl : driftDir.Label));
+        }
         bool showDir = dirLabel is not null;
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
@@ -3089,7 +3106,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (showDir)
         {
             double dirX = statusX - thermoW - badgeW - taskW - bgW - metricsW - burnW - dirW;
-            DrawDirChip(ctx, dirX, nameMidY, dirLabel!, dirW);
+            DrawDirChip(ctx, dirX, nameMidY, dirLabel!, dirW, dirAlert);
             _dirRects[rowIndex] = new Rect(dirX, nameMidY - 9, Math.Max(0, dirW - 4), 18);
         }
 
@@ -3140,6 +3157,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // re-stats every couple of seconds). Keyed by the session object: rows paint the same instances.
     private Dictionary<ClaudeSession, string> _mismatches = new(ReferenceEqualityComparer.Instance);
 
+    // Each drifted config dir's warning, keyed by real path — the expected-account twin of _mismatches, worked out
+    // alongside it (same triggers, same no-IO-in-paint rule). Only dirs with a session on screen are checked.
+    private Dictionary<string, string> _dirDrift = new(ClaudeConfigDir.PathComparer);
+
     private void RecomputeMismatches()
     {
         var next = new Dictionary<ClaudeSession, string>(ReferenceEqualityComparer.Instance);
@@ -3148,12 +3169,31 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 if (EvaluateMismatch(s) is { Mismatch: true } m)
                     next[s] = m.Text;
 
+        var drift = new Dictionary<string, string>(ClaudeConfigDir.PathComparer);
+        if (_expectedAccounts.Count > 0)
+            foreach (var s in _sessions)
+            {
+                var dir = s.AttributedConfigDir ?? ClaudeConfigSet.Instance.Primary;
+                if (drift.ContainsKey(dir.RealRoot) || ExpectedAccounts.For(dir, _expectedAccounts) is not { } expected) continue;
+                var live = _orgProvider.GetLive(dir);
+                var verdict = ExpectedAccounts.Evaluate(expected, live);
+                if (verdict != AccountDrift.None) drift[dir.RealRoot] = ExpectedAccounts.Describe(verdict, expected, live);
+            }
+
         bool same = next.Count == _mismatches.Count
-            && next.All(kv => _mismatches.TryGetValue(kv.Key, out var t) && t == kv.Value);
+            && next.All(kv => _mismatches.TryGetValue(kv.Key, out var t) && t == kv.Value)
+            && drift.Count == _dirDrift.Count
+            && drift.All(kv => _dirDrift.TryGetValue(kv.Key, out var t) && t == kv.Value);
         if (same) return;
         _mismatches = next;
+        _dirDrift = drift;
         InvalidateVisual();
     }
+
+    // The paint path's read of a session's config-dir drift: the cached warning, or null.
+    private string? DirDrift(ClaudeSession session) =>
+        _dirDrift.Count > 0 && _dirDrift.TryGetValue((session.AttributedConfigDir ?? ClaudeConfigSet.Instance.Primary).RealRoot, out var w)
+            ? w : null;
 
     // The paint path's read: the cached state, no IO.
     private (bool Mismatch, string Text) AccountMismatch(ClaudeSession session) =>
@@ -3845,11 +3885,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // discovery, Layer 1), drawn only in the multi-config-dir case. Height is derived from the font's
     // measured line height (never a magic pixel value), so the label can't clip on a DPI change — per the
     // owner-drawn text rule. x is the pill's left edge; w is the width the row layout reserved for it.
-    private void DrawDirChip(DrawingContext ctx, double x, double midY, string label, double w)
+    private void DrawDirChip(DrawingContext ctx, double x, double midY, string label, double w, bool alert = false)
     {
-        var ft = OverlayDraw.Text(label, StatusSize, MutedBrush);
+        var d = MismatchColor;
+        var ft = OverlayDraw.Text(label, StatusSize, alert ? OverlayDraw.Brush(d) : MutedBrush);
         double h = ft.Height + 4;
-        OverlayDraw.Pill(ctx, FeedHoverBrush, new Rect(x, midY - h / 2, Math.Max(0, w - 4), h));
+        var fill = alert ? OverlayDraw.Brush(Color.FromArgb(46, d.R, d.G, d.B)) : FeedHoverBrush;
+        OverlayDraw.Pill(ctx, fill, new Rect(x, midY - h / 2, Math.Max(0, w - 4), h));
         OverlayDraw.TextLeftMid(ctx, ft, x + 6, midY);
     }
 
@@ -5288,7 +5330,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // row gains no permanent org text.
     private void ShowDirTooltip(int row)
     {
-        if (row < 0 || row >= _rows.Count || _rows[row].Session?.AttributedConfigDir is not { } dir) return;
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } session) return;
+        var dir = session.AttributedConfigDir ?? ClaudeConfigSet.Instance.Primary;
         if (!_dirRects.TryGetValue(row, out var r)) return;
 
         var label = dir.DisplayLabel is { Length: > 0 } dl ? dl : dir.Label;
@@ -5301,6 +5344,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ? Perch.Avalonia.Services.OrgDisplay.SignInText(new ClaudeSignIn(SignInState.Org, org, org.AccountEmail))
             : Perch.Avalonia.Services.OrgDisplay.SignInText(ClaudeJsonReader.ReadSignIn(dir));
         lines.Add(new(signIn, OverlayTooltip.MutedColor, false));
+        if (DirDrift(session) is { } drift)
+            lines.Add(new($"⚠ {drift} — the login may be broken", MismatchColor, false));
         Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
     }
 
