@@ -339,6 +339,33 @@ public class ClaudeCliTerminalCommandTests
     public void Cmd_line_refuses_a_config_dir_it_cant_pass_safely(string dir) =>
         Assert.Null(ClaudeCli.WindowsCmdLine(Claude, "--resume abc", dir));
 
+    // The config-dir "Terminal" button: a bare shell with the variable set, then echoed back.
+    [Theory]
+    [InlineData(@"C:\Users\x\.claude-work")]
+    [InlineData(@"C:\Users\A B\.claude work")]
+    public void Shell_line_sets_the_config_dir_and_survives_windows_terminal(string dir)
+    {
+        var line = ClaudeCli.WindowsShellCmdLine(dir)!;
+        Assert.Equal($"set CLAUDE_CONFIG_DIR={dir}&& set CLAUDE_CONFIG_DIR", line);
+        var afterWt = string.Join(' ', SplitLikeArgv(line).Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
+        Assert.Equal(dir, CmdSetValue(afterWt));
+    }
+
+    [Theory]
+    [InlineData(@"C:\%USERNAME%\.claude")]
+    [InlineData(@"C:\a;b\.claude")]
+    [InlineData(@"C:\R&D\.claude")]
+    public void Shell_line_refuses_a_config_dir_it_cant_pass_safely(string dir) =>
+        Assert.Null(ClaudeCli.WindowsShellCmdLine(dir));
+
+    [Fact]
+    public void PowerShell_shell_script_sets_the_config_dir_as_a_literal()
+    {
+        var script = ClaudeCli.WindowsPowerShellShellScript(@"C:\Users\O'Neil\.claude $x");
+        Assert.StartsWith(@"$env:CLAUDE_CONFIG_DIR = 'C:\Users\O''Neil\.claude $x'; ", script);
+        Assert.DoesNotContain("\"", script); // rides inside -Command "…"
+    }
+
     // Review fixes CP13: wt's -d value. A trailing backslash escaped the closing quote (`-d "C:\"` read as `C:"` and
     // swallowed the rest of the line), and wt splits subcommands at every `;`, quoted or not.
     [Theory]

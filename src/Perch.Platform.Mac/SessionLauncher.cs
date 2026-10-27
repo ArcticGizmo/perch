@@ -19,10 +19,12 @@ public sealed class SessionLauncher : ISessionLauncher
         string? prompt = null) => false;
 
     // Opens Terminal.app in cwd (`open -a Terminal <dir>` starts a shell there). The TerminalApp choices are
-    // Windows hosts, so every value maps to Terminal.app.
-    public bool OpenTerminal(string cwd, TerminalApp terminal)
+    // Windows hosts, so every value maps to Terminal.app. `open` can't hand the shell an environment variable, so a
+    // config dir isn't supported yet (see docs/macos-port-plan.md) — false rather than a shell on the wrong account.
+    public bool OpenTerminal(string cwd, TerminalApp terminal, string? configDir = null)
     {
         if (string.IsNullOrWhiteSpace(cwd) || !Directory.Exists(cwd)) return false;
+        if (!string.IsNullOrEmpty(configDir)) return false;
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };

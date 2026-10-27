@@ -74,26 +74,40 @@ public static class ClaudeCli
             run += $" \"{prompt}\"";
         }
         if (string.IsNullOrEmpty(configDir)) return run;
-        if (configDir.IndexOfAny(['%', '"', ';', '&', '|', '<', '>', '^']) >= 0) return null;
-        // `set VAR=value&&` — unquoted, with no space before `&&` — because Windows Terminal re-tokenises its command
-        // line and drops the quotes of `set "VAR=value" && …`, which leaves cmd storing `value ` WITH the trailing
-        // space before the `&&` (a config dir that doesn't exist, so claude starts first-run setup). Unquoted, cmd
-        // takes everything up to the `&&`, spaces inside the path included, and wt re-joining the pieces with single
-        // spaces reproduces the same line. That's also why every character cmd would interpret is refused above.
-        return $"set CLAUDE_CONFIG_DIR={configDir}&& {run}";
+        return SetConfigDir(configDir) is { } set ? $"{set}&& {run}" : null;
     }
+
+    /// <summary>The <c>cmd.exe /k</c> command line for a bare debugging shell under <paramref name="configDir"/>: it sets
+    /// <c>CLAUDE_CONFIG_DIR</c> exactly as <see cref="WindowsCmdLine"/> does, then prints it so the shell shows which
+    /// config dir it's on. Null for a dir <see cref="WindowsCmdLine"/> would refuse too.</summary>
+    public static string? WindowsShellCmdLine(string configDir) =>
+        SetConfigDir(configDir) is { } set ? $"{set}&& set CLAUDE_CONFIG_DIR" : null;
+
+    // `set VAR=value&&` — unquoted, with no space before `&&` — because Windows Terminal re-tokenises its command
+    // line and drops the quotes of `set "VAR=value" && …`, which leaves cmd storing `value ` WITH the trailing
+    // space before the `&&` (a config dir that doesn't exist, so claude starts first-run setup). Unquoted, cmd
+    // takes everything up to the `&&`, spaces inside the path included, and wt re-joining the pieces with single
+    // spaces reproduces the same line. That's also why every character cmd would interpret is refused.
+    private static string? SetConfigDir(string configDir) =>
+        configDir.IndexOfAny(['%', '"', ';', '&', '|', '<', '>', '^']) >= 0 ? null : $"set CLAUDE_CONFIG_DIR={configDir}";
 
     /// <summary>The PowerShell <c>-Command</c> script for the same launch; single-quoted literals, so nothing in the
     /// paths is interpreted (<c>'</c> is doubled). <paramref name="prompt"/> as for <see cref="WindowsCmdLine"/> (the
     /// caller checks <see cref="IsSafePrompt"/>, since no <c>"</c> may reach the surrounding <c>-Command "…"</c>).</summary>
     public static string WindowsPowerShellScript(string claudePath, string args, string? configDir, string? prompt = null)
     {
-        static string Lit(string s) => "'" + s.Replace("'", "''") + "'";
-        var run = $"& {Lit(claudePath)} {args}";
-        if (prompt is not null) run += $" {Lit(prompt)}";
+        var run = $"& {PsLiteral(claudePath)} {args}";
+        if (prompt is not null) run += $" {PsLiteral(prompt)}";
         // Single quotes only — the whole script rides inside the -Command "…" argument.
-        return string.IsNullOrEmpty(configDir) ? run : $"$env:CLAUDE_CONFIG_DIR = {Lit(configDir)}; {run}";
+        return string.IsNullOrEmpty(configDir) ? run : $"$env:CLAUDE_CONFIG_DIR = {PsLiteral(configDir)}; {run}";
     }
+
+    /// <summary>The PowerShell <c>-Command</c> script for a bare debugging shell under <paramref name="configDir"/>,
+    /// echoing the variable back like <see cref="WindowsShellCmdLine"/>.</summary>
+    public static string WindowsPowerShellShellScript(string configDir) =>
+        $"$env:CLAUDE_CONFIG_DIR = {PsLiteral(configDir)}; Write-Host ('CLAUDE_CONFIG_DIR=' + $env:CLAUDE_CONFIG_DIR)";
+
+    private static string PsLiteral(string s) => "'" + s.Replace("'", "''") + "'";
 
     private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
 

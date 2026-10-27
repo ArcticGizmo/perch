@@ -38,9 +38,11 @@ public interface ISessionLauncher
     /// Opens a plain interactive terminal in <paramref name="cwd"/> (no command run) with the user's preferred
     /// <paramref name="terminal"/>, falling back to a plain console like <see cref="Reopen"/>. Returns true if a
     /// terminal was launched; false when none could be (a missing folder, or the platform doesn't implement this
-    /// yet). Best-effort; never throws.
+    /// yet). Best-effort; never throws. <paramref name="configDir"/>, when set, is exported as <c>CLAUDE_CONFIG_DIR</c>
+    /// in the shell, so a <c>claude</c> run there uses that account (the config-dir "Terminal" button, for debugging);
+    /// a dir that can't be passed safely returns false rather than opening a shell on the wrong account.
     /// </summary>
-    bool OpenTerminal(string cwd, TerminalApp terminal);
+    bool OpenTerminal(string cwd, TerminalApp terminal, string? configDir = null);
 
     /// <summary>
     /// Launches (or re-activates) the Claude Desktop app — the host of a <c>claude-desktop</c> session that
