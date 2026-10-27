@@ -4314,6 +4314,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A no-op while the cursor stays on the same target.
     private void ArmDwell(TipKind kind, int row)
     {
+        if (_openFlyout is not null) (kind, row) = (TipKind.None, -1);   // no tooltips over an open menu
         if (kind == _tipKind && row == _tipRow) return;
         _tipKind = kind;
         _tipRow = row;
@@ -4330,6 +4331,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void OnDwellTick(object? sender, EventArgs e)
     {
         _dwellTimer?.Stop();
+        if (_openFlyout is not null) return;
         switch (_tipKind)
         {
             case TipKind.Usage:   ShowUsageTooltip(_tipRow);   break;
@@ -5242,6 +5244,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void ShowFlyout(PopupFlyoutBase flyout)
     {
         _openFlyout?.Hide();
+        // The menu opens at the pointer, which is still over the glyph that armed a dwell tooltip; left alone the tip
+        // pops up over the menu and swallows its clicks. ArmDwell/OnDwellTick hold off until the menu closes.
+        HideActiveTip();
         flyout.Placement = PlacementMode.Pointer;
         flyout.Closed += (_, _) => { if (ReferenceEquals(_openFlyout, flyout)) _openFlyout = null; };
         _openFlyout = flyout;
