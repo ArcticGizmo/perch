@@ -7,8 +7,8 @@ namespace Perch.Avalonia.Services;
 /// <summary>
 /// Runs the opt-in <see cref="SignInRefresher"/> over every known config dir once a minute while
 /// <see cref="AppSettings.AutoRefreshSignIn"/> is on. A minute is fine-grained enough to land inside the
-/// five-minute refresh window and coarse enough that a pass is nearly always a few file reads. The passes run off the
-/// UI thread, sequentially; results are applied back on it.
+/// five-minute refresh window and coarse enough that a pass is nearly always a few file reads; the claude CLI only runs
+/// for a dir that's actually due. The passes run off the UI thread, sequentially; results are applied back on it.
 ///
 /// <para>The host keeps which accounts need a login (by real root, with the reason) for the overlay's "Login required"
 /// button, raises <see cref="LoginLost"/> once when an account first needs one (the toast), and <see cref="Refreshed"/>
@@ -124,9 +124,6 @@ internal sealed class SignInRefreshHost : IDisposable
                 case RefreshOutcome.Failed:
                     _retryAt[root] = DateTime.UtcNow + RetryAfterFailure;
                     DiagnosticLog.Append(Log, $"{dir.Label}: renewal failed, retrying in {RetryAfterFailure.TotalMinutes:0} min - {r.Reason}");
-                    break;
-                case RefreshOutcome.Busy:
-                    DiagnosticLog.Append(Log, $"{dir.Label}: lock held by another process, retrying next pass");
                     break;
             }
         }

@@ -1,68 +1,58 @@
-using System.Net;
-using System.Net.Http;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Perch.Platform;
 
 namespace Perch.Data;
 
-/// <summary>Where one config dir's sign-in is stored, as the refresher reads and rewrites it: the primary through the
-/// OS credential store behind <see cref="IClaudeCredentials"/>, any other dir through its own <c>.credentials.json</c>
-/// (the same split the usage poll uses).</summary>
-internal sealed record SignInStore(ClaudeConfigDir Dir, IClaudeCredentials Credentials)
+/// <summary>Where one config dir's sign-in is read from: the primary through the OS credential store behind
+/// <see cref="IClaudeCredentials"/>, any other dir from its own <c>.credentials.json</c> (the same split the usage poll
+/// uses). <see cref="IsPrimary"/> decides whether the refresh run inherits Perch's environment or pins the dir.</summary>
+internal sealed record SignInStore(ClaudeConfigDir Dir, bool IsPrimary, Func<string?> Read)
 {
     public static SignInStore For(ClaudeConfigDir dir, IClaudeCredentials primary) =>
-        new(dir, dir.Equals(ClaudeConfigSet.Instance.Primary) ? primary : new FileClaudeCredentials(dir.CredentialsFile));
+        dir.Equals(ClaudeConfigSet.Instance.Primary)
+            ? new(dir, true, primary.ReadCredentialsJson)
+            : new(dir, false, () => UsageMonitor.ReadFile(dir.CredentialsFile));
 }
 
 /// <summary>What one refresh pass did for a dir. <see cref="LoginRequired"/> means the sign-in can't be renewed
-/// without <c>claude auth login</c>; <see cref="Busy"/> and <see cref="Failed"/> are worth retrying later.</summary>
-internal enum RefreshOutcome { NotSignedIn, NotDue, Refreshed, Busy, Failed, LoginRequired }
+/// without <c>claude auth login</c>; <see cref="Failed"/> is worth retrying later.</summary>
+internal enum RefreshOutcome { NotSignedIn, NotDue, Refreshed, Failed, LoginRequired }
 
 internal sealed record RefreshResult(RefreshOutcome Outcome, string? Reason = null);
 
 /// <summary>
-/// The opt-in sign-in refresher: renews a config dir's OAuth access token <see cref="Lead"/> before it expires,
-/// exactly as Claude Code does on a request near expiry, so the usage poll keeps working and a session started or
-/// restarted later picks up a live token even when no interactive Claude Code is running.
+/// The opt-in sign-in refresher: gets a config dir's OAuth access token renewed <see cref="Lead"/> before it expires,
+/// so the usage poll keeps working and a session started or restarted later picks up a live token even when no
+/// interactive Claude Code is running.
 ///
-/// <para>It never logs in. When the refresh token is past its expiry, missing, or rejected by the server, the outcome
-/// is <see cref="RefreshOutcome.LoginRequired"/> with a reason, and a rejected token is remembered so it isn't retried
-/// until the stored sign-in changes (the user ran <c>claude auth login</c>).</para>
+/// <para>Perch doesn't talk to the token endpoint itself: that endpoint refuses clients that aren't Claude Code. Instead
+/// it runs Claude Code briefly — <see cref="RefreshArgs"/> with empty input under the account's config dir. On startup
+/// the CLI renews a token that's near expiry (taking its own refresh lock and writing its own storage, Keychain
+/// included), then exits on the empty prompt, so no model call is made and nothing is saved; safe mode keeps hooks,
+/// plugins and MCP servers out of it. Perch judges the outcome by re-reading the stored sign-in: a later expiry means
+/// renewed; blanked tokens mean Claude Code's refresh was rejected and it signed the account out.</para>
 ///
-/// <para>A refresh rotates the refresh token, so it must not race a Claude Code process doing the same. Claude Code
-/// serialises its own refreshes with a proper-lockfile lock directory, <c>&lt;config dir&gt;/.oauth_refresh.lock</c>
-/// (stale after 60 s), and after taking it re-reads storage and adopts any token another process wrote. Perch takes
-/// the same lock and re-reads under it, so whichever side refreshes second sees the first one's tokens instead of
-/// spending a dead refresh token. The request mirrors Claude Code's own (<see cref="TokenUrl"/>, its public client
-/// id, the stored scopes).</para>
+/// <para>It never logs in. An expired login, a missing refresh token or a signed-out account is
+/// <see cref="RefreshOutcome.LoginRequired"/> with a reason, and the CLI isn't run for it.</para>
 /// </summary>
 internal sealed class SignInRefresher
 {
     /// <summary>How far ahead of expiry the access token is renewed — Claude Code's own refresh point.</summary>
     public static readonly TimeSpan Lead = TimeSpan.FromMinutes(5);
 
-    internal const string TokenUrl = "https://platform.claude.com/v1/oauth/token";
-    internal const string DefaultClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+    internal const string RefreshArgs = "-p --safe-mode --no-session-persistence";
+    private static readonly TimeSpan RunTimeout = TimeSpan.FromSeconds(60);
 
-    private static readonly JsonSerializerOptions WriteOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    // Runs the CLI for a store; returns why it couldn't run, or null once it has run (its exit code is always a failure,
+    // from the empty prompt, so only the stored sign-in says what happened). Swappable for the tests.
+    private readonly Func<SignInStore, CancellationToken, Task<string?>> _runClaude;
 
-    private readonly HttpClient _http;
-
-    // Refresh tokens the server rejected, as hashes so the secret isn't kept around. A login that's already dead
-    // isn't re-sent every tick; a new login writes a different token and clears it.
-    private readonly Dictionary<string, string> _dead = new(StringComparer.Ordinal);
-    private readonly Lock _deadGate = new();
-
-    public SignInRefresher(HttpMessageHandler? handler = null) =>
-        _http = new HttpClient(handler ?? new HttpClientHandler()) { Timeout = TimeSpan.FromSeconds(20) };
+    public SignInRefresher(Func<SignInStore, CancellationToken, Task<string?>>? runClaude = null) =>
+        _runClaude = runClaude ?? RunClaudeAsync;
 
     /// <summary>The <c>claudeAiOauth</c> fields the refresher needs. Times are Unix epoch milliseconds.</summary>
-    internal sealed record OAuthBlob(
-        string? AccessToken, string? RefreshToken, long? ExpiresAtMs, long? RefreshExpiresAtMs, string[] Scopes, string? ClientId)
+    internal sealed record OAuthBlob(string? AccessToken, string? RefreshToken, long? ExpiresAtMs, long? RefreshExpiresAtMs)
     {
         public static OAuthBlob? Parse(string? json)
         {
@@ -71,9 +61,7 @@ internal sealed class SignInRefresher
             {
                 if (JsonNode.Parse(json)?["claudeAiOauth"] is not JsonObject o) return null;
                 return new OAuthBlob(Str(o["accessToken"]), Str(o["refreshToken"]), Ms(o["expiresAt"]),
-                    Ms(o["refreshTokenExpiresAt"]),
-                    o["scopes"] is JsonArray a ? a.Select(Str).OfType<string>().ToArray() : [],
-                    Str(o["clientId"]));
+                    Ms(o["refreshTokenExpiresAt"]));
             }
             catch
             {
@@ -88,42 +76,43 @@ internal sealed class SignInRefresher
             n is not null && long.TryParse(n.ToString(), out var ms) && ms > 0 ? ms : null;
     }
 
-    internal enum Plan { NotSignedIn, NotDue, Due, LoginExpired, NoRefreshToken, KnownDead }
+    internal enum Plan { NotSignedIn, SignedOut, NotDue, Due, LoginExpired, NoRefreshToken }
 
     /// <summary>What a pass should do with <paramref name="blob"/> at <paramref name="utcNow"/>. Pure, for the tests.</summary>
-    internal static Plan PlanFor(OAuthBlob? blob, DateTime utcNow, Func<string, bool> isDead)
+    internal static Plan PlanFor(OAuthBlob? blob, DateTime utcNow)
     {
-        if (blob is null || (blob.AccessToken is null && blob.RefreshToken is null)) return Plan.NotSignedIn;
+        if (blob is null) return Plan.NotSignedIn;
+        // The block is there but both tokens are blank: how Claude Code leaves an account after its refresh is rejected.
+        if (blob.AccessToken is null && blob.RefreshToken is null) return Plan.SignedOut;
         long now = new DateTimeOffset(utcNow).ToUnixTimeMilliseconds();
         if (blob.RefreshExpiresAtMs is { } loginEnds && loginEnds <= now) return Plan.LoginExpired;
         if (blob.ExpiresAtMs is not { } accessEnds) return Plan.NotDue;
         if (accessEnds - now > (long)Lead.TotalMilliseconds) return Plan.NotDue;
         // Without a refresh token a lapsing access token can't be renewed — but it's only a login problem once it lapses.
         if (blob.RefreshToken is null) return accessEnds <= now ? Plan.NoRefreshToken : Plan.NotDue;
-        return isDead(blob.RefreshToken) ? Plan.KnownDead : Plan.Due;
+        return Plan.Due;
     }
 
-    /// <summary>Renews <paramref name="store"/>'s sign-in if it's within <see cref="Lead"/> of expiring. Blocking file IO
-    /// and a network call — run it off the UI thread. Never throws.</summary>
+    /// <summary>Gets <paramref name="store"/>'s sign-in renewed if it's within <see cref="Lead"/> of expiring. File IO and
+    /// a short CLI run — call off the UI thread. Never throws.</summary>
     public async Task<RefreshResult> RefreshIfDueAsync(SignInStore store, DateTime utcNow, CancellationToken ct = default)
     {
         try
         {
-            var json = store.Credentials.ReadCredentialsJson();
-            var blob = OAuthBlob.Parse(json);
-            var plan = PlanFor(blob, utcNow, IsDead);
-            if (plan != Plan.Due) return Settled(plan, blob);
+            var before = OAuthBlob.Parse(store.Read());
+            var plan = PlanFor(before, utcNow);
+            if (plan != Plan.Due) return Settled(plan, before);
 
-            using var held = OAuthRefreshLock.TryAcquire(store.Dir.Root);
-            if (held is null) return new(RefreshOutcome.Busy, "Claude Code is refreshing this sign-in");
+            if (await _runClaude(store, ct).ConfigureAwait(false) is { } error)
+                return new(RefreshOutcome.Failed, error);
 
-            // Another process may have refreshed between the first read and the lock: only its tokens count now.
-            json = store.Credentials.ReadCredentialsJson();
-            blob = OAuthBlob.Parse(json);
-            plan = PlanFor(blob, utcNow, IsDead);
-            if (plan != Plan.Due) return Settled(plan, blob);
-
-            return await ExchangeAsync(store, json!, blob!, utcNow, ct).ConfigureAwait(false);
+            var after = OAuthBlob.Parse(store.Read());
+            if (after is { AccessToken: null, RefreshToken: null })
+                return new(RefreshOutcome.LoginRequired,
+                    "Claude Code's refresh of the sign-in was rejected, so it signed this account out.");
+            if (after?.ExpiresAtMs > before!.ExpiresAtMs)
+                return new(RefreshOutcome.Refreshed);
+            return new(RefreshOutcome.Failed, "Claude Code ran but didn't renew the sign-in");
         }
         catch (Exception ex)
         {
@@ -131,12 +120,13 @@ internal sealed class SignInRefresher
         }
     }
 
-    private RefreshResult Settled(Plan plan, OAuthBlob? blob) => plan switch
+    private static RefreshResult Settled(Plan plan, OAuthBlob? blob) => plan switch
     {
         Plan.NotSignedIn => new(RefreshOutcome.NotSignedIn),
+        Plan.SignedOut => new(RefreshOutcome.LoginRequired,
+            "This account is signed out: Claude Code clears the sign-in when its refresh is rejected, or after a logout."),
         Plan.LoginExpired => new(RefreshOutcome.LoginRequired, LoginExpiredReason(blob!.RefreshExpiresAtMs!.Value)),
         Plan.NoRefreshToken => new(RefreshOutcome.LoginRequired, "The sign-in expired and has no refresh token to renew it with."),
-        Plan.KnownDead => new(RefreshOutcome.LoginRequired, DeadReason(blob!.RefreshToken!)),
         _ => new(RefreshOutcome.NotDue),
     };
 
@@ -146,176 +136,45 @@ internal sealed class SignInRefresher
         return $"The login expired on {at:ddd d MMM} at {at:t}, so the sign-in can't be renewed.";
     }
 
-    private async Task<RefreshResult> ExchangeAsync(
-        SignInStore store, string json, OAuthBlob blob, DateTime utcNow, CancellationToken ct)
+    // The config dir itself is the working directory: a folder with no project config for the run to pick up. The
+    // primary inherits Perch's environment (pinning ~/.claude would move Claude's .claude.json lookup); any other dir is
+    // pinned with CLAUDE_CONFIG_DIR. The output is drained and dropped — it's only the empty-prompt error.
+    private static async Task<string?> RunClaudeAsync(SignInStore store, CancellationToken ct)
     {
-        var body = new JsonObject
-        {
-            ["grant_type"] = "refresh_token",
-            ["refresh_token"] = blob.RefreshToken,
-            ["client_id"] = blob.ClientId ?? DefaultClientId,
-        };
-        if (blob.Scopes.Length > 0) body["scope"] = string.Join(' ', blob.Scopes);
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, TokenUrl)
-        {
-            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
-        };
-        req.Headers.UserAgent.ParseAdd($"claude-code/{UsageMonitor.ReadCliVersion()}");
-        req.Headers.Accept.ParseAdd("application/json");
-
-        HttpResponseMessage resp;
-        try { resp = await _http.SendAsync(req, ct).ConfigureAwait(false); }
-        catch (Exception ex) { return new(RefreshOutcome.Failed, "Couldn't reach the sign-in server: " + ex.Message); }
-
-        using (resp)
-        {
-            var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if (resp.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
-                return Rejected(store, blob, text, (int)resp.StatusCode);
-            if (!resp.IsSuccessStatusCode)
-                return new(RefreshOutcome.Failed, $"The sign-in server returned {(int)resp.StatusCode}");
-
-            var updated = JsonNode.Parse(text) is JsonObject r ? ApplyRefresh(json, r, utcNow) : null;
-            if (updated is null)
-                return new(RefreshOutcome.Failed, "The sign-in server's reply had no new token");
-
-            // The old refresh token is spent now, so failing to save the new one loses the sign-in.
-            if (!store.Credentials.WriteCredentialsJson(updated))
-            {
-                MarkDead(blob.RefreshToken!, "Perch renewed the sign-in but couldn't save it, so the old one no longer works.");
-                return new(RefreshOutcome.LoginRequired, DeadReason(blob.RefreshToken!));
-            }
-            return new(RefreshOutcome.Refreshed);
-        }
-    }
-
-    // A 400/401 from the token endpoint. invalid_grant (and any 401) means the refresh token itself is no good —
-    // expired, revoked, or already rotated by someone who didn't save it — so only a login fixes it. Anything else
-    // (a malformed request, a scope the server won't grant) is retried later rather than condemning the login.
-    private RefreshResult Rejected(SignInStore store, OAuthBlob blob, string text, int status)
-    {
-        string? error = null, description = null;
         try
         {
-            if (JsonNode.Parse(text) is JsonObject e)
+            var psi = ClaudeCli.CreateStartInfo(RefreshArgs);
+            psi.WorkingDirectory = store.Dir.Root;
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardInput = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            foreach (var name in ArtifactPublisher.ScrubbedEnv) psi.Environment.Remove(name);
+            if (!store.IsPrimary) psi.Environment["CLAUDE_CONFIG_DIR"] = store.Dir.Root;
+
+            using var proc = Process.Start(psi);
+            if (proc is null) return "Couldn't start the claude CLI";
+            proc.StandardInput.Close();
+            var drain = Task.WhenAll(proc.StandardOutput.ReadToEndAsync(ct), proc.StandardError.ReadToEndAsync(ct));
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(RunTimeout);
+            try
             {
-                error = e["error"]?.ToString();
-                description = e["error_description"]?.ToString();
+                await proc.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
             }
-        }
-        catch { }
-
-        // Another process may have rotated the token under us (its lock outlived ours, or it doesn't take one): its
-        // save is the live sign-in, not a dead one.
-        if (OAuthBlob.Parse(store.Credentials.ReadCredentialsJson())?.RefreshToken is { } current
-            && current != blob.RefreshToken)
-            return new(RefreshOutcome.NotDue);
-
-        string detail = description is { Length: > 0 } ? $"{error}: {description}" : error ?? $"HTTP {status}";
-        if (status == 401 || error == "invalid_grant")
-        {
-            MarkDead(blob.RefreshToken!, $"The sign-in server rejected the refresh token ({detail}).");
-            return new(RefreshOutcome.LoginRequired, DeadReason(blob.RefreshToken!));
-        }
-        return new(RefreshOutcome.Failed, $"The sign-in server refused the refresh ({detail})");
-    }
-
-    /// <summary>
-    /// The credentials blob with <paramref name="response"/>'s tokens applied, or null when the reply lacks an access
-    /// token or lifetime. Only the <c>claudeAiOauth</c> fields a refresh changes are touched; everything else in the blob
-    /// (other OAuth entries, subscription fields) is kept. The refresh token and its expiry are kept when the reply
-    /// doesn't rotate them. Pure, for the tests.
-    /// </summary>
-    internal static string? ApplyRefresh(string blobJson, JsonObject response, DateTime utcNow)
-    {
-        if (JsonNode.Parse(blobJson) is not JsonObject root || root["claudeAiOauth"] is not JsonObject oauth) return null;
-        if (response["access_token"] is not JsonValue a || !a.TryGetValue<string>(out var access) || access.Length == 0)
-            return null;
-        if (Seconds(response["expires_in"]) is not { } lifetime) return null;
-
-        long now = new DateTimeOffset(utcNow).ToUnixTimeMilliseconds();
-        oauth["accessToken"] = access;
-        oauth["expiresAt"] = now + (long)(lifetime * 1000);
-        if (response["refresh_token"] is JsonValue rv && rv.TryGetValue<string>(out var refresh) && refresh.Length > 0)
-            oauth["refreshToken"] = refresh;
-        if (Seconds(response["refresh_token_expires_in"]) is { } loginLifetime)
-            oauth["refreshTokenExpiresAt"] = now + (long)(loginLifetime * 1000);
-        if (response["scope"] is JsonValue sv && sv.TryGetValue<string>(out var scope)
-            && scope.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } scopes)
-            oauth["scopes"] = new JsonArray(scopes.Select(s => (JsonNode)s).ToArray());
-        return root.ToJsonString(WriteOptions);
-    }
-
-    private static double? Seconds(JsonNode? n) =>
-        n is JsonValue v && v.TryGetValue<double>(out var d) && d > 0 ? d : null;
-
-    private static string Hash(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
-
-    private bool IsDead(string refreshToken)
-    {
-        lock (_deadGate) return _dead.ContainsKey(Hash(refreshToken));
-    }
-
-    private void MarkDead(string refreshToken, string reason)
-    {
-        lock (_deadGate) _dead[Hash(refreshToken)] = reason;
-    }
-
-    private string DeadReason(string refreshToken)
-    {
-        lock (_deadGate) return _dead.GetValueOrDefault(Hash(refreshToken)) ?? "The sign-in server rejected the refresh token.";
-    }
-}
-
-/// <summary>
-/// Claude Code's OAuth refresh lock: the directory <c>&lt;config dir&gt;/.oauth_refresh.lock</c>, created by
-/// proper-lockfile while a process refreshes and kept fresh by touching its mtime every 5 s; one untouched for 60 s
-/// is stale and may be taken over. Perch holds it only for the length of one token request (well under the stale
-/// window), so it never needs touching.
-/// </summary>
-internal static class OAuthRefreshLock
-{
-    internal const string Name = ".oauth_refresh.lock";
-    private static readonly TimeSpan Stale = TimeSpan.FromSeconds(60);
-
-    /// <summary>Takes the lock in <paramref name="configRoot"/>, or returns null while someone else holds it (or the
-    /// dir can't be written). Dispose to release.</summary>
-    public static IDisposable? TryAcquire(string configRoot)
-    {
-        var path = Path.Combine(configRoot, Name);
-        string? staging = null;
-        try
-        {
-            if (Directory.Exists(path))
+            catch (OperationCanceledException)
             {
-                if (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(path) < Stale) return null;
-                Directory.Delete(path);
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return $"The claude CLI didn't finish within {RunTimeout.TotalSeconds:0} s";
             }
-            // Renaming a fresh directory into place fails if the lock appeared meanwhile, where a plain create would
-            // silently succeed and leave two holders.
-            staging = path + "." + Guid.NewGuid().ToString("N");
-            Directory.CreateDirectory(staging);
-            Directory.Move(staging, path);
-            staging = null;
-            return new Held(path);
-        }
-        catch
-        {
+            await drain.ConfigureAwait(false);
             return null;
         }
-        finally
+        catch (Exception ex)
         {
-            if (staging is not null)
-                try { Directory.Delete(staging); } catch { }
-        }
-    }
-
-    private sealed class Held(string path) : IDisposable
-    {
-        public void Dispose()
-        {
-            try { Directory.Delete(path); } catch { }
+            return "Couldn't run the claude CLI: " + ex.Message;
         }
     }
 }

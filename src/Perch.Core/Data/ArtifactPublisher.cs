@@ -28,7 +28,7 @@ public static class ArtifactPublisher
 
     // Inherited from a parent claude / Perch session; the nested background session must start clean, or perch-hook
     // reads it as a Perch-controlled session starting (PERCH_SESSION_OWNER) and the CLI as a nested one.
-    private static readonly string[] ScrubbedEnv =
+    internal static readonly string[] ScrubbedEnv =
     [
         Control.SessionLock.OwnerEnvVar, PerchSessionPlugin.SessionEnvVar, PerchSessionPlugin.ExeEnvVar,
         "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",

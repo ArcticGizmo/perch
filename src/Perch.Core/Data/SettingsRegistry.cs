@@ -191,7 +191,7 @@ internal static class SettingsRegistry
             s => s.ShowAuthExpiry, (s, v) => s.ShowAuthExpiry = v),
 
         Toggle("auto-refresh-sign-in", "Keep sign-ins fresh (experimental)",
-            "Perch renews each account's access token 5 minutes before it expires, so usage keeps updating and new or restarted sessions start signed in even with no Claude Code open. It never logs in for you: if a login can't be renewed, a Login required button appears over that account's usage bars. Sessions already running keep the token they started with.",
+            "5 minutes before an account's access token expires, Perch briefly runs Claude Code to renew it, so usage keeps updating and new or restarted sessions start signed in even with no Claude Code open. It never logs in for you: if a login can't be renewed, a Login required button appears over that account's usage bars. Sessions already running keep the token they started with.",
             SettingSurface.UsageBars,
             ["sign-in", "signin", "login", "log in", "token", "refresh", "renew", "auth", "oauth", "expiry", "experimental", "beta"],
             PreviewTarget.UsageBars, nameof(AppSettings.AutoRefreshSignIn),

@@ -99,8 +99,8 @@ internal sealed class AppSettings
     // when the refresh token does (i.e. when the account must /login again). Dimmed until one is close.
     public bool ShowAuthExpiry { get; set; } = true;
 
-    // Experimental and opt-in: Perch renews each account's OAuth access token 5 minutes before it expires (as Claude
-    // Code would), so usage keeps polling and new/restarted sessions start signed in with no interactive Claude Code
+    // Experimental and opt-in: 5 minutes before an account's OAuth access token expires, Perch briefly runs Claude Code
+    // to renew it, so usage keeps polling and new/restarted sessions start signed in with no interactive Claude Code
     // running. It never logs in — a dead login surfaces as a "Login required" button instead. See SignInRefresher.
     public bool AutoRefreshSignIn { get; set; }
 

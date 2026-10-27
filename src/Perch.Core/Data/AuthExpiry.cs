@@ -13,8 +13,8 @@ namespace Perch.Data;
 ///
 /// <para>Perch only <em>reads</em> these. An interactive CLI refreshes the access token on a request made near
 /// expiry, but a headless (stream-json) session — every Perch-controlled one — doesn't, and a running process
-/// never re-reads the file, so Perch surfaces the clocks. Only the opt-in <see cref="SignInRefresher"/> renews the
-/// stored token, under Claude Code's own refresh lock; a running headless session still keeps the token it loaded.</para>
+/// never re-reads the file, so Perch surfaces the clocks. Only the opt-in <see cref="SignInRefresher"/> gets the stored
+/// token renewed, by briefly running Claude Code; a running headless session still keeps the token it loaded.</para>
 /// </summary>
 internal sealed record AuthExpiry(DateTime? AccessExpiresAt, DateTime? RefreshExpiresAt)
 {
