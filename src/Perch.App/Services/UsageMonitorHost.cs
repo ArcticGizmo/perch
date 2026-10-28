@@ -160,7 +160,7 @@ internal sealed class UsageMonitorHost : IDisposable
             bool pollIdle = (_pollCount % IdleEvery) == 1;
 
             var results = new List<OrgUsage>(accounts.Count);
-            foreach (var (dir, org, isActive) in accounts)
+            foreach (var (dir, org, isActive, merged) in accounts)
             {
                 OrgUsage row;
                 if (isActive || pollIdle || !_lastByRoot.TryGetValue(dir.RealRoot, out var prev))
@@ -168,12 +168,12 @@ internal sealed class UsageMonitorHost : IDisposable
                     if (!_monitors.TryGetValue(dir.RealRoot, out var mon))
                         _monitors[dir.RealRoot] = mon = MonitorFor(dir);
                     var info = await mon.FetchAsync();     // off-thread IO, never throws
-                    row = new OrgUsage(dir, org, info, isActive);
+                    row = new OrgUsage(dir, org, info, isActive) { Merged = merged };
                 }
                 else
                 {
-                    // Reuse the idle account's last reading (keep its org/activity current).
-                    row = prev with { Org = org, Active = isActive };
+                    // Reuse the idle account's last reading (keep its org/activity/merged dirs current).
+                    row = prev with { Org = org, Active = isActive, Merged = merged };
                 }
                 _lastByRoot[dir.RealRoot] = row;
                 results.Add(row);

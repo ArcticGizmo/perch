@@ -17,8 +17,9 @@ public sealed partial class OverlayCanvas
 {
     // Accounts the refresher found dead (by real root, with why), pushed from the App's SignInRefreshHost.
     private IReadOnlyDictionary<string, string> _refresherLoginRequired = new Dictionary<string, string>();
-    // The buttons painted this frame, for hit-testing; rebuilt each paint like the other usage rects.
-    private readonly List<(Rect Rect, OrgUsage Set)> _loginButtonRects = new();
+    // The buttons painted this frame, with the dir each logs in (a merged dir's, when that's the one that needs it), for
+    // hit-testing; rebuilt each paint like the other usage rects.
+    private readonly List<(Rect Rect, OrgUsage Set, ClaudeConfigDir Dir)> _loginButtonRects = new();
     private OrgUsage? _hoveredLoginButton;
 
     private const double LoginButtonFont = 10.5, LoginButtonChipFont = 9;
@@ -37,13 +38,14 @@ public sealed partial class OverlayCanvas
         if (UsageStripVisible) InvalidateVisual();
     }
 
-    // Draws over `bars` whichever sign-in state applies to the account: the Login required button wins, else the
-    // refresher's renewing / renewed pill. Nothing when neither applies.
+    // Draws over `bars` whichever sign-in state applies to the account, from any of its dirs (several config dirs signed
+    // into one account share these bars): the Login required button wins, else the refresher's renewing / renewed pill.
+    // Nothing when neither applies.
     private void DrawSignInOverlay(DrawingContext ctx, Rect bars, OrgUsage set, DateTime now, bool compact)
     {
-        if (LoginRequiredReason(set, now) is not null)
-            DrawLoginRequired(ctx, bars, set, compact);
-        else if (_signInActivity.TryGetValue(set.Dir.RealRoot, out var activity))
+        if (LoginNeedOf(set, now) is { } need)
+            DrawLoginRequired(ctx, bars, set, need.Dir, compact);
+        else if (set.Activity(_signInActivity) is { } activity)
             DrawSignInActivity(ctx, bars, activity, compact);
     }
 
@@ -83,13 +85,12 @@ public sealed partial class OverlayCanvas
         if (UsageStripVisible) InvalidateVisual();
     }
 
-    // Why this account needs a login, or null when it doesn't.
-    private string? LoginRequiredReason(OrgUsage set, DateTime now) =>
-        AuthExpiryRules.LoginRequired(set.Usage.Auth, _refresherLoginRequired.GetValueOrDefault(set.Dir.RealRoot), now);
+    // Which of this account's dirs needs a login, and why, or null when none does.
+    private LoginNeed? LoginNeedOf(OrgUsage set, DateTime now) => set.LoginNeed(_refresherLoginRequired, now);
 
-    // Washes `bars` out and centres the button over it. `compact` is the collapsed chip's smaller button, which falls
-    // back to "Log in" when the chip is too narrow for the full label.
-    private void DrawLoginRequired(DrawingContext ctx, Rect bars, OrgUsage set, bool compact)
+    // Washes `bars` out and centres the button over it; a click logs in `dir`. `compact` is the collapsed chip's smaller
+    // button, which falls back to "Log in" when the chip is too narrow for the full label.
+    private void DrawLoginRequired(DrawingContext ctx, Rect bars, OrgUsage set, ClaudeConfigDir dir, bool compact)
     {
         OverlayDraw.Panel(ctx, bars.Inflate(new Thickness(2, 1)), OverlayDraw.Brush(BgColor, 0.72), null, 4);
 
@@ -106,22 +107,22 @@ public sealed partial class OverlayCanvas
         bool hovered = ReferenceEquals(_hoveredLoginButton, set);
         OverlayDraw.Panel(ctx, button, hovered ? OverlayDraw.Brush(Palette.AccentHover) : Palette.AccentBrush, null, h / 2);
         OverlayDraw.TextLeftMid(ctx, ft, button.Center.X - ft.Width / 2, button.Center.Y);
-        _loginButtonRects.Add((button, set));
+        _loginButtonRects.Add((button, set, dir));
     }
 
-    // The account whose "Login required" button the point is over, or null.
-    private OrgUsage? LoginButtonAt(Point p)
+    // The "Login required" button the point is over (its account, and the dir it logs in), or null.
+    private (OrgUsage Set, ClaudeConfigDir Dir)? LoginButtonAt(Point p)
     {
-        foreach (var (rect, set) in _loginButtonRects)
+        foreach (var (rect, set, dir) in _loginButtonRects)
             if (rect.Contains(p))
-                return set;
+                return (set, dir);
         return null;
     }
 
     // Hover wash + hand cursor for the button; true while the pointer is over one.
     private bool UpdateLoginButtonHover(Point p)
     {
-        var over = InUsageStrip(p) ? LoginButtonAt(p) : null;
+        var over = InUsageStrip(p) ? LoginButtonAt(p)?.Set : null;
         if (!ReferenceEquals(over, _hoveredLoginButton)) { _hoveredLoginButton = over; InvalidateVisual(); }
         return over is not null;
     }
@@ -135,18 +136,18 @@ public sealed partial class OverlayCanvas
 
     private bool RouteLoginButtonClick(Point p)
     {
-        if (!InUsageStrip(p) || LoginButtonAt(p) is not { } set) return false;
-        LoginRequested?.Invoke(set.Dir);
+        if (!InUsageStrip(p) || LoginButtonAt(p) is not { } hit) return false;
+        LoginRequested?.Invoke(hit.Dir);
         return true;
     }
 
     // The usage tooltip's lines for an account that needs a login: what happened, and what the button does.
     private void AddLoginRequiredTooltipLines(List<OverlayTooltip.Line> lines, OrgUsage set, DateTime now)
     {
-        if (LoginRequiredReason(set, now) is not { } reason) return;
+        if (LoginNeedOf(set, now) is not { } need) return;
         lines.Add(OverlayTooltip.Line.Divider);
         lines.Add(new("Login required", AuthChipColor, true));
-        lines.Add(new(reason, OverlayTooltip.FgColor, false));
+        lines.Add(new(need.Reason, OverlayTooltip.FgColor, false));
         lines.Add(new("Click Login required to run claude auth login for this account in a terminal",
             OverlayTooltip.MutedColor, false));
     }

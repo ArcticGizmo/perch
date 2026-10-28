@@ -1,5 +1,52 @@
 # Keep sign-ins fresh (experimental): manual test prompts
 
+## Quick test
+
+Two scripts in `tools\signin-test\` work on the throwaway account at `~\.claude-envs\envs\test-dir` (pass `-ConfigDir` for another):
+
+- `claude-test.ps1` runs `claude` on that account. Arguments pass through, so `claude-test.ps1 auth login` signs it in.
+- `set-expiry.ps1` moves its token expiry (default 6 min out). `-Minutes -1` expires it now. `-BreakRefreshToken` also corrupts the refresh token.
+
+- `tray-test.ps1` runs the dev tray pinned to that account alone, if you'd rather it had a row to itself.
+
+The usage strip shows one row per account. If test-dir is signed into the same account as another config dir, it shares that dir's row (usually your main one), and its pill and **Login required** button show on that shared row. The tooltip's reason then starts with `test-dir:`, and the button logs in test-dir, not the row's own dir.
+
+**Once:** run the dev tray (`dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0`, or `tray-test.ps1`), turn on Settings → search "sign-in" → **Keep sign-ins fresh (experimental)**, and make sure the bars test-dir shows on are expanded, not a chip. Below, "test-dir's bars" means that row.
+
+**A. Renewal**
+
+1. `.\tools\signin-test\set-expiry.ps1`
+2. `.\tools\signin-test\claude-test.ps1`, then leave it open without typing.
+3. Watch test-dir's usage bars for up to 2 minutes:
+   - [ ] A **Renewing sign-in…** pill appears over the bars for about a second.
+   - [ ] It turns into a green **Sign-in renewed** for 10 seconds.
+   - [ ] On a row of its own, the hourglass on the test-dir header clears, and hovering it shows about 8 h left. (A shared row shows the other dir's reading, so its expiry doesn't change.)
+   - [ ] `~\.claude\.credentials.json` keeps its old modified time (your real sign-in isn't touched).
+4. Type a prompt in the claude window:
+   - [ ] It answers normally with no `/login` prompt.
+
+**B. Login required**
+
+1. `.\tools\signin-test\set-expiry.ps1 -Minutes -1 -BreakRefreshToken`
+2. Within about a minute:
+   - [ ] A Windows toast says "Claude login required - test-dir".
+   - [ ] test-dir's bars are washed out with a **Login required** button over them.
+   - [ ] Collapsed to a chip, it shows a smaller **Login required** (or **Log in**).
+   - [ ] Hovering the usage strip shows a tooltip ending "Login required" with the reason (prefixed `test-dir:` on a shared row).
+3. Click **Login required**:
+   - [ ] A terminal opens running `claude auth login` for test-dir.
+4. Finish the login:
+   - [ ] Within a minute the button disappears and the bars come back.
+
+**C. Off switch**
+
+1. Turn the setting off:
+   - [ ] Nothing renews (`set-expiry.ps1` then wait 2 min: no pill).
+
+If something doesn't match, `%APPDATA%\Perch (Dev)\logs\signin.log` says what the refresher did. It never contains token values.
+
+The sections below are the detailed reference.
+
 Manual checks for the opt-in sign-in refresher and the **Login required** button. It adds:
 
 - **A setting, off by default.** Settings → search "sign-in" → **Keep sign-ins fresh (experimental)** (`AppSettings.AutoRefreshSignIn`). While it's on, `SignInRefreshHost` checks every known config dir once a minute. A check is a file read; nothing runs unless a dir is due.

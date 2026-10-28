@@ -51,9 +51,10 @@ internal static class UsageDirSelection
     /// — each resolved to its org and tagged <c>Active</c>. Active dirs lead so that when the same account is
     /// signed into both an active and an idle dir the account is shown once, as active (dedupe keeps the first;
     /// null-org dirs are never collapsed). This is the input the poller turns into <c>OrgUsage</c> rows: the
-    /// active ones default to full bars on the overlay, the idle ones to compact chips.
+    /// active ones default to full bars on the overlay, the idle ones to compact chips. <c>Merged</c> lists the dirs
+    /// each entry absorbed, in order, so their own sign-in state can still be shown on it.
     /// </summary>
-    public static IReadOnlyList<(ClaudeConfigDir Dir, Org? Org, bool Active)> Resolve(
+    public static IReadOnlyList<(ClaudeConfigDir Dir, Org? Org, bool Active, IReadOnlyList<ClaudeConfigDir> Merged)> Resolve(
         IReadOnlyList<ClaudeConfigDir> active,
         IReadOnlyList<ClaudeConfigDir> allKnown,
         Func<ClaudeConfigDir, Org?> resolveOrg)
@@ -67,16 +68,22 @@ internal static class UsageDirSelection
         foreach (var d in active) if (seenDir.Add(d)) ordered.Add((d, true));
         foreach (var d in allKnown) if (seenDir.Add(d)) ordered.Add((d, activeSet.Contains(d)));
 
-        var seenAccount = new HashSet<string>(StringComparer.Ordinal);
-        var result = new List<(ClaudeConfigDir, Org?, bool)>();
+        // Account key → the merged-dir list of the entry that owns it.
+        var owners = new Dictionary<string, List<ClaudeConfigDir>>(StringComparer.Ordinal);
+        var result = new List<(ClaudeConfigDir, Org?, bool, IReadOnlyList<ClaudeConfigDir>)>();
         foreach (var (dir, isActive) in ordered)
         {
             var org = resolveOrg(dir);
             // Same account + org across dirs → one set (active-first, so the active one wins). A null org
             // (not signed in / unreadable) is never collapsed — each such dir keeps its own set.
-            if (org is { } o && !seenAccount.Add(AccountKey(o)))
+            if (org is { } o && owners.TryGetValue(AccountKey(o), out var merged))
+            {
+                merged.Add(dir);
                 continue;
-            result.Add((dir, org, isActive));
+            }
+            var mine = new List<ClaudeConfigDir>();
+            if (org is { } owned) owners[AccountKey(owned)] = mine;
+            result.Add((dir, org, isActive, mine));
         }
         return result;
     }

@@ -97,22 +97,29 @@ internal static class HeadlessRenderer
         // sits centred over its bars; the idle "umbrella" chip's lapsed login shows the compact button over its mini bars.
         var loginProbe = new OverlayCanvas();
         loginProbe.Update(SampleData.Sessions());
-        var loginSets = SampleData.OrgUsagesMany();
+        // The second account's state comes from a second config dir signed into it (merged into its bars), the way a
+        // throwaway test dir shares the primary's account; the first account's renewal, below, likewise.
+        var mergedLogin = new ClaudeConfigDir(@"C:\envs\test-dir");
+        var mergedRenew = new ClaudeConfigDir(@"C:\envs\spare");
+        var loginSets = SampleData.OrgUsagesMany()
+            .Select((s, i) => i switch { 0 => s with { Merged = [mergedRenew] }, 1 => s with { Merged = [mergedLogin] }, _ => s })
+            .ToList();
         loginProbe.UpdateUsage(loginSets);
         loginProbe.SetLoginRequired(new Dictionary<string, string>
         {
-            [loginSets[1].Dir.RealRoot] = "The sign-in server rejected the refresh token (invalid_grant).",
+            [mergedLogin.RealRoot] = "The sign-in server rejected the refresh token (invalid_grant).",
         });
         RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1x.png"), 96);
         RenderControl(loginProbe, Path.Combine(outDir, "overlay_usage_login_required_1.5x.png"), 144);
 
-        // The refresher at work: the first (expanded) account renewing, the idle "cyberdyne" chip just renewed.
+        // The refresher at work: the first (expanded) account renewing (through its merged dir), the idle "cyberdyne" chip
+        // just renewed.
         var renewProbe = new OverlayCanvas();
         renewProbe.Update(SampleData.Sessions());
         renewProbe.UpdateUsage(loginSets);
         renewProbe.SetSignInActivity(new Dictionary<string, SignInActivity>
         {
-            [loginSets[0].Dir.RealRoot] = SignInActivity.Renewing,
+            [mergedRenew.RealRoot] = SignInActivity.Renewing,
             [loginSets[2].Dir.RealRoot] = SignInActivity.Renewed,
         });
         RenderControl(renewProbe, Path.Combine(outDir, "overlay_usage_renewing_1x.png"), 96);
