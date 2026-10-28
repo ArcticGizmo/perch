@@ -1933,12 +1933,12 @@ public partial class App : Application
             () => new PlacementEditorWindow(ctx), () => _placementEditor = null);
     }
 
-    // The per-config-directory Agent Teams modal (the multi-dir form of the single toggle). Opened only from
-    // the settings catalogue, so the settings window owns it.
-    private void OpenAgentTeamsEditor()
+    // The per-config-directory modal for a Claude Code setting (the multi-dir form of its single toggle).
+    // Opened only from the settings window, so the settings window owns it.
+    private void OpenPerDirToggleEditor(SettingDescriptor setting)
     {
         if (_settings is not { } owner) return;
-        _ = new AgentTeamsDialog(ClaudeConfigSet.Instance.All).ShowDialog<bool>(owner);
+        _ = new ConfigDirToggleDialog(setting, ClaudeConfigSet.Instance.All).ShowDialog<bool>(owner);
     }
 
     // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
@@ -3652,7 +3652,7 @@ public partial class App : Application
             OpenAchievements = OpenAchievements,
             OpenQuickStart = ShowOnboarding,
             OpenPlacements = OpenPlacementEditor,
-            OpenAgentTeams = OpenAgentTeamsEditor,
+            OpenPerDirToggle = OpenPerDirToggleEditor,
             OpenStatuslineDesigner = OpenStatuslineDesigner,
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,

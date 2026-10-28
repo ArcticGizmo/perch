@@ -156,6 +156,7 @@ internal sealed class SettingsSearchView : StackPanel
         // for quick links, jumps to their manager) — so every row stays the same height and is editable.
         Control right = d switch
         {
+            { GetBoolForDir: not null } when ClaudeConfigSet.Instance.IsMulti                    => EditButton(() => _hooks.OpenPerDirToggle?.Invoke(d)),
             { Kind: SettingKind.Toggle } when d.GetBool is not null || d.GetBoolRaw is not null => LiveToggle(d),
             { Kind: SettingKind.List }                                                           => EditButton(() => Navigate?.Invoke(ListPageFor(d.Id))),
             _                                                                                     => EditButton(() => OpenEditor(d)),

@@ -618,14 +618,26 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.ShowChangelogOnUpdate),
             s => s.ShowChangelogOnUpdate, (s, v) => s.ShowChangelogOnUpdate = v),
 
-        // Not an AppSettings flag — this writes Claude Code's own settings.json env var, so it binds through
-        // the raw accessors and carries no Backing.
+        // Not AppSettings flags — these write Claude Code's own settings.json (per config dir), so they bind
+        // through the raw accessors and carry no Backing.
         new SettingDescriptor("agent-teams", "Enable Agent Teams in Claude Code",
             "Turn on Claude Code's experimental Agent Teams (multi-agent) feature via its settings.json.",
             SettingSurface.Advanced, SettingKind.Toggle,
             ["agent", "teams", "multi", "experimental", "claude code", "env"], PreviewTarget.None, Backing: [],
             GetBoolRaw: ClaudeUserSettings.IsAgentTeamsEnabled,
-            SetBoolRaw: v => ClaudeUserSettings.SetAgentTeamsEnabled(v)),
+            SetBoolRaw: v => ClaudeUserSettings.SetAgentTeamsEnabled(v),
+            GetBoolForDir: ClaudeUserSettings.IsAgentTeamsEnabled,
+            SetBoolForDir: (path, v) => ClaudeUserSettings.SetAgentTeamsEnabled(path, v)),
+
+        new SettingDescriptor("idle-compaction", "Idle compaction in Claude Code",
+            "Let Claude Code compact a long conversation while the session sits idle, before the prompt cache expires. Off writes \"idleCompaction\": false to its settings.json.",
+            SettingSurface.Advanced, SettingKind.Toggle,
+            ["idle", "compaction", "compact", "auto", "context", "cache", "summary", "claude code"],
+            PreviewTarget.None, Backing: [],
+            GetBoolRaw: ClaudeUserSettings.IsIdleCompactionEnabled,
+            SetBoolRaw: v => ClaudeUserSettings.SetIdleCompactionEnabled(v),
+            GetBoolForDir: ClaudeUserSettings.IsIdleCompactionEnabled,
+            SetBoolForDir: (path, v) => ClaudeUserSettings.SetIdleCompactionEnabled(path, v)),
     ];
 
     /// <summary>Finds a descriptor by its stable <see cref="SettingDescriptor.Id"/>, or null.</summary>

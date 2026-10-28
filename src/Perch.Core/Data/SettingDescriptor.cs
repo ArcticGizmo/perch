@@ -129,6 +129,10 @@ internal sealed record SettingDescriptor(
     // when these are set; the UI reads/writes through them instead of GetBool/SetBool.
     Func<bool>? GetBoolRaw = null,
     Action<bool>? SetBoolRaw = null,
+    // For a raw toggle that lives in each Claude config dir's own settings.json (keyed by that file's path):
+    // with several config dirs one switch can't represent them, so the UI offers a per-directory editor.
+    Func<string, bool>? GetBoolForDir = null,
+    Action<string, bool>? SetBoolForDir = null,
     // Whether this is a "fun / social / silly" feature that Quiet mode silences. QuietMode.Resolve masks
     // every playful toggle off while a quiet window is active, so a feature opts in here (at its definition)
     // rather than every use-site checking the quiet state. See Perch.Data.QuietMode.

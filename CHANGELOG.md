@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.47] - 2026-10-28
+
+- Turn off Claude Code's idle compaction from Perch's settings
+- Per-directory "Edit…" for Agent Teams and idle compaction, in search too (it was only half-honest before)
+
+---
+
 ## [v0.5.46] - 2026-10-28
 
 - Keep sign-ins fresh (experimental): Claude Code renews tokens before they lapse
