@@ -1599,6 +1599,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// for the app to flip its marker file.</summary>
     public event Action<string>? ExternalNotifyToggleRequested;
 
+    /// <summary>Raised when the user picks which worktree a session's PR/Jira glyphs follow: the worktree root to
+    /// pin, or null for "Automatic" (inferred from where the session last wrote a file).</summary>
+    public event Action<ClaudeSession, string?>? WorktreePinRequested;
+
     /// <summary>Raised when the user marks a session unread (re-arm its "done" badge) or read (clear it without
     /// focusing it). Carries the session's pid and true for unread.</summary>
     public event Action<string, bool>? ReadStateRequested;
@@ -4967,19 +4971,27 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-#if DEBUG
-        // Debug affordance: right-clicking the PR glyph offers to fire each PR alert (finished / approved /
-        // reviewed) for this session's PR, with the state/reviews synthesised, so the notification + banner
-        // path can be exercised on demand without a real merge/review. Its own early-return menu (like the
-        // artifact/daemon branches), and DEBUG-only — it never ships in a release build.
-        int prDebugRow = HitRect(_prRects, p);
-        if (prDebugRow >= 0 && _rows[prDebugRow].Session is { PullRequest: { } dpr } prSession)
+        // Right-clicking the PR glyph swaps which worktree it follows, right where the PR shows. Its own early-return
+        // menu (like the artifact/daemon branches); with nothing to offer it falls through to the row menu.
+        int prGlyphRow = HitRect(_prRects, p);
+        if (prGlyphRow >= 0 && _rows[prGlyphRow].Session is { PullRequest: { } dpr } prSession)
         {
+            var glyphItems = new List<Control>();
+            if (WorktreeMenuItems(prSession) is { } worktrees)
+            {
+                glyphItems.Add(new MenuItem { Header = "PR from worktree", IsEnabled = false });
+                glyphItems.AddRange(worktrees);
+            }
+#if DEBUG
+            // Fires each PR alert (finished / approved / reviewed) for this session's PR, with the state/reviews
+            // synthesised, so the notification + banner path can be exercised without a real merge/review.
+            // DEBUG-only — it never ships in a release build.
             ClaudeSession WithState(PrState st) => prSession with { PullRequest = dpr with { State = st } };
             ClaudeSession WithReview(PrReviewState st) =>
                 prSession with { PullRequest = dpr with { LatestReviews = [new PrReview("octocat", st, DateTime.Now)] } };
-            ShowFlyout(new List<Control>
-            {
+            if (glyphItems.Count > 0) glyphItems.Add(new Separator());
+            glyphItems.AddRange(
+            [
                 MenuItem("Debug: test 'PR merged' alert",
                     () => DebugTestPrEventRequested?.Invoke(WithState(PrState.Merged), NotificationKind.PrFinished)),
                 MenuItem("Debug: test 'PR closed' alert",
@@ -4990,10 +5002,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     () => DebugTestPrEventRequested?.Invoke(WithReview(PrReviewState.ChangesRequested), NotificationKind.PrReviewed)),
                 MenuItem("Debug: test 'PR reviewed' alert",
                     () => DebugTestPrEventRequested?.Invoke(WithReview(PrReviewState.Commented), NotificationKind.PrReviewed)),
-            });
-            return;
-        }
+            ]);
 #endif
+            if (glyphItems.Count > 0)
+            {
+                ShowFlyout(glyphItems);
+                return;
+            }
+        }
 
         var items = new List<Control>();
 
@@ -5056,6 +5072,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 actions.Add(MenuItem("View git history…", () => ViewTreeRequested?.Invoke(s)));
             if (isRepo && _gitKrakenAvailable)
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
+            if (isRepo && (_showPullRequests || _showJiraTickets) && WorktreeSubmenu(s) is { } worktreeMenu)
+                actions.Add(worktreeMenu);
             if (!subRow && _showNoteLine)
             {
                 actions.Add(MenuItem(s.HasProjectNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
@@ -5149,6 +5167,46 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         if (items.Count == 0) return;
         ShowFlyout(items);
+    }
+
+    // The row menu's worktree picker, as a submenu. Null when there's nothing to choose (see WorktreeMenuItems).
+    private MenuItem? WorktreeSubmenu(ClaudeSession s) =>
+        WorktreeMenuItems(s) is { } entries
+            ? new MenuItem { Header = _showPullRequests ? "Pull request worktree" : "Jira ticket worktree", ItemsSource = entries }
+            : null;
+
+    // Which of the repo's worktrees the PR/Jira glyphs follow: "Automatic" (Claude Code's cwd never moves into a
+    // worktree a session made itself, so it follows the last file write), then one radio item per worktree to pin.
+    // Shared by the row's submenu and the PR glyph's own right-click. Null when the repo has no linked worktrees.
+    // The worktree list is a few small reads under the repo's git dir, on the menu's open only.
+    private List<Control>? WorktreeMenuItems(ClaudeSession s)
+    {
+        if (SessionWorktree.WorktreesFor(s.Cwd) is not { } trees) return null;
+
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        static string Leaf(string path) => System.IO.Path.GetFileName(path.TrimEnd('\\', '/'));
+        // A menu header treats "_" as an access-key mnemonic, so double it to keep a literal underscore.
+        static string Escape(string text) => text.Replace("_", "__");
+
+        bool pinned = s.Worktree is { Pinned: true };
+        string auto = s.Worktree is { Pinned: false } inferred ? $"Automatic (last edits: {Leaf(inferred.Dir)})" : "Automatic";
+        var automatic = new MenuItem { Header = Escape(auto), ToggleType = MenuItemToggleType.Radio, IsChecked = !pinned };
+        automatic.Click += (_, _) => WorktreePinRequested?.Invoke(s, null);
+        var entries = new List<Control> { automatic, new Separator() };
+
+        foreach (var tree in trees)
+        {
+            var path = tree.Path;
+            var item = new MenuItem
+            {
+                Header = Escape($"{Leaf(path)} · {tree.Branch ?? "detached"}"),
+                ToggleType = MenuItemToggleType.Radio,
+                IsChecked = pinned && string.Equals(s.Worktree!.Value.Dir.TrimEnd('\\', '/'), path.TrimEnd('\\', '/'), cmp),
+            };
+            item.Click += (_, _) => WorktreePinRequested?.Invoke(s, path);
+            entries.Add(item);
+        }
+        return entries;
     }
 
     private MenuItem MenuItem(string header, Action onClick, Action? onMiddleClick = null)
@@ -5304,6 +5362,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             new($"#{pr.Number} · {stateWord} · {title}", OverlayTooltip.FgColor, true),
         };
+        // Says so when the PR isn't the session folder's own, so a glyph that differs from the cwd's branch reads
+        // as deliberate rather than wrong.
+        if (_rows[row].Session?.Worktree is { } wt)
+            lines.Add(new($"From worktree {System.IO.Path.GetFileName(wt.Dir.TrimEnd('\\', '/'))}{(wt.Pinned ? " (pinned)" : "")}",
+                OverlayTooltip.MutedColor, false));
 
         if (pr.Checks.Count == 0)
         {

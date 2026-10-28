@@ -448,6 +448,7 @@ public partial class App : Application
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
+            _overlay.Canvas.WorktreePinRequested += (s, worktree) => _monitorHost?.SetWorktreePin(s.SessionId, s.Cwd, worktree);
             _overlay.Canvas.ReadStateRequested += (pid, unread) =>
             {
                 if (unread) _monitorHost?.MarkUnread(pid);
