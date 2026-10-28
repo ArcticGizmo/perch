@@ -142,6 +142,75 @@ public class UsageOrgTests
         Assert.Equal(new[] { true, false, false }, result.Select(r => r.Active));
     }
 
+    [Fact]
+    public void Resolve_RecordsTheDirsFoldedIntoEachAccount()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var work = Dir(@"C:\envs\work\.claude");     // a second account
+        var dupA = Dir(@"C:\envs\dup-a\.claude");    // same account as primary
+        var dupB = Dir(@"C:\envs\dup-b\.claude");    // same account as primary
+        var me = new Org("org-acme") { AccountEmail = "me@example.com" };
+        var other = new Org("org-acme") { AccountEmail = "other@example.com" };
+
+        var result = UsageDirSelection.Resolve(
+            active: new[] { primary },
+            allKnown: new[] { primary, dupA, work, dupB },
+            resolveOrg: d => d.Equals(work) ? other : me);
+
+        Assert.Equal(new[] { primary, work }, result.Select(r => r.Dir));
+        Assert.Equal(new[] { dupA, dupB }, result[0].Merged);
+        Assert.Empty(result[1].Merged);
+    }
+
+    // A test dir signed into the same account as the primary shares its bars, so the refresher's state for it must
+    // show there, and the button must log in the dir that actually needs it.
+    [Fact]
+    public void LoginNeed_ComesFromAMergedDirWhenTheOwnerIsFine()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var test = Dir(@"C:\envs\test-dir");
+        var set = new OrgUsage(primary, null, UsageInfo.Empty) { Merged = [test] };
+        var now = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc);
+
+        Assert.Null(set.LoginNeed(new Dictionary<string, string>(), now));
+
+        var need = set.LoginNeed(new Dictionary<string, string> { [test.RealRoot] = "Rejected." }, now)!.Value;
+        Assert.Equal(test, need.Dir);
+        Assert.Equal($"{test.Label}: Rejected.", need.Reason);
+
+        // The owner's own need leads, and keeps its reason unprefixed (the heading already names it).
+        var both = set.LoginNeed(new Dictionary<string, string> { [primary.RealRoot] = "Own.", [test.RealRoot] = "Rejected." }, now)!.Value;
+        Assert.Equal(new LoginNeed(primary, "Own."), both);
+    }
+
+    [Fact]
+    public void LoginNeed_OwnersLapsedLoginClockStillCounts()
+    {
+        var now = new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc);
+        var primary = Dir(@"C:\Users\me\.claude");
+        var usage = UsageInfo.Empty with { Auth = new AuthExpiry(null, now.AddMinutes(-1)) };
+        var set = new OrgUsage(primary, null, usage) { Merged = [Dir(@"C:\envs\test-dir")] };
+
+        Assert.Equal(primary, set.LoginNeed(new Dictionary<string, string>(), now)?.Dir);
+    }
+
+    [Fact]
+    public void Activity_CoversMergedDirs_AndRenewingOutranksRenewed()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var a = Dir(@"C:\envs\a");
+        var b = Dir(@"C:\envs\b");
+        var set = new OrgUsage(primary, null, UsageInfo.Empty) { Merged = [a, b] };
+
+        Assert.Null(set.Activity(new Dictionary<string, SignInActivity>()));
+        Assert.Equal(SignInActivity.Renewed, set.Activity(new Dictionary<string, SignInActivity> { [b.RealRoot] = SignInActivity.Renewed }));
+        Assert.Equal(SignInActivity.Renewing, set.Activity(new Dictionary<string, SignInActivity>
+        {
+            [primary.RealRoot] = SignInActivity.Renewed,
+            [b.RealRoot] = SignInActivity.Renewing,
+        }));
+    }
+
     [Theory]
     [InlineData("Fable", "F")]
     [InlineData("Claude Fable 5.1", "F")]

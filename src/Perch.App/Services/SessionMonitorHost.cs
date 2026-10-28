@@ -140,6 +140,11 @@ internal sealed class SessionMonitorHost : IDisposable
     /// the overlay's mail glyph + menu wording refresh.</summary>
     public void ToggleExternalNotify(string sessionId) => OnWorker(() => _monitor.ToggleExternalNotify(sessionId));
 
+    /// <summary>Pins (or, with null, unpins) the worktree a session's PR/Jira glyphs read from, and rescans so
+    /// they follow at once.</summary>
+    public void SetWorktreePin(string sessionId, string cwd, string? worktree) =>
+        OnWorker(() => _monitor.SetWorktreePin(sessionId, cwd, worktree));
+
     /// <summary>Sets or clears the project note shared by every session under <paramref name="cwd"/>
     /// (writes/deletes the project's <c>project.note</c> sidecar) and rescans so the overlay's note glyph
     /// refreshes. A null/blank text clears it.</summary>

@@ -26,6 +26,8 @@ public partial class App : Application
 {
     private SessionMonitorHost? _monitorHost;
     private UsageMonitorHost? _usageHost;
+    private SignInRefreshHost? _signInHost;
+    private CredentialWatchHost? _credentialWatch;
     private MetricsMonitorHost? _metricsHost;
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
@@ -188,6 +190,8 @@ public partial class App : Application
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
+                _signInHost?.Dispose();
+                _credentialWatch?.Dispose();
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
@@ -280,6 +284,23 @@ public partial class App : Application
                 settings.Save();
             }
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
+            // The opt-in sign-in refresher (started from ApplyDisplaySettings per AutoRefreshSignIn). A renewal or a
+            // recovered login re-polls usage so the strip leaves its stale/expired state without waiting 5 minutes.
+            _signInHost = new SignInRefreshHost(PlatformServices.ClaudeCredentials);
+            _signInHost.Changed += map =>
+            {
+                _overlay?.Canvas.SetLoginRequired(map);
+                SyncCredentialWatch();
+            };
+            _signInHost.ActivityChanged += map => _overlay?.Canvas.SetSignInActivity(map);
+            _signInHost.LoginLost += OnLoginLost;
+            _signInHost.Refreshed += () => { if (_appSettings?.ShowUsage == true) _ = _usageHost?.RefreshAsync(); };
+            _overlay.Canvas.LoginRequested += OpenLoginTerminal;
+            // While an account needs a login, its credentials file is watched so the button clears as soon as any login
+            // lands, not on the next pass/poll. Which accounts need one changes with the refresher and with each usage poll.
+            _credentialWatch = new CredentialWatchHost();
+            _credentialWatch.Changed += OnCredentialsChanged;
+            _usageHost.Updated += _ => SyncCredentialWatch();
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
@@ -438,6 +459,7 @@ public partial class App : Application
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
+            _overlay.Canvas.WorktreePinRequested += (s, worktree) => _monitorHost?.SetWorktreePin(s.SessionId, s.Cwd, worktree);
             _overlay.Canvas.ReadStateRequested += (pid, unread) =>
             {
                 if (unread) _monitorHost?.MarkUnread(pid);
@@ -1094,6 +1116,9 @@ public partial class App : Application
 
         // Feeds: subscriptions + interval + on/off into the engine (idempotent; off fetches nothing).
         _feedsHost?.Apply(s);
+
+        // The experimental sign-in refresher runs only while opted in (idempotent).
+        _signInHost?.SetEnabled(s.AutoRefreshSignIn);
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
@@ -2119,8 +2144,10 @@ public partial class App : Application
     }
 
     private const string FeedToastPrefix = "feed:";
+    private const string LoginToastPrefix = "login:";
 
-    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news).
+    // An action toast was clicked. "feed:<id>" plays that feed ("feed:" alone, the first with news); "login:<root>"
+    // opens the login terminal for that config dir.
     private void OnToastAction(string action)
     {
         if (action.StartsWith(FeedToastPrefix, StringComparison.Ordinal))
@@ -2128,6 +2155,74 @@ public partial class App : Application
             var id = action[FeedToastPrefix.Length..];
             OpenFeedStory(id.Length > 0 ? id : null);
         }
+        else if (action.StartsWith(LoginToastPrefix, StringComparison.Ordinal)
+                 && ClaudeConfigSet.Instance.ForRoot(action[LoginToastPrefix.Length..]) is { } dir)
+        {
+            OpenLoginTerminal(dir);
+        }
+    }
+
+    // The sign-in refresher found an account's login dead: say so once (the overlay's button stays until it's fixed).
+    // Held by the notifications master switch like every other toast, but not by Quiet mode — it isn't playful.
+    private void OnLoginLost(ClaudeConfigDir dir, string reason)
+    {
+        // Which usage row carries the button: the dir's own, or the account's it's merged into. Logged because a button
+        // on no row is otherwise invisible, with only the toast to show for it.
+        static bool Is(ClaudeConfigDir a, ClaudeConfigDir b) => ClaudeConfigDir.PathComparer.Equals(a.RealRoot, b.RealRoot);
+        var rows = _usageHost?.Last ?? [];
+        var row = rows.FirstOrDefault(r => Is(r.Dir, dir)) ?? rows.FirstOrDefault(r => r.Merged.Any(m => Is(m, dir)));
+        DiagnosticLog.Append("signin.log", row is not null ? $"{dir.Label}: button on usage row {row.Dir.Label}"
+            : rows.Count == 0 ? $"{dir.Label}: usage not read yet; the button appears with the first reading"
+            : $"{dir.Label}: on no usage row (rows: {string.Join(", ", rows.Select(r => $"{r.Dir.Label}[{string.Join("+", r.Merged.Select(m => m.Label))}]"))})");
+
+        if (Effective is not { NotificationsEnabled: true } || _notifier is null) return;
+        var name = row is not null && Is(row.Dir, dir) ? row.Header : dir.DisplayLabel ?? dir.Label;
+        _notifier.ShowAction($"Claude login required - {name}",
+            $"{reason} Perch won't log in for you. Click to run claude auth login in a terminal.",
+            ToastLevel.Warning, LoginToastPrefix + dir.RealRoot);
+    }
+
+    // Watches exactly the dirs that need a login: those the refresher found dead, plus any account whose own login clock
+    // has lapsed (shown even with the refresher off). A merged dir only ever needs one through the refresher.
+    private void SyncCredentialWatch()
+    {
+        if (_credentialWatch is null) return;
+        var dead = _signInHost?.LoginRequired ?? new Dictionary<string, string>();
+        var dirs = ClaudeConfigSet.Instance.All.Where(d => dead.ContainsKey(d.RealRoot)).ToList();
+        var noReasons = new Dictionary<string, string>();
+        var now = DateTime.Now;
+        foreach (var row in _usageHost?.Last ?? [])
+            if (row.LoginNeed(noReasons, now) is { } need)
+                dirs.Add(need.Dir);
+        _credentialWatch.Watch(dirs);
+    }
+
+    // A watched credentials file changed: re-judge now. The refresher re-reads every dir and, on a recovered login,
+    // raises Refreshed (which re-polls usage); with it off, re-poll usage directly so a lapsed login clock is re-read.
+    private void OnCredentialsChanged()
+    {
+        if (_appSettings?.AutoRefreshSignIn == true) _signInHost?.Nudge();
+        else if (_appSettings?.ShowUsage == true) _ = _usageHost?.RefreshAsync();
+    }
+
+    // "Login required" (the overlay button or its toast): a terminal running `claude auth login` under that account's
+    // config dir. The primary inherits Perch's environment, as every launch does (SessionAccountChoice.InjectRootFor):
+    // pinning ~/.claude explicitly would move Claude's .claude.json lookup.
+    private void OpenLoginTerminal(ClaudeConfigDir dir)
+    {
+        string? configDir = dir.Equals(ClaudeConfigSet.Instance.Primary) ? null : dir.Root;
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(home, "auth login",
+                _appSettings?.ReopenTerminal ?? TerminalApp.Auto, configDir))
+        {
+            _signInHost?.Nudge();
+            return;
+        }
+        _notifier?.Show("Couldn't open a terminal",
+            configDir is null
+                ? "Run claude auth login in a terminal to log in again."
+                : $"Run claude auth login in a terminal with CLAUDE_CONFIG_DIR set to {configDir} to log in again.",
+            ToastLevel.Warning, null, null);
     }
 
     // A head (or the "+N" chip, null) was clicked: play its story in the one story window, opened centred on the

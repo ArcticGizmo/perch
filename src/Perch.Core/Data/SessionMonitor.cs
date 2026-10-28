@@ -145,6 +145,7 @@ internal sealed class SessionMonitor : IDisposable
     private readonly MarkdownFilesReader _markdown = new();
     private readonly GitStatsService _gitStats = new();
     private readonly PrStatusService _pr = new();
+    private readonly SessionWorktree _worktree = new();
 
     // Last-known PR (number + state) per working directory, so a transition into a finalised state
     // (open/draft -> merged/closed) fires the "PR finished" alert exactly once. Keyed by cwd because a
@@ -363,6 +364,12 @@ internal sealed class SessionMonitor : IDisposable
             return File.Exists(marker);
         }
     }
+
+    /// <summary>Pins a session's PR/Jira lookups to one of its repo's worktrees, or clears the pin (null) so the
+    /// worktree is inferred from its edits again. Call <see cref="Scan"/> afterwards. See
+    /// <see cref="SessionWorktree"/>.</summary>
+    public void SetWorktreePin(string sessionId, string cwd, string? worktree) =>
+        SessionWorktree.WritePin(sessionId, cwd, worktree);
 
     /// <summary>
     /// The <c>sessions/</c> dir that owns <paramref name="sessionId"/> — the directory its sidecars were
@@ -920,10 +927,16 @@ internal sealed class SessionMonitor : IDisposable
             // triggers a repaint when it lands.
             var gitStats = _gitStats.Get(cwd);
 
+            // The worktree the session is really working in, when that isn't cwd's: Claude Code never moves cwd
+            // into a worktree the session made itself and edits by absolute path. Only the branch-scoped lookups
+            // (PR, Jira) follow it. Skipped entirely while neither integration is on.
+            var worktree = _pr.Enabled || _jiraEnabled ? _worktree.Resolve(sessionId, cwd) : null;
+            var branchCwd = worktree?.Dir ?? cwd;
+
             // The GitHub PR for this working directory's branch. Same gating as git stats: while the
             // integration is off this returns null without ever launching gh, and a known value is served
             // from a long (poll-interval) cache so a scan never blocks on gh.
-            var pullRequest = _pr.Get(cwd);
+            var pullRequest = _pr.Get(branchCwd);
 
             // The Jira ticket deep-linked from this working tree's branch name. Pure and offline — a cheap
             // HEAD read (reused from the PR service's helper) plus a regex — so it's resolved inline rather
@@ -931,7 +944,7 @@ internal sealed class SessionMonitor : IDisposable
             JiraTicketInfo? jiraTicket = null;
             if (_jiraEnabled && !string.IsNullOrWhiteSpace(JiraSubdomain))
                 jiraTicket = JiraLink.Resolve(
-                    JiraLink.BranchFromHeadRef(PrStatusService.ReadHeadRef(cwd)), JiraSubdomain, JiraProjectFilter);
+                    JiraLink.BranchFromHeadRef(PrStatusService.ReadHeadRef(branchCwd)), JiraSubdomain, JiraProjectFilter);
 
             // Which editor/IDE hosts this session (VS Code, Cursor, a JetBrains IDE, …), resolved from the
             // session process's ancestry. Nothing in the session file distinguishes it — Claude Code records
@@ -985,6 +998,7 @@ internal sealed class SessionMonitor : IDisposable
                 ReportedSlug = reportedSlug,
                 WorkRef = workRef,
                 BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
+                Worktree = worktree,
             };
 
             // Write down which account this session runs under while it's live: once it ends, the hook deletes its
@@ -1009,12 +1023,13 @@ internal sealed class SessionMonitor : IDisposable
                 _apiErrorPids.Remove(pid);
 
             // A PR tracked for this directory just went from open/draft to finalised (merged or closed):
-            // fire the "PR finished" alert once. Keyed by cwd + number so sibling sessions and later scans
-            // don't re-alert, and a PR already finalised the first time we see it (Perch started after the
-            // merge, or the branch was switched to a landed PR) is recorded silently rather than announced.
+            // fire the "PR finished" alert once. Keyed by the directory the PR was read from + number so sibling
+            // sessions and later scans don't re-alert, and a PR already finalised the first time we see it (Perch
+            // started after the merge, or the branch was switched to a landed PR) is recorded silently rather
+            // than announced.
             if (pullRequest is { } pr)
             {
-                PullRequestInfo? prev = _lastPr.TryGetValue(cwd, out var prevPr) ? prevPr : null;
+                PullRequestInfo? prev = _lastPr.TryGetValue(branchCwd, out var prevPr) ? prevPr : null;
                 if (IsPrFinishTransition(prev, pr))
                     PrFinished?.Invoke(session);
 
@@ -1031,7 +1046,7 @@ internal sealed class SessionMonitor : IDisposable
                         PrReviewed?.Invoke(session);
                 }
 
-                _lastPr[cwd] = pr;
+                _lastPr[branchCwd] = pr;
             }
 
             return session;

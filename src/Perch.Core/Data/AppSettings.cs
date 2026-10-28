@@ -99,6 +99,11 @@ internal sealed class AppSettings
     // when the refresh token does (i.e. when the account must /login again). Dimmed until one is close.
     public bool ShowAuthExpiry { get; set; } = true;
 
+    // Experimental and opt-in: 5 minutes before an account's OAuth access token expires, Perch briefly runs Claude Code
+    // to renew it, so usage keeps polling and new/restarted sessions start signed in with no interactive Claude Code
+    // running. It never logs in — a dead login surfaces as a "Login required" button instead. See SignInRefresher.
+    public bool AutoRefreshSignIn { get; set; }
+
     // Whether to surface per-session context-window pressure — the thermometer glyph that appears on
     // a session row once its context fill crosses the warning threshold. Off hides the glyph entirely
     // (the fill is still computed; it just isn't drawn). Defaults to true; a missing key keeps it on.

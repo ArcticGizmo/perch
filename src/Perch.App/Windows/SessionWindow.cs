@@ -3667,8 +3667,13 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
                 if (gen != _accountGen || _session is not null) return;   // superseded, or a session attached
                 _signIns = signIns;
                 _accountChoices = set;
-                _accountPicked = false;   // folder/guardrail may have changed the valid set — re-apply the default
-                _accountPickKey = null;
+                // A guardrail decides the account for its folder, so a restricted folder re-applies its default. Any other
+                // folder offers every dir, so an account chosen before the folder still stands.
+                if (set.Restricted)
+                {
+                    _accountPicked = false;
+                    _accountPickKey = null;
+                }
                 // A guardrail that leaves exactly one option locks the selector: nothing to change, so it reads
                 // read-only with a lock rather than a clickable chevron.
                 _accountLocked = set.Restricted && !set.GuardrailUnsatisfiable && set.Options.Count == 1;

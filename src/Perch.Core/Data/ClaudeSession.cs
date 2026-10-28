@@ -254,11 +254,16 @@ public record ClaudeSession(
     public GitLineStats? GitStats { get; init; } = GitStats;
 
     /// <summary>
-    /// The pull request for this session's working directory (<see cref="Cwd"/>) on its current branch,
-    /// read from the GitHub CLI. Null when the PR feature is off, the value isn't known yet, the directory
-    /// isn't a GitHub repo, or the branch simply has no PR. See <see cref="PrStatusService"/>.
+    /// The pull request for this session's working directory (<see cref="Cwd"/>, or <see cref="Worktree"/> when
+    /// set) on its current branch, read from the GitHub CLI. Null when the PR feature is off, the value isn't
+    /// known yet, the directory isn't a GitHub repo, or the branch simply has no PR. See <see cref="PrStatusService"/>.
     /// </summary>
     public PullRequestInfo? PullRequest { get; init; } = PullRequest;
+
+    /// <summary>The worktree <see cref="PullRequest"/> and <see cref="JiraTicket"/> were read from when it isn't
+    /// the one holding <see cref="Cwd"/>: pinned from the row menu, or inferred from where the session last wrote
+    /// a file. Null when they follow <see cref="Cwd"/>, or both integrations are off. See <see cref="SessionWorktree"/>.</summary>
+    public SessionWorktreeChoice? Worktree { get; init; }
 
     /// <summary>True when this session's branch has a pull request to surface.</summary>
     public bool HasPullRequest => PullRequest != null;
