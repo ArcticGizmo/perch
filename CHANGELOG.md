@@ -9,6 +9,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.46] - 2026-10-28
+
+- Keep sign-ins fresh (experimental): Claude Code renews tokens before they lapse
+- "Renewing sign-in…" / "Sign-in renewed" over the usage bars
+- "Login required" button when an account needs logging in (Perch won't do it for you)
+- Login required clears the moment you log in, however you do it
+- Sign-in state for accounts that share a login shows on their shared bars
+- Declared accounts appear in the usage strip promptly at launch
+- PR glyph follows the worktree a session actually works in (not the one it claims)
+- Pick a session's PR worktree from its menu or the PR glyph
+- Middle-click "Open in GitHub" on the dashboard opens a new window
+- Session launcher keeps the picked account when the folder changes
+
+---
+
 ## [v0.5.45] - 2026-10-27
 
 - Emoji in PR check names and titles render (no more `ðŸ”`)
