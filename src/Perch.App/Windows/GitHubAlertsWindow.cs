@@ -394,11 +394,19 @@ internal sealed class GitHubAlertsWindow : Window
         }
 
         var open = OutlineButton("Open in GitHub");
-        ToolTip.SetTip(open, pr.Url);
+        ToolTip.SetTip(open, $"{pr.Url}\nMiddle-click for a new window");
         open.Click += (_, _) =>
         {
             PlatformServices.UrlOpener.Open(pr.Url);
             _host.MarkSeen(pr.Url);
+        };
+        // A Button only clicks on the left button, so a middle-click is caught on its release, like the overlay's links.
+        open.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Middle) return;
+            PlatformServices.UrlOpener.OpenInNewWindow(pr.Url);
+            _host.MarkSeen(pr.Url);
+            e.Handled = true;
         };
 
         // Hide (a dismissal in the code) keeps the PR out of view until its state changes; in the Hidden tab the same

@@ -62,6 +62,16 @@ In a repo with no linked worktrees, the row-menu entry doesn't appear at all, an
 1. Pin session 1 to `<repo>--wt`, exit it, and `claude --resume` the same session. The pin is still applied (the file sits beside the transcript as `<sessionId>.perch-worktree`).
 2. `git worktree remove ..\<repo>--wt`. Within ~30 s the pin is ignored and the row falls back to Automatic.
 
+## 4. GitHub dashboard: middle-click "Open in GitHub"
+
+Open the GitHub dashboard (click the overlay's GitHub strip) and middle-click a card's **Open in GitHub**.
+
+| | Before | After |
+|---|---|---|
+| Middle-click | Nothing happens | The PR opens in a new browser window; the card is marked seen |
+| Left-click | Opens in the current browser window | Unchanged |
+| Button tooltip | The PR URL | The PR URL, then `Middle-click for a new window` |
+
 ## Clean up
 
 `git worktree remove ..\<repo>--wt` (if still present) and revert the README edit.
