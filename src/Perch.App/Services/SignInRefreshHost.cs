@@ -20,7 +20,7 @@ internal sealed class SignInRefreshHost : IDisposable
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromMinutes(2);
     // A renewal takes about a second, so its confirmation lingers long enough to be seen.
-    private static readonly TimeSpan RenewedShownFor = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan RenewedShownFor = TimeSpan.FromSeconds(5);
     private const string Log = "signin.log";
 
     private readonly SignInRefresher _refresher = new();
@@ -31,6 +31,7 @@ internal sealed class SignInRefreshHost : IDisposable
     private readonly Dictionary<string, SignInActivity> _activity = new(ClaudeConfigDir.PathComparer);
     private bool _started;
     private bool _running;
+    private bool _rerun;
 
     /// <summary>Accounts whose login the refresher found dead, by <see cref="ClaudeConfigDir.RealRoot"/>, with why.</summary>
     public IReadOnlyDictionary<string, string> LoginRequired => _loginRequired;
@@ -53,7 +54,12 @@ internal sealed class SignInRefreshHost : IDisposable
         _primary = primary;
         _timer = new DispatcherTimer { Interval = Interval };
         _timer.Tick += (_, _) => _ = Tick();
+        // At launch the declared dirs join the set after the first pass has run, so without this a dir that needs a
+        // login (or a renewal) waited a whole interval to be looked at. Also covers a dir added in Settings.
+        ClaudeConfigSet.Changed += OnConfigSetChanged;
     }
+
+    private void OnConfigSetChanged() => Dispatcher.UIThread.Post(Nudge);
 
     /// <summary>Starts or stops refreshing to match the setting. Idempotent. Call on the UI thread.</summary>
     public void SetEnabled(bool enabled)
@@ -89,8 +95,16 @@ internal sealed class SignInRefreshHost : IDisposable
 
     private async Task Tick()
     {
-        if (_running || !_started) return;
+        if (!_started) return;
+        if (_running)
+        {
+            // A nudge mid-pass (a dir just joined, a credentials file changed) may concern what this pass already
+            // read, so it gets a pass of its own right after rather than being dropped.
+            _rerun = true;
+            return;
+        }
         _running = true;
+        _rerun = false;
         try
         {
             var now = DateTime.UtcNow;
@@ -114,6 +128,7 @@ internal sealed class SignInRefreshHost : IDisposable
         {
             _running = false;
         }
+        if (_rerun) await Tick();
     }
 
     private void Apply(List<(ClaudeConfigDir Dir, RefreshResult Result)> results)
@@ -184,6 +199,7 @@ internal sealed class SignInRefreshHost : IDisposable
 
     public void Dispose()
     {
+        ClaudeConfigSet.Changed -= OnConfigSetChanged;
         _started = false;
         _timer.Stop();
     }

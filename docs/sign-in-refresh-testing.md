@@ -2,24 +2,19 @@
 
 ## Quick test
 
-Two scripts in `tools\signin-test\` work on the throwaway account at `~\.claude-envs\envs\test-dir` (pass `-ConfigDir` for another):
+Use a throwaway config dir ("test-dir"), signed in with `claude auth login` under `CLAUDE_CONFIG_DIR=<test-dir>` and added in Settings → Claude config dirs. The PowerShell snippets under **Setup** and **3** below move its expiry and break its refresh token. Point their `$f` at `<test-dir>\.credentials.json`.
 
-- `claude-test.ps1` runs `claude` on that account. Arguments pass through, so `claude-test.ps1 auth login` signs it in.
-- `set-expiry.ps1` moves its token expiry (default 6 min out). `-Minutes -1` expires it now. `-BreakRefreshToken` also corrupts the refresh token.
+The usage strip shows one row per account. If test-dir is signed into the same account as another config dir, it shares that dir's row (usually your main one), and its pill and **Login required** button show on that shared row. The tooltip's reason then starts with `test-dir:`, and the button logs in test-dir, not the row's own dir. To give it a row of its own, start the dev tray with `CLAUDE_CONFIG_DIR` set to test-dir.
 
-- `tray-test.ps1` runs the dev tray pinned to that account alone, if you'd rather it had a row to itself.
-
-The usage strip shows one row per account. If test-dir is signed into the same account as another config dir, it shares that dir's row (usually your main one), and its pill and **Login required** button show on that shared row. The tooltip's reason then starts with `test-dir:`, and the button logs in test-dir, not the row's own dir.
-
-**Once:** run the dev tray (`dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0`, or `tray-test.ps1`), turn on Settings → search "sign-in" → **Keep sign-ins fresh (experimental)**, and make sure the bars test-dir shows on are expanded, not a chip. Below, "test-dir's bars" means that row.
+**Once:** run the dev tray (`dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0`), turn on Settings → search "sign-in" → **Keep sign-ins fresh (experimental)**, and make sure the bars test-dir shows on are expanded, not a chip. Below, "test-dir's bars" means that row.
 
 **A. Renewal**
 
-1. `.\tools\signin-test\set-expiry.ps1`
-2. `.\tools\signin-test\claude-test.ps1`, then leave it open without typing.
+1. Run the **Setup** snippet (expiry 6 minutes out).
+2. Start `claude` with `CLAUDE_CONFIG_DIR=<test-dir>` and leave it open without typing.
 3. Watch test-dir's usage bars for up to 2 minutes:
    - [ ] A **Renewing sign-in…** pill appears over the bars for about a second.
-   - [ ] It turns into a green **Sign-in renewed** for 10 seconds.
+   - [ ] It turns into a green **Sign-in renewed** for 5 seconds.
    - [ ] On a row of its own, the hourglass on the test-dir header clears, and hovering it shows about 8 h left. (A shared row shows the other dir's reading, so its expiry doesn't change.)
    - [ ] `~\.claude\.credentials.json` keeps its old modified time (your real sign-in isn't touched).
 4. Type a prompt in the claude window:
@@ -27,7 +22,7 @@ The usage strip shows one row per account. If test-dir is signed into the same a
 
 **B. Login required**
 
-1. `.\tools\signin-test\set-expiry.ps1 -Minutes -1 -BreakRefreshToken`
+1. Run the snippet under **3. Login required** (breaks the refresh token and expires the access token).
 2. Within about a minute:
    - [ ] A Windows toast says "Claude login required - test-dir".
    - [ ] test-dir's bars are washed out with a **Login required** button over them.
@@ -36,12 +31,14 @@ The usage strip shows one row per account. If test-dir is signed into the same a
 3. Click **Login required**:
    - [ ] A terminal opens running `claude auth login` for test-dir.
 4. Finish the login:
-   - [ ] Within a minute the button disappears and the bars come back.
+   - [ ] Within a couple of seconds of the login finishing, the button disappears and the bars come back.
+5. Repeat B, but this time log in from another route, e.g. `/login` inside a `claude` running on test-dir, or `claude auth login` in a fresh terminal with `CLAUDE_CONFIG_DIR=<test-dir>`:
+   - [ ] The button clears just as quickly. Perch watches the credentials file of any account showing the button, so any route that writes it counts.
 
 **C. Off switch**
 
 1. Turn the setting off:
-   - [ ] Nothing renews (`set-expiry.ps1` then wait 2 min: no pill).
+   - [ ] Nothing renews (run the **Setup** snippet, then wait 2 min: no pill).
 
 If something doesn't match, `%APPDATA%\Perch (Dev)\logs\signin.log` says what the refresher did. It never contains token values.
 
@@ -55,7 +52,8 @@ Manual checks for the opt-in sign-in refresher and the **Login required** button
 - **Never a login.** An expired login, a missing refresh token or a signed-out account is marked **login required**, and the CLI isn't run for it.
 - **The nudge.** A one-off toast, "Claude login required - <account>", says what happened (it's held by the notifications master switch). A **Login required** button sits centred over that account's usage bars, which are washed out. On a collapsed chip the button is a smaller version over the mini bars. The usage tooltip gets a "Login required" section with the reason. Clicking the button or the toast opens a terminal running `claude auth login`. The primary account inherits Perch's environment; any other account gets `CLAUDE_CONFIG_DIR=<its dir>`.
 - **A lapsed login clock shows the button even with the setting off**, since that account needs `/login` either way.
-- **You can watch it happen.** While the CLI runs for an account, a **Renewing sign-in…** pill sits centred over its usage bars; once renewed it turns into **Sign-in renewed** for 10 seconds. Not clickable, and the Login required button takes the spot when that applies.
+- **You can watch it happen.** While the CLI runs for an account, a **Renewing sign-in…** pill sits centred over its usage bars; once renewed it turns into **Sign-in renewed** for 5 seconds.
+- **The button clears as soon as a login lands.** While an account shows **Login required**, Perch watches its `.credentials.json`. Any write to it (the button's terminal, `/login` in a session, another tool) re-checks within about a second, rather than waiting for the next minute pass or the 5-minute usage poll. The macOS primary keeps its sign-in in the Keychain, so there it still clears on the next pass. Not clickable, and the Login required button takes the spot when that applies.
 
 Outcomes go to `logs/signin.log` (renewed / failed / login required). Token values are never logged.
 
@@ -103,7 +101,7 @@ A refresh issues a new refresh token, so an open Claude Code holding the old one
 | `C:\tmp\perch-signin-test\.credentials.json` | Modified time updated, `expiresAt` about 8 h out. Key names unchanged (check with a key-only grep, never print the values) |
 | `~/.claude/.credentials.json` | Untouched |
 | Usage strip | The test account re-polls straight away. Its hourglass chip clears, and the tooltip shows about 8 h left |
-| Overlay while it renews | A **Renewing sign-in…** pill (accent) centred over the test account's bars for the ~1 s the CLI runs, then **Sign-in renewed** (green) for 10 s. On a collapsed chip: the same pills, smaller (**Renewing…** / **Renewed** when narrow). Possibly a ~1 s blip of a background session under Autonomous (the CLI run's own session file) |
+| Overlay while it renews | A **Renewing sign-in…** pill (accent) centred over the test account's bars for the ~1 s the CLI runs, then **Sign-in renewed** (green) for 5 s. On a collapsed chip: the same pills, smaller (**Renewing…** / **Renewed** when narrow). Possibly a ~1 s blip of a background session under Autonomous (the CLI run's own session file) |
 | The prompt in step 4 | Answers normally. No `/login` prompt, now or later in that session |
 | A Perch-controlled session on that dir started **after** the refresh | Its sign-in banner (if any) shows the new expiry |
 | Next pass | Not due again, so no new `renewed` line |
@@ -131,7 +129,7 @@ $j.claudeAiOauth.expiresAt = [DateTimeOffset]::UtcNow.AddMinutes(-1).ToUnixTimeM
 | `logs/signin.log` | One `login required - …` line. Later passes don't run the CLI again (no repeated lines) |
 | Click the button | A terminal opens running `claude auth login` with `CLAUDE_CONFIG_DIR=C:\tmp\perch-signin-test` |
 | Click the toast instead | The same terminal |
-| Finish the login | Within a minute the button disappears and usage re-polls |
+| Finish the login | Within a couple of seconds the button disappears and usage re-polls |
 
 ## 4. Expired login clock (setting on or off)
 

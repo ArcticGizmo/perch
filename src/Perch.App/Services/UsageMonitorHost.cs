@@ -41,6 +41,7 @@ internal sealed class UsageMonitorHost : IDisposable
 
     private bool _started;
     private bool _polling;
+    private bool _pollAgain;
     private int _pollCount;
 
     /// <summary>The most recent set of readings, cached so a surface opened mid-run (the Settings usage bars)
@@ -143,8 +144,14 @@ internal sealed class UsageMonitorHost : IDisposable
     private async Task Poll()
     {
         if (_polling)
+        {
+            // Asked again mid-poll, typically by SetDirs as the declared dirs arrive just after the launch poll began:
+            // that poll resolved the old dir list, so run one more straight after instead of waiting out the interval.
+            _pollAgain = true;
             return;
+        }
         _polling = true;
+        _pollAgain = false;
         try
         {
             _pollCount++;
@@ -186,6 +193,7 @@ internal sealed class UsageMonitorHost : IDisposable
         {
             _polling = false;
         }
+        if (_pollAgain && _started) await Poll();
     }
 
     private static bool SameSequence(IReadOnlyList<ClaudeConfigDir> a, IReadOnlyList<ClaudeConfigDir> b)
