@@ -372,6 +372,59 @@ internal static class ClaudeUserSettings
         }
     }
 
+    // Claude Code compacts a long conversation while the session sits idle (before the prompt cache expires)
+    // unless this root key is false. It defaults to on and Claude Code documents that writing true does not
+    // force it on, so enabling removes the key rather than writing true.
+    private const string IdleCompactionKey = "idleCompaction";
+
+    /// <summary>False only when <c>idleCompaction</c> is explicitly false in the <b>primary</b> config dir's
+    /// settings.json — Claude Code's default is on.</summary>
+    public static bool IsIdleCompactionEnabled() => IsIdleCompactionEnabled(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="IsIdleCompactionEnabled()"/>, against a specific config dir's settings file.</summary>
+    public static bool IsIdleCompactionEnabled(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath))
+                return true;
+
+            var root = JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject;
+            return !string.Equals(root?[IdleCompactionKey]?.ToString(), "false", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Sets or clears <c>idleCompaction</c> in the <b>primary</b> config dir's settings.json, preserving every
+    /// other setting. Disabling writes <c>false</c>; enabling removes the key. Returns true on a successful write.
+    /// </summary>
+    public static bool SetIdleCompactionEnabled(bool enabled) =>
+        SetIdleCompactionEnabled(ClaudePaths.UserSettingsFile, enabled);
+
+    /// <summary>As <see cref="SetIdleCompactionEnabled(bool)"/>, against a specific config dir's settings file.</summary>
+    public static bool SetIdleCompactionEnabled(string settingsPath, bool enabled)
+    {
+        try
+        {
+            if (enabled && !File.Exists(settingsPath)) return true;   // absent already means on
+            if (OpenForWrite(settingsPath) is not (JsonObject root, var original)) return false;
+
+            if (enabled) root.Remove(IdleCompactionKey);
+            else root[IdleCompactionKey] = false;
+
+            Commit(settingsPath, root, original);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     // ── statusLine (Perch's statusline designer) ─────────────────────────────────────
     // The root-level "statusLine" block Claude Code invokes on each refresh. Perch owns the profile
     // library elsewhere (Perch.Statusline.StatuslineStore); applying a profile is what writes this block.

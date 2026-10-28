@@ -51,6 +51,7 @@ public class OnboardingTiersTests
     [Theory]
     [InlineData("overlay-mode")]      // chosen on its own placement step
     [InlineData("agent-teams")]       // writes Claude Code's settings.json, not an AppSettings property
+    [InlineData("idle-compaction")]   // likewise
     [InlineData("quick-links")]       // a list, not a toggle
     [InlineData("theme")]             // a dropdown
     [InlineData("detect-error-streaks")] // stuck-detection sub-heuristic, left at default

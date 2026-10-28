@@ -111,8 +111,9 @@ internal sealed class SettingsHooks
     /// <summary>Open the drag-to-place initial-placement editor (also on the overlay header menu).</summary>
     public Action? OpenPlacements;
 
-    /// <summary>Open the per-config-directory Agent Teams modal (the multi-dir form of the single toggle).</summary>
-    public Action? OpenAgentTeams;
+    /// <summary>Open the per-config-directory modal for a Claude Code setting (the multi-dir form of its
+    /// single toggle — Agent Teams, idle compaction).</summary>
+    public Action<SettingDescriptor>? OpenPerDirToggle;
 
     /// <summary>Open the status-line designer (also on the tray menu).</summary>
     public Action? OpenStatuslineDesigner;

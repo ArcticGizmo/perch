@@ -9,21 +9,22 @@ using Perch.Data;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// A small modal for turning Claude Code's experimental Agent Teams feature on or off <b>per config
-/// directory</b>. It's the multi-config-dir form of the single "Enable Agent Teams" toggle: because the flag
-/// is an <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> key in each directory's own <c>settings.json</c>,
-/// there's no one switch when several directories are in play — this lists them, one toggle each.
+/// A small modal for flipping a Claude Code setting <b>per config directory</b> (Agent Teams, idle compaction).
+/// It's the multi-config-dir form of the setting's single toggle: because the flag lives in each directory's
+/// own <c>settings.json</c>, there's no one switch when several directories are in play — this lists them,
+/// one toggle each, bound through the descriptor's <see cref="SettingDescriptor.GetBoolForDir"/> /
+/// <see cref="SettingDescriptor.SetBoolForDir"/>.
 /// </summary>
 /// <remarks>
 /// Each toggle applies immediately to that directory's settings.json (like the status-line designer's apply,
 /// not a transactional edit), so there's no Save/Cancel — just Close. Dark-themed to match the settings
 /// window. Best-effort: a write that fails silently leaves the toggle reflecting the on-disk state on reopen.
 /// </remarks>
-internal sealed class AgentTeamsDialog : Window
+internal sealed class ConfigDirToggleDialog : Window
 {
-    public AgentTeamsDialog(IReadOnlyList<ClaudeConfigDir> dirs)
+    public ConfigDirToggleDialog(SettingDescriptor setting, IReadOnlyList<ClaudeConfigDir> dirs)
     {
-        Title = "Agent Teams per directory";
+        Title = $"{setting.Name} — per directory";
         Width = 520;
         Height = 360;
         CanResize = false;
@@ -33,13 +34,12 @@ internal sealed class AgentTeamsDialog : Window
 
         var layout = new StackPanel { Margin = new Thickness(16) };
         layout.Children.Add(SettingsUi.BodyText(
-            "Claude Code's experimental Agent Teams (multi-agent) feature is set per config directory, in each "
-            + "directory's own settings.json. Turn it on for the directories you want it in."));
+            setting.Description + " This is set per config directory, in each directory's own settings.json."));
         layout.Children.Add(SettingsUi.Separator());
 
         var list = new StackPanel { Spacing = 0 };
         foreach (var dir in dirs)
-            list.Children.Add(BuildRow(dir));
+            list.Children.Add(BuildRow(setting, dir));
         layout.Children.Add(list);
 
         var close = SettingsUi.FlatButton("Close");
@@ -56,7 +56,7 @@ internal sealed class AgentTeamsDialog : Window
         Content = new ScrollViewer { Content = layout };
     }
 
-    private static Control BuildRow(ClaudeConfigDir dir)
+    private static Control BuildRow(SettingDescriptor setting, ClaudeConfigDir dir)
     {
         var left = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 12, 0) };
         left.Children.Add(new TextBlock
@@ -72,9 +72,8 @@ internal sealed class AgentTeamsDialog : Window
         });
 
         var toggle = new PerchToggle { VerticalAlignment = VerticalAlignment.Center };
-        toggle.SetCheckedSilent(ClaudeUserSettings.IsAgentTeamsEnabled(dir.UserSettingsFile));
-        toggle.CheckedChanged += (_, _) =>
-            ClaudeUserSettings.SetAgentTeamsEnabled(dir.UserSettingsFile, toggle.IsChecked);
+        toggle.SetCheckedSilent(setting.GetBoolForDir!(dir.UserSettingsFile));
+        toggle.CheckedChanged += (_, _) => setting.SetBoolForDir!(dir.UserSettingsFile, toggle.IsChecked);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         Grid.SetColumn(left, 0);
