@@ -14,16 +14,18 @@ internal sealed class PrGlyph : Control
 {
     private readonly PrState _state;
     private readonly PrChecksRollup _checks;
+    private readonly bool _approved;
 
-    public PrGlyph(PrState state, PrChecksRollup checks)
+    public PrGlyph(PrState state, PrChecksRollup checks, bool approved = false)
     {
         _state = state;
         _checks = checks;
+        _approved = approved;
         // The glyph spans ~14 wide (merge mark + check dot) and ~12 tall centred on midY; box it with room.
-        Width = 16;
+        Width = 16 + (approved ? OverlayCanvas.PrApprovedTickWidth : 0);
         Height = 16;
     }
 
     public override void Render(DrawingContext ctx) =>
-        OverlayCanvas.DrawPrIcon(ctx, 1.5, Bounds.Height / 2, _state, _checks, hovered: false);
+        OverlayCanvas.DrawPrIcon(ctx, 1.5, Bounds.Height / 2, _state, _checks, hovered: false, _approved);
 }

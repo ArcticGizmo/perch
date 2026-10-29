@@ -93,6 +93,7 @@ internal static class SampleData
                         new("unit-tests", PrCheckState.Failure),
                         new("lint", PrCheckState.Success),
                     ],
+                    ReviewDecision = "APPROVED",
                 },
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,

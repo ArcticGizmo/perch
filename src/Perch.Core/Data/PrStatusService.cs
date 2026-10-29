@@ -52,6 +52,18 @@ public readonly record struct PullRequestInfo(int Number, string Url, string Tit
     /// has no reviews or they weren't fetched. Drives the "review added" / "approved" alerts.</summary>
     public IReadOnlyList<PrReview> LatestReviews { get; init; } = Array.Empty<PrReview>();
 
+    /// <summary>GitHub's <c>reviewDecision</c>, upper-cased: <c>APPROVED</c>, <c>CHANGES_REQUESTED</c>,
+    /// <c>REVIEW_REQUIRED</c>, or empty when the repo requires no reviews (or it wasn't fetched).</summary>
+    public string ReviewDecision { get; init; } = "";
+
+    /// <summary>Approved, driving the tick on the overlay's PR glyph. A repo with no required reviews reports no
+    /// decision, so there an approving review with no outstanding change request counts instead.</summary>
+    public bool IsApproved =>
+        ReviewDecision == "APPROVED"
+        || (ReviewDecision.Length == 0
+            && LatestReviews.Any(r => r.State == PrReviewState.Approved)
+            && !LatestReviews.Any(r => r.State == PrReviewState.ChangesRequested));
+
     /// <summary>The aggregate check status driving the overlay's status dot, folded from <see cref="Checks"/>.</summary>
     public PrChecksRollup ChecksRollup =>
         Checks.Count == 0                             ? PrChecksRollup.None
@@ -80,7 +92,7 @@ public readonly record struct PullRequestInfo(int Number, string Url, string Tit
 
     public bool Equals(PullRequestInfo other) =>
         Number == other.Number && Url == other.Url && Title == other.Title && State == other.State
-        && Checks.SequenceEqual(other.Checks) && LatestReviews.SequenceEqual(other.LatestReviews);
+        && ReviewDecision == other.ReviewDecision && Checks.SequenceEqual(other.Checks) && LatestReviews.SequenceEqual(other.LatestReviews);
 
     public override int GetHashCode() =>
         HashCode.Combine(Number, Url, Title, State, Checks.Count, LatestReviews.Count);
@@ -246,7 +258,7 @@ internal sealed class PrStatusService : IDisposable
         if (!Directory.Exists(cwd) || !HasGitRepo(cwd))
             return new Fetch(null, Failed: false);
 
-        var (exit, stdout, stderr) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews", cwd, GhTimeoutMs);
+        var (exit, stdout, stderr) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews,reviewDecision", cwd, GhTimeoutMs);
         var fetch = Classify(exit, stdout);
         if (fetch.Pr is null && !stderr.Contains("no pull requests found", StringComparison.OrdinalIgnoreCase))
             LogFailure(cwd, exit, stderr);
@@ -300,9 +312,11 @@ internal sealed class PrStatusService : IDisposable
             string title = root.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
             string state = root.TryGetProperty("state", out var s) ? s.GetString() ?? "" : "";
             bool isDraft = root.TryGetProperty("isDraft", out var d) && d.ValueKind == JsonValueKind.True;
+            string decision = root.TryGetProperty("reviewDecision", out var rd) && rd.ValueKind == JsonValueKind.String
+                ? (rd.GetString() ?? "").ToUpperInvariant() : "";
 
             return new PullRequestInfo(number, url, title, MapState(state, isDraft))
-                { Checks = ParseChecks(root), LatestReviews = ParseReviews(root) };
+                { Checks = ParseChecks(root), LatestReviews = ParseReviews(root), ReviewDecision = decision };
         }
         catch (JsonException)
         {

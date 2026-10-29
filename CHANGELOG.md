@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.1] - 2026-10-29
+
+- Green tick on the PR glyph once a PR is approved
+- PR tooltip names who approved it (credit where it's due)
+
+---
+
 ## [v0.6.0] - 2026-10-29
 
 - Hook no longer runs on every tool call (your tool calls are now slightly less supervised)

@@ -300,6 +300,29 @@ public class PrStatusServiceTests
         Assert.NotEqual(PrStatusService.ParsePrJson(json), changed);
     }
 
+    [Theory]
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":"APPROVED"}""", true)]
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":"approved"}""", true)]
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":"REVIEW_REQUIRED"}""", false)]
+    [InlineData("""{"number":1,"state":"OPEN"}""", false)]
+    // A required-review repo still waiting on a second approver: the decision wins over a lone approving review.
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":"REVIEW_REQUIRED","latestReviews":[{"author":{"login":"a"},"state":"APPROVED"}]}""", false)]
+    // No required reviews: an approving review counts, unless someone else has requested changes.
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":"","latestReviews":[{"author":{"login":"a"},"state":"APPROVED"}]}""", true)]
+    [InlineData("""{"number":1,"state":"OPEN","reviewDecision":null,"latestReviews":[{"author":{"login":"a"},"state":"APPROVED"},{"author":{"login":"b"},"state":"CHANGES_REQUESTED"}]}""", false)]
+    public void IsApprovedFollowsTheReviewDecision(string json, bool approved)
+    {
+        Assert.Equal(approved, PrStatusService.ParsePrJson(json)!.Value.IsApproved);
+    }
+
+    [Fact]
+    public void ReviewDecisionChangeIsAChange()
+    {
+        Assert.NotEqual(
+            PrStatusService.ParsePrJson("""{"number":1,"state":"OPEN","reviewDecision":"REVIEW_REQUIRED"}"""),
+            PrStatusService.ParsePrJson("""{"number":1,"state":"OPEN","reviewDecision":"APPROVED"}"""));
+    }
+
     [Fact]
     public void TimeoutOrLaunchFailureIsAFailedLookup()
     {

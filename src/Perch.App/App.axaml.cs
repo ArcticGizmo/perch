@@ -2553,9 +2553,9 @@ public partial class App : Application
         // Jira are deep-links; the external-notify and remote-control marks are indicators whose click mirrors
         // the overlay's secondary action (toggle the opt-in / show the QR code).
         if (cs.ShowPullRequests && session?.PullRequest is { } pr)
-            actions.Add(new ComposerAction("", $"PR #{pr.Number} · {pr.State} — open on GitHub · middle-click for a new window",
+            actions.Add(new ComposerAction("", $"PR #{pr.Number} · {pr.State}{(pr.IsApproved ? " · approved" : "")} — open on GitHub · middle-click for a new window",
                 _ => PlatformServices.UrlOpener.Open(pr.Url),
-                GlyphFactory: _ => new Views.PrGlyph(pr.State, pr.ChecksRollup),
+                GlyphFactory: _ => new Views.PrGlyph(pr.State, pr.ChecksRollup, pr.IsApproved),
                 MiddleInvoke: _ => PlatformServices.UrlOpener.OpenInNewWindow(pr.Url)));
 
         if (cs.ShowJiraTicket && session?.JiraTicket is { } jira)
