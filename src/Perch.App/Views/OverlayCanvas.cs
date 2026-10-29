@@ -73,6 +73,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double ArtifactIconWidth = 16;
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
     private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
+    internal const double PrApprovedTickWidth = 8; // extra room the PR glyph takes for its approval tick
     private const double JiraIconWidth    = 15; // the Jira ticket (tag) glyph on a row whose branch has a key
     private const double MdIconWidth      = 18; // the Markdown glyph on a row whose session produced a .md file
 
@@ -2959,7 +2960,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double originW  = session.IsBackground ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
-        double prW  = showPr ? PrIconWidth : 0;
+        bool prApproved = showPr && session.PullRequest!.Value.IsApproved;
+        double prW  = showPr ? PrIconWidth + (prApproved ? PrApprovedTickWidth : 0) : 0;
         bool showJira = _showJiraTickets && session.JiraTicket is not null;
         double jiraW  = showJira ? JiraIconWidth : 0;
         bool showMd = _showMarkdown && session.HasProducedMarkdown;
@@ -3050,8 +3052,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
-                session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
-            _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
+                session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex, approved: prApproved);
+            _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, prW + 2, 18);
         }
         if (showJira)
         {
@@ -3746,7 +3748,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
     // state (open/draft/merged/closed); hover brightens. The nodes are filled dots, the lines stroked.
     // internal so the composer toolbar's PrGlyph can paint the exact same state-coloured mark (see Views.PrGlyph).
-    internal static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, PrChecksRollup checks, bool hovered)
+    internal static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, PrChecksRollup checks, bool hovered,
+        bool approved = false)
     {
         IBrush brush = state switch
         {
@@ -3794,6 +3797,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var dot = new Point(rx + 1.5, bot + 0.5);
             ctx.DrawEllipse(BgFillBrush, null, dot, 3.1, 3.1);
             ctx.DrawEllipse(dotBrush, null, dot, 2.1, 2.1);
+        }
+
+        // Approval tick just right of the checks dot, in the glyph's extra PrApprovedTickWidth. Kept apart from
+        // the dot rather than replacing it so "approved" and "CI green" stay independently readable.
+        if (approved)
+        {
+            var tickPen = OverlayDraw.Pen(PrCheckPassBrush, 1.5, null, PenLineCap.Round, PenLineJoin.Round);
+            var tick = new StreamGeometry();
+            using (var gc = tick.Open())
+            {
+                gc.BeginFigure(new Point(x + 16.4, midY + 4.4), isFilled: false);
+                gc.LineTo(new Point(x + 18.0, midY + 6.0));
+                gc.LineTo(new Point(x + 21.0, midY + 2.4));
+                gc.EndFigure(false);
+            }
+            ctx.DrawGeometry(null, tickPen, tick);
         }
     }
 
@@ -5362,6 +5381,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             new($"#{pr.Number} · {stateWord} · {title}", OverlayTooltip.FgColor, true),
         };
+        if (pr.IsApproved)
+            lines.Add(new(pr.NewestApproval?.Author is { Length: > 0 } by ? $"✓  Approved by {by}" : "✓  Approved",
+                PrCheckPassColor, false));
         // Says so when the PR isn't the session folder's own, so a glyph that differs from the cwd's branch reads
         // as deliberate rather than wrong.
         if (_rows[row].Session?.Worktree is { } wt)
