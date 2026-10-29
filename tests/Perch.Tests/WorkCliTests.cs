@@ -33,7 +33,7 @@ public class WorkCliTests
         using var s = new Sandbox();
         Assert.Equal(0, s.Run("new", "Payments", "refactor"));
         var id = s.Store.LoadAll().Single().Id;
-        Assert.Contains($"PERCH_WORK = \"{id}\"", s.Out);
+        Assert.DoesNotContain("PERCH_WORK", s.Out);
         Assert.Contains($"perch --work {id}", s.Out);
 
         Assert.Equal(0, s.Run());

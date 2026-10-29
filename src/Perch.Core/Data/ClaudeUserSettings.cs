@@ -22,14 +22,11 @@ internal static class ClaudeUserSettings
     // fires perch-hook with the args the binary switches on. We use the exec form (command + args)
     // rather than a single command string so a bin path containing spaces (e.g. the "Perch (Dev)"
     // profile) needs no shell quoting. A retired entry (the parked permission valet's `valet`, removed in
-    // review fixes CP10) needs no migration: reconcile strips every Perch-managed entry before re-adding
-    // this set, so an old install's leftover disappears on the next launch.
+    // review fixes CP10; the per-tool-call `mode` writer now that transcripts record the permission mode; SubagentStop's
+    // `agentstop` now that a sub-agent's meta sidecar records when it finished) needs no migration: reconcile strips
+    // every Perch-managed entry before re-adding this set, so an old install's leftover disappears on the next launch.
     private static readonly (string Event, string[] Args)[] ManagedHooks =
     {
-        ("PreToolUse",   ["mode"]),
-        ("PostToolUse",  ["mode"]),
-        ("Stop",         ["mode"]),
-        ("SubagentStop", ["agentstop"]),
         ("TeammateIdle", ["teammateidle"]),
         ("SessionStart", ["start"]),
         ("SessionEnd",   ["cleanup"]),

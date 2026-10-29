@@ -19,7 +19,8 @@ public enum WorkJoin
     Manual = 0,
     /// <summary>Started inside the item (its overlay "+", the launcher, <c>perch --work</c>).</summary>
     Launched = 1,
-    /// <summary>A terminal <c>claude</c> started with <c>PERCH_WORK</c> set (the hook's <c>{sid}.work</c> marker).</summary>
+    /// <summary>A terminal <c>claude</c> started with <c>PERCH_WORK</c> set. No longer produced; kept so saved items
+    /// that carry it still load and label correctly.</summary>
     Terminal = 2,
 }
 

@@ -47,9 +47,10 @@ internal sealed class TranscriptReader
     private static readonly LineFolder<ContextState> ContextFolder = new(() => new(), StepContext);
     private static readonly LineFolder<TitleState> TitleFolder = new(() => new(), StepTitle);
     private static readonly LineFolder<BackgroundState> BackgroundFolder = new(() => new(), StepBackground);
+    private static readonly LineFolder<PermissionModeState> PermissionModeFolder = new(() => new(), StepPermissionMode);
 
     private readonly TranscriptFold _fold = new(AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder,
-        BackgroundFolder);
+        BackgroundFolder, PermissionModeFolder);
 
     /// <summary>Bytes the whole-file readers have read from disk (test/benchmark probe; see <see cref="TranscriptFold"/>).</summary>
     internal long FoldBytesRead => _fold.BytesRead;
@@ -355,6 +356,43 @@ internal sealed class TranscriptReader
             return null;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path == null ? null : TitleAt(path);
+    }
+
+    /// <summary>
+    /// The session's latest permission mode as Claude Code recorded it in the transcript (a <c>permission-mode</c>
+    /// record, or the <c>permissionMode</c> stamped on a user prompt), e.g. <c>"plan"</c> or <c>"acceptEdits"</c>.
+    /// Null when the transcript can't be read or never recorded one — older Claude Code builds didn't, and those
+    /// sessions simply show no mode badge. Folded incrementally like the other whole-file readers.
+    /// </summary>
+    public string? GetPermissionMode(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return null;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? null : PermissionModeAt(path);
+    }
+
+    internal string? PermissionModeAt(string path) => _fold.Get(path, PermissionModeFolder, s => s.Mode, null);
+
+    private sealed class PermissionModeState { public string? Mode; }
+
+    private static void StepPermissionMode(PermissionModeState s, string line)
+    {
+        if (!line.Contains("\"permissionMode\""))
+            return;
+        try
+        {
+            var node = JsonNode.Parse(line);
+            // A sub-agent's records can carry its own mode; only the session's own records speak for the badge.
+            if (node?["isSidechain"] is JsonValue side && side.TryGetValue<bool>(out var isSide) && isSide)
+                return;
+            if (TranscriptJson.AsString(node?["permissionMode"]) is { Length: > 0 } mode)
+                s.Mode = mode;
+        }
+        catch
+        {
+            // Malformed/partial line — skip it.
+        }
     }
 
     private sealed class TitleState { public string? Custom; }

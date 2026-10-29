@@ -739,7 +739,7 @@ internal sealed class WorkItemsWindow : Window
                 Child = new TextBlock
                 {
                     Text = "No sessions yet. Start one with + New session, tick this item in a session's right-click menu, "
-                           + $"or run claude in any terminal with PERCH_WORK={item.Id}.",
+                           + $"or run perch --work {item.Id} in any terminal.",
                     Foreground = Muted, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, LineHeight = 19,
                 },
             });

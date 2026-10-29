@@ -7,14 +7,13 @@ using System.Text.Json.Nodes;
 // A tiny, fast Claude Code hook writer — the self-managed replacement for the installed plugin's
 // invoke.ps1. Reads the hook JSON payload on stdin and writes the sidecar files the Perch tray watches.
 // Ported 1:1 from plugins/perch/scripts/invoke.ps1, minus the dropped /afk + /history commands.
-// NativeAOT-compiled for minimal cold start (the `mode` event fires on every tool call), and
-// reflection-free (Utf8JsonReader) so trimming/AOT can't break it.
+// NativeAOT-compiled for minimal cold start, and reflection-free (Utf8JsonReader) so trimming/AOT can't break it.
+// The permission-mode badge reads Claude Code's own `permission-mode` transcript records, and a finished sub-agent
+// its own meta sidecar's `finished` flag, so no hook fires per tool call or per sub-agent.
 //
 // Events (mapped from Claude Code hooks):
-//   mode         PreToolUse / PostToolUse / Stop  → write {sid}.mode (permission mode)
-//   agentstop    SubagentStop                     → drop agent-{id}.stopped beside the agent transcript
 //   teammateidle TeammateIdle                     → drop agent-{id}.idle beside the matching transcript
-//   start        SessionStart                     → {sid}.configdir, {sid}.work (PERCH_WORK), launch the tray if
+//   start        SessionStart                     → {sid}.configdir, launch the tray if
 //                                                   the user opted into auto-start
 //   cleanup      SessionEnd                       → remove this session's sidecars + sweep agent markers
 //
@@ -22,49 +21,35 @@ using System.Text.Json.Nodes;
 // never volunteers a decision on stdout — its only output is `start`'s advisory systemMessage when a normal
 // claude opens a session Perch is already controlling ({sid}.perch-lock); every failure path is silent,
 // which Claude Code treats as "no opinion" (normal permission flow). An unknown event is a silent no-op —
-// e.g. the retired `valet` event (review fixes CP10), still registered in settings.json until the tray's
-// next hook reconcile strips it. Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
+// e.g. the retired `valet`, `mode` and `agentstop` events, still registered in settings.json until the tray's next hook
+// reconcile strips them. Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
 // (which profile's settings to read) exactly like the app, so dev/hermetic testing works end to end.
 
 string action = args.Length > 0 ? args[0] : "";
 try
 {
     byte[] payload = ReadStdin();
-    var f = ReadFields(payload,
-        "session_id", "permission_mode", "transcript_path", "agent_transcript_path",
-        "agent_id", "teammate_name", "source");
+    var f = ReadFields(payload, "session_id", "transcript_path", "teammate_name", "source");
 
     string claudeDir = ResolveClaudeDir();
     string sessionsDir = Path.Combine(claudeDir, "sessions");
 
     // If Perch was removed without running its uninstaller, our hook entries would linger. Detect that
-    // on the infrequent session-lifecycle events (never the per-tool-call `mode` hot path) and strip
-    // our own managed entries so a dead command never accumulates.
+    // on the session-lifecycle events (not the per-agent ones) and strip our own managed entries so a dead
+    // command never accumulates.
     if (action is "start" or "cleanup") MaybeSelfHeal();
 
     switch (action)
     {
-        // SubagentStop / TeammateIdle: drop a marker beside the agent's transcript so the tray retires the
-        // row at once instead of waiting out its staleness window. Handled before the mode write so a
-        // sub-agent's permission_mode never overwrites the parent session's .mode sidecar.
-        case "agentstop":
-            HandleAgentStop(f);
-            break;
+        // TeammateIdle: drop a marker beside the teammate's transcript so the tray idles the row at once instead of
+        // waiting out its staleness window.
         case "teammateidle":
             HandleTeammateIdle(f);
             break;
 
-        // The hot path, fired on every tool call.
-        case "mode":
-            WriteMode(sessionsDir, f);
-            break;
-
-        // SessionStart also seeds the initial mode (if present), warns if the id is Perch-controlled, then
-        // may launch the tray.
+        // SessionStart warns if the id is Perch-controlled, then may launch the tray.
         case "start":
-            WriteMode(sessionsDir, f);
             WriteConfigDir(sessionsDir, claudeDir, f);
-            WriteWorkRef(sessionsDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -80,60 +65,15 @@ return 0;
 
 // ── event handlers ────────────────────────────────────────────────────────────────
 
-// Record the session's permission mode so the overlay can badge it.
-static void WriteMode(string sessionsDir, Dictionary<string, string?> f)
-{
-    string? sid = f["session_id"], mode = f["permission_mode"];
-    if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(mode) && Directory.Exists(sessionsDir))
-        File.WriteAllText(Path.Combine(sessionsDir, sid + ".mode"), mode);
-}
-
 // Self-report which config dir this session ran under, so Perch can attribute it even when the
 // sessions/ folder is *shared* across several config dirs (a junctioned launcher layout, where the
-// folder alone can't say who ran the session). Written on SessionStart only (covers resume) so the
-// per-tool-call hot path stays a single write. Org-free: the marker carries the directory, nothing more.
+// folder alone can't say who ran the session). Written on SessionStart (covers resume). Org-free: the marker carries the directory, nothing more.
 // See docs/config-dir-plan.md M3 and ClaudeSession.ReportedConfigDir.
 static void WriteConfigDir(string sessionsDir, string claudeDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(claudeDir) && Directory.Exists(sessionsDir))
         File.WriteAllText(Path.Combine(sessionsDir, sid + ".configdir"), claudeDir);
-}
-
-// Work items (docs/work-items-plan.md): a `claude` started with PERCH_WORK=<item> in its environment asks to join that
-// work item. Record the ref in {sid}.work; the tray resolves it to an item, adds the session ("via: terminal") and
-// consumes the marker. Written on SessionStart only, so the per-tool-call path is untouched. The value is the user's
-// own text from their own environment; it's kept to one short line and only ever read back as a name to look up.
-static void WriteWorkRef(string sessionsDir, Dictionary<string, string?> f)
-{
-    string? sid = f["session_id"], source = f["source"];
-    if (string.IsNullOrEmpty(sid) || !Directory.Exists(sessionsDir)) return;
-    if (!string.IsNullOrEmpty(source) && source != "startup" && source != "resume") return;
-    var work = Environment.GetEnvironmentVariable("PERCH_WORK")?.Trim();
-    if (string.IsNullOrEmpty(work)) return;
-    work = new string(work.Where(c => !char.IsControl(c)).Take(200).ToArray());
-    if (work.Length > 0) File.WriteAllText(Path.Combine(sessionsDir, sid + ".work"), work);
-}
-
-// SubagentStop: a sub-agent finished (or a teammate ended a turn). Drop agent-{id}.stopped beside its
-// transcript; the tray reads the marker's mtime as the event time, so the body is just a timestamp.
-static void HandleAgentStop(Dictionary<string, string?> f)
-{
-    string? atp = f["agent_transcript_path"];
-    if (string.IsNullOrEmpty(atp))
-    {
-        // Older builds omit it: rebuild …/subagents/agent-{id}.jsonl from the parent path + agent_id.
-        string? sub = SubagentsDir(f["transcript_path"]);
-        string? aid = f["agent_id"];
-        if (sub is not null && !string.IsNullOrEmpty(aid))
-            atp = Path.Combine(sub, $"agent-{aid}.jsonl");
-    }
-    if (string.IsNullOrEmpty(atp)) return;
-
-    string? d = Path.GetDirectoryName(atp);
-    string n = Path.GetFileNameWithoutExtension(atp); // agent-{id}
-    if (!string.IsNullOrEmpty(d) && !string.IsNullOrEmpty(n) && Directory.Exists(d))
-        File.WriteAllText(Path.Combine(d, n + ".stopped"), Timestamp());
 }
 
 // TeammateIdle carries teammate_name (== the agent's type) but no agent_id, so resolve the transcript by
@@ -224,13 +164,14 @@ static bool IsProcessAlive(string? pidText)
     catch { return false; }
 }
 
-// SessionEnd: remove this session's sidecars, and sweep any agent stop/idle markers it left behind.
+// SessionEnd: remove this session's sidecars (including a .mode left by an older hook), sweep any agent stop/idle
+// markers it left behind, and the orphaned ones in the rest of its project.
 static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".configdir", ".work", ".slug" /* legacy */, ".afk" /* legacy */ })
+        foreach (string ext in new[] { ".mode", ".notify", ".history", ".configdir", ".work" /* legacy */, ".slug" /* legacy */, ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.
@@ -257,6 +198,35 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
         }
         catch { }
     }
+
+    SweepProjectMarkers(f["transcript_path"]);
+}
+
+// A session whose SessionEnd never ran (a crash, a closed terminal) leaves its markers behind, and Claude Code later
+// prunes the agent transcripts but not them. So each SessionEnd also sweeps every session of the same project:
+// .stopped markers unconditionally (no current hook writes them), .idle ones only once their agent transcript is gone,
+// so a teammate still live in another session keeps its marker.
+static void SweepProjectMarkers(string? transcriptPath)
+{
+    try
+    {
+        string? project = string.IsNullOrEmpty(transcriptPath) ? null : Path.GetDirectoryName(transcriptPath);
+        if (string.IsNullOrEmpty(project) || !Directory.Exists(project)) return;
+
+        foreach (string session in Directory.GetDirectories(project))
+        {
+            string sub = Path.Combine(session, "subagents");
+            if (!Directory.Exists(sub)) continue;
+            try
+            {
+                foreach (string m in Directory.GetFiles(sub, "agent-*.stopped")) TryDelete(m);
+                foreach (string m in Directory.GetFiles(sub, "agent-*.idle"))
+                    if (!File.Exists(Path.ChangeExtension(m, ".jsonl"))) TryDelete(m);
+            }
+            catch { /* one unreadable session dir never stops the sweep */ }
+        }
+    }
+    catch { /* best-effort */ }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────────
