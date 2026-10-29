@@ -18,13 +18,16 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks.
     private static readonly (string Event, string Arg)[] Expected =
     {
-        ("PreToolUse", "mode"), ("PostToolUse", "mode"), ("Stop", "mode"),
-        ("SubagentStop", "agentstop"), ("TeammateIdle", "teammateidle"),
+        ("TeammateIdle", "teammateidle"),
         ("SessionStart", "start"), ("SessionEnd", "cleanup"),
     };
 
     // How many managed entries a given event carries.
     private static int ExpectedCount(string evt) => Expected.Count(e => e.Event == evt);
+
+    // How many entries an event holds in the written file; 0 when reconcile dropped the event entirely.
+    private int EntryCount(string evt) =>
+        ((JsonObject)Read()["hooks"]!)[evt] is JsonArray arr ? arr.Count : 0;
 
     public ClaudeUserSettingsHookTests()
     {
@@ -173,7 +176,44 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         ClaudeUserSettings.ReconcileHooks(_settings, "/opt/perch/bin/perch-hook", "0.2.0");
 
         Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
-        Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
+        Assert.Equal(ExpectedCount("PreToolUse"), EntryCount("PreToolUse"));
+    }
+
+    [Fact]
+    public void Reconcile_StripsTheRetiredModeHooks_FromAnOldInstall()
+    {
+        // The permission-mode badge reads the transcript now, so the per-tool-call `mode` entries an earlier
+        // build registered on PreToolUse/PostToolUse/Stop must go, and their now-empty events with them. A user's
+        // own Stop hook stays.
+        File.WriteAllText(_settings, """
+        {
+          "hooks": {
+            "PreToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["mode"],
+                "_perch": { "managed": true, "dev": false, "version": "0.5.47" } } ] }
+            ],
+            "PostToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command",
+                "command": "C:\\Users\\me\\AppData\\Local\\Perch\\bin\\perch-hook.exe", "args": ["mode"] } ] }
+            ],
+            "Stop": [
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["mode"],
+                "_perch": { "managed": true, "dev": false, "version": "0.5.47" } } ] },
+              { "matcher": "", "hooks": [ { "type": "command", "command": "say done" } ] }
+            ]
+          }
+        }
+        """);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "1.0.0");
+
+        Assert.DoesNotContain(ManagedHooks(Read()), m => m.Arg == "mode");
+        Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
+        var hooks = (JsonObject)Read()["hooks"]!;
+        Assert.False(hooks.ContainsKey("PreToolUse"));
+        Assert.False(hooks.ContainsKey("PostToolUse"));
+        Assert.Equal(1, EntryCount("Stop"));
+        Assert.Contains("say done", File.ReadAllText(_settings));
     }
 
     [Fact]
@@ -201,7 +241,7 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
 
         Assert.DoesNotContain("valet", File.ReadAllText(_settings));
         Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
-        Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
+        Assert.Equal(ExpectedCount("PreToolUse"), EntryCount("PreToolUse"));
     }
 
     // ── CP14: never rewrite without cause, never replace what couldn't be read ─────────────

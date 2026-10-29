@@ -24,10 +24,8 @@ internal static class WorkCli
 
         <item> is an id, a name, or the start of a name.
 
-        Start sessions inside an item from any terminal:
-          PowerShell:  $env:PERCH_WORK = "<item>"; claude
-          bash / zsh:  PERCH_WORK="<item>" claude
-          Perch:       perch --work <item> [dir]
+        Start a session inside an item from any terminal:
+          perch --work <item> [dir]
         """;
 
     public static int Run(IReadOnlyList<string> args, TextWriter output, TextWriter error, WorkItemStore store)
@@ -81,10 +79,8 @@ internal static class WorkCli
         if (name.Length == 0) return Fail(error, "Give the work item a name: perch work new \"Payments refactor\"");
         if (store.Create(name) is not { } item) return Fail(error, $"Couldn't write a work item in {store.Dir}.");
         output.WriteLine($"Created \"{item.Name}\" ({item.Id}).");
-        output.WriteLine("Start sessions in it from any terminal:");
-        output.WriteLine($"  PowerShell:  $env:PERCH_WORK = \"{item.Id}\"; claude");
-        output.WriteLine($"  bash / zsh:  PERCH_WORK={item.Id} claude");
-        output.WriteLine($"  Perch:       perch --work {item.Id}");
+        output.WriteLine("Start a session in it from any terminal:");
+        output.WriteLine($"  perch --work {item.Id}");
         return 0;
     }
 

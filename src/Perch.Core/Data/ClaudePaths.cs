@@ -23,7 +23,7 @@ internal static class ClaudePaths
     public static string ClaudeDir => Primary.Root;
 
     /// <summary><c>~/.claude/sessions</c> — live session sidecars (<c>{pid}.json</c> and the
-    /// <c>.mode</c> / <c>.notify</c> / <c>.history</c> markers that ride alongside them).</summary>
+    /// <c>.notify</c> / <c>.configdir</c> markers that ride alongside them).</summary>
     public static string SessionsDir => Primary.SessionsDir;
 
     /// <summary><c>~/.claude/projects</c> — per-project transcript directories, each holding the

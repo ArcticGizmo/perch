@@ -47,9 +47,9 @@ internal sealed class SubAgentReader
     private static readonly LineFolder<ClassifyState> ClassifyFolder = new(() => new(), StepClassify);
     private readonly TranscriptFold _legacy = new(LegacyFolder);
     private readonly TranscriptFold _agentState = new(ClassifyFolder);
-    // Per-agent meta sidecar, cached by path: a .meta.json is written once and never changes, so
-    // re-reading it every poll (now for idle teammates too, not just running agents) is wasted IO.
-    private readonly Dictionary<string, AgentMeta> _meta = new();
+    // Per-agent meta sidecar, cached by (length, last-write): Claude Code rewrites it once more when the agent ends
+    // (finished / stoppedByUser), so it can't be cached forever, but an unchanged one costs only a stat.
+    private readonly MtimeCache<AgentMeta> _meta = new();
 
     /// <param name="staleAfter">How long an agent's transcript may sit untouched before a "working"
     /// classification is treated as a frozen/interrupted turn. Defaults to 90s; tests override it.</param>
@@ -145,7 +145,8 @@ internal sealed class SubAgentReader
         {
             try
             {
-                var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
+                var metaPath = Path.ChangeExtension(file, null) + ".meta.json";
+                var meta = ReadAgentMeta(metaPath);
 
                 // An ordinary sub-agent is surfaced only while working, and a file silent past the longest stale
                 // window (a pending shell call's) can't be (a working tail there is demoted as stale below) — so
@@ -156,11 +157,11 @@ internal sealed class SubAgentReader
 
                 var state = _agentState.Get(file, ClassifyFolder, FinishClassify, default);
 
-                // An explicit SubagentStop / TeammateIdle hook marker (written by the perch plugin)
-                // retires a "working"-looking tail the instant the turn really ended, instead of waiting
-                // out the staleness window — the precise event that replaces the timer guess. It denotes a
-                // clean turn-end, not an interrupt, so it idles the agent rather than flagging it stale.
-                bool ended = state.Working && HasFreshEndMarker(file);
+                // An explicit end signal retires a "working"-looking tail the instant the turn really ended,
+                // instead of waiting out the staleness window: Claude Code's own finished / stoppedByUser flag in
+                // the meta sidecar for a sub-agent, or perch-hook's TeammateIdle marker for a teammate. Either
+                // idles the agent rather than flagging it stale.
+                bool ended = state.Working && ((meta.Ended && IsAtLeastAsNew(metaPath, file)) || HasFreshEndMarker(file));
 
                 // A "working" classification only holds while the transcript is still advancing: an agent
                 // left frozen mid-turn by an interrupt keeps that tail forever, so demote it to not-working
@@ -282,32 +283,32 @@ internal sealed class SubAgentReader
     private TimeSpan MaxStaleWindow =>
         ShellMaxTimeout + ShellTimeoutSlack > _staleAfter ? ShellMaxTimeout + ShellTimeoutSlack : _staleAfter;
 
-    // True when an authoritative "turn ended" marker sits beside this agent's transcript and is at
-    // least as new as it. The perch plugin's hooks drop one when Claude Code fires the matching event:
-    //   • agent-{id}.stopped — SubagentStop (a sub-agent finished, or a teammate ended its turn)
-    //   • agent-{id}.idle    — TeammateIdle  (a teammate went idle, waiting for the lead)
-    // The reader treats both identically: the agent has stopped working as of the marker's timestamp.
-    // We compare timestamps rather than just existence so a re-tasked teammate self-heals — the lead's
-    // new prompt appends to the transcript, pushing its mtime past the (now stale) marker, and the
-    // agent flips straight back to working. Best-effort: any IO error just defers to the tail/timer.
+    // True when an authoritative "turn ended" marker sits beside this agent's transcript and is at least as new as
+    // it: agent-{id}.idle, which perch-hook drops on TeammateIdle (a teammate went idle, waiting for the lead), or
+    // agent-{id}.stopped, which older perch-hook builds dropped on SubagentStop. Best-effort: any IO error just
+    // defers to the tail/timer.
     private static bool HasFreshEndMarker(string agentFile)
     {
-        try
-        {
-            var basePath = Path.ChangeExtension(agentFile, null); // …/agent-{id}
-            var fileTime = File.GetLastWriteTimeUtc(agentFile);
-            foreach (var ext in MarkerExtensions)
-            {
-                var marker = basePath + ext;
-                if (File.Exists(marker) && File.GetLastWriteTimeUtc(marker) >= fileTime)
-                    return true;
-            }
-        }
-        catch { }
+        var basePath = Path.ChangeExtension(agentFile, null); // …/agent-{id}
+        foreach (var ext in MarkerExtensions)
+            if (IsAtLeastAsNew(basePath + ext, agentFile))
+                return true;
         return false;
     }
 
     private static readonly string[] MarkerExtensions = [".stopped", ".idle"];
+
+    // True when `signal` exists and was written no earlier than the agent's transcript. Timestamps rather than mere
+    // existence so a re-tasked agent self-heals: new work appends to the transcript, pushing its mtime past the (now
+    // stale) signal, and the agent flips straight back to working.
+    private static bool IsAtLeastAsNew(string signal, string agentFile)
+    {
+        try
+        {
+            return File.Exists(signal) && File.GetLastWriteTimeUtc(signal) >= File.GetLastWriteTimeUtc(agentFile);
+        }
+        catch { return false; }
+    }
 
     // agent-{id}.jsonl -> {id} (the teammate's agentId, or the plain sub-agent's hash).
     private static string AgentIdFromFile(string file)
@@ -319,39 +320,33 @@ internal sealed class SubAgentReader
     // What a sub-agent's meta sidecar tells us. A teammate's meta carries taskKind ==
     // "in_process_teammate" plus a human name/team/colour; an ordinary sub-agent's does not. ToolUseId is
     // the id of the Task/Agent tool_use that spawned this agent — the key that links it to its parent's
-    // transcript when reconstructing the tree (see BuildForest); absent for the top-level teammates.
+    // transcript when reconstructing the tree (see BuildForest); absent for the top-level teammates. Ended is
+    // Claude Code's own end flag (finished, or stoppedByUser), written into the sidecar when the agent stops.
     private readonly record struct AgentMeta(
         string Description, string AgentType, bool IsTeammate, string? Name, string? TeamName, string? Color,
-        string? ToolUseId);
+        string? ToolUseId, bool Ended = false);
 
-    // Reads (and caches) an agent's tiny meta sidecar; blank/non-teammate if it's missing or bad.
-    private AgentMeta ReadAgentMeta(string metaPath)
+    // Reads (and caches) an agent's tiny meta sidecar; blank/non-teammate if it's missing or bad. A missing one isn't
+    // cached: Claude Code may still be writing it.
+    private AgentMeta ReadAgentMeta(string metaPath) => _meta.GetOrCompute(metaPath, ParseAgentMeta, default);
+
+    private static AgentMeta ParseAgentMeta(string metaPath)
     {
-        if (_meta.TryGetValue(metaPath, out var cached))
-            return cached;
-        try
-        {
-            if (!File.Exists(metaPath))
-                return default; // not cached: the sidecar may still be written by Claude Code
-
-            var node = JsonNode.Parse(File.ReadAllText(metaPath));
-            bool isTeammate = node?["taskKind"]?.GetValue<string>() == "in_process_teammate";
-            var meta = new AgentMeta(
-                Description: node?["description"]?.GetValue<string>() ?? "",
-                AgentType: node?["agentType"]?.GetValue<string>() ?? "",
-                IsTeammate: isTeammate,
-                Name: node?["name"]?.GetValue<string>(),
-                TeamName: node?["teamName"]?.GetValue<string>(),
-                Color: node?["color"]?.GetValue<string>(),
-                ToolUseId: node?["toolUseId"]?.GetValue<string>());
-            _meta[metaPath] = meta; // immutable once written — safe to cache forever
-            return meta;
-        }
-        catch
-        {
-            return default;
-        }
+        var node = JsonNode.Parse(File.ReadAllText(metaPath));
+        bool isTeammate = node?["taskKind"]?.GetValue<string>() == "in_process_teammate";
+        return new AgentMeta(
+            Description: node?["description"]?.GetValue<string>() ?? "",
+            AgentType: node?["agentType"]?.GetValue<string>() ?? "",
+            IsTeammate: isTeammate,
+            Name: node?["name"]?.GetValue<string>(),
+            TeamName: node?["teamName"]?.GetValue<string>(),
+            Color: node?["color"]?.GetValue<string>(),
+            ToolUseId: node?["toolUseId"]?.GetValue<string>(),
+            Ended: IsTrue(node?["finished"]) || IsTrue(node?["stoppedByUser"]));
     }
+
+    private static bool IsTrue(JsonNode? value) =>
+        value is JsonValue v && v.TryGetValue<bool>(out var b) && b;
 
     // A sub-agent's turn state, parsed from its own transcript: whether it's mid-turn (Working) with a
     // present-tense Activity phrase, plus the Task/Agent tool_use ids it has launched (LaunchedIds) — the

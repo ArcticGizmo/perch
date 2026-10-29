@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.0] - 2026-10-29
+
+- Hook no longer runs on every tool call (your tool calls are now slightly less supervised)
+- Permission-mode badge reads Claude Code's transcript
+- Finished or stopped sub-agents leave the overlay at once
+- Leftover sub-agent markers swept when a session ends
+- `PERCH_WORK` retired; use `perch --work <item>` (we suspect nobody will notice)
+
+---
+
 ## [v0.5.47] - 2026-10-28
 
 - Turn off Claude Code's idle compaction from Perch's settings

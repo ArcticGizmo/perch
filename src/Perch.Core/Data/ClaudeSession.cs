@@ -184,13 +184,6 @@ public record ClaudeSession(
     /// </summary>
     internal string? ReportedConfigDir { get; init; }
 
-    /// <summary>
-    /// The work item this session asked to join at start: the <c>PERCH_WORK</c> value perch-hook recorded in its
-    /// <c>{sessionId}.work</c> marker (docs/work-items-plan.md). A name or id the user typed, resolved by the app; the
-    /// marker is deleted once handled. Null when there's no marker.
-    /// </summary>
-    internal string? WorkRef { get; init; }
-
     /// <summary>The legacy <c>{sessionId}.slug</c> self-report marker, accepted as a fallback so an
     /// in-flight session carrying only the old marker still attributes. Null when absent.</summary>
     internal string? ReportedSlug { get; init; }

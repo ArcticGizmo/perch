@@ -180,14 +180,13 @@ internal static class RecordingExporter
         return maxTs;
     }
 
-    // The session's .mode / .notify / .note sidecars, plus the final sessions/{pid}.json snapshot if one
+    // The session's .notify / .note sidecars, plus the final sessions/{pid}.json snapshot if one
     // is still on disk (rewriting its cwd + pid so the captured tree is self-consistent).
     private static void CaptureSidecarsAndSnapshot(
         ZipArchive archive, ReplaySessionInfo session, string baseEntry,
         string placeholderCwd, int syntheticPid, bool redact)
     {
         var sid = session.SessionId;
-        TryCopySidecar($"{sid}.mode", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.mode");
         TryCopySidecar($"{sid}.notify", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.notify");
 
         if (FindSidecar($"{sid}.note") is { } notePath)

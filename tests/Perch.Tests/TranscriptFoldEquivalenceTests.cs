@@ -31,6 +31,8 @@ public sealed class TranscriptFoldEquivalenceTests : IDisposable
     private const string AsyncNotified =
         """{"type":"user","message":{"role":"user","content":"<task-notification><tool-use-id>toolu_async1</tool-use-id></task-notification>"}}""";
 
+    private const string PlanMode = """{"type":"permission-mode","permissionMode":"plan","sessionId":"grow"}""";
+
     // Several fixtures back to back, exercising every folder at once (reducers don't care whose lines they are).
     private static byte[] Combined(params string[] extraLines)
     {
@@ -55,6 +57,7 @@ public sealed class TranscriptFoldEquivalenceTests : IDisposable
             Tasks = r.T.TasksAt(path),
             Artifacts = r.T.ArtifactsAt(path),
             Title = r.T.TitleAt(path),
+            Mode = r.T.PermissionModeAt(path),
             Async = r.T.HasOutstandingAsyncAgentAt(path),
             Background = r.T.RunningBackgroundTasksAt(path),
             Fill = fill,
@@ -87,7 +90,7 @@ public sealed class TranscriptFoldEquivalenceTests : IDisposable
     {
         File.WriteAllBytes(P, []);
         var watching = Readers.Fresh();
-        GrowAndCompare(Combined(AsyncLaunch, AsyncNotified), watching, seed);
+        GrowAndCompare(Combined(AsyncLaunch, PlanMode, AsyncNotified), watching, seed);
 
         // Sanity: the combined transcript really exercises the folders being compared. (Its tasks end up stale —
         // other fixtures' prompts post-date the batch — so the task folder gets its own growth test below.)
@@ -98,6 +101,7 @@ public sealed class TranscriptFoldEquivalenceTests : IDisposable
         Assert.NotNull(t.ContextFillAt(P, TestEnvironment.FixtureCwd).Fill);
         Assert.NotEmpty(watching.M.FileSetsAt(P).Produced);
         Assert.False(t.HasOutstandingAsyncAgentAt(P));   // launched, then notified
+        Assert.Equal("plan", t.PermissionModeAt(P));
     }
 
     [Theory]

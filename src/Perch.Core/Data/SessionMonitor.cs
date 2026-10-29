@@ -808,17 +808,12 @@ internal sealed class SessionMonitor : IDisposable
                 ? sessionId[..Math.Min(8, sessionId.Length)]
                 : PathLeaf.Of(cwd);
 
-            var mode = ReadPermissionMode(Path.Combine(owner.SessionsDir, $"{sessionId}.mode"));
+            var mode = ParsePermissionMode(_transcripts.GetPermissionMode(sessionId, cwd));
 
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
             // Written/removed by both the overlay's right-click toggle and the plugin's /afk command.
             var externalNotify = !string.IsNullOrEmpty(sessionId)
                 && File.Exists(Path.Combine(owner.SessionsDir, $"{sessionId}.notify"));
-
-            // Work item request (docs/work-items-plan.md): perch-hook writes {sessionId}.work when the session was
-            // started with PERCH_WORK set. The app resolves it to an item, adds the session and deletes the marker.
-            var workRef = string.IsNullOrEmpty(sessionId) ? null
-                : ReadMarker(Path.Combine(owner.SessionsDir, $"{sessionId}.work"));
 
             // Self-reported config dir (M3/M4). Read whenever the set is multi-dir: it both disambiguates a
             // SHARED sessions/ (where the folder can't say which dir ran the session) and records a dir that
@@ -996,7 +991,6 @@ internal sealed class SessionMonitor : IDisposable
                 // thing that can attribute the session. See ClaudeSession.AttributedConfigDir.
                 ReportedConfigDir = reportedConfigDir,
                 ReportedSlug = reportedSlug,
-                WorkRef = workRef,
                 BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
                 Worktree = worktree,
             };
@@ -1189,33 +1183,19 @@ internal sealed class SessionMonitor : IDisposable
         }
     }
 
-    private static PermissionMode ReadPermissionMode(string path)
-    {
-        try
+    internal static PermissionMode ParsePermissionMode(string? text) =>
+        text?.Trim().ToLowerInvariant() switch
         {
-            if (!File.Exists(path))
-            {
-                return PermissionMode.Normal;
-            }
-            var text = File.ReadAllText(path).Trim().ToLowerInvariant();
-            return text switch
-            {
-                "acceptedits" or "accept_edits" or "accept-edits" => PermissionMode.AcceptEdits,
-                "plan" => PermissionMode.Plan,
-                "auto" => PermissionMode.Auto,
-                "bypass"
-                or "bypassall"
-                or "bypass_all"
-                or "bypasspermissions"
-                or "bypass_permissions" => PermissionMode.Bypass,
-                _ => PermissionMode.Normal,
-            };
-        }
-        catch
-        {
-            return PermissionMode.Normal;
-        }
-    }
+            "acceptedits" or "accept_edits" or "accept-edits" => PermissionMode.AcceptEdits,
+            "plan" => PermissionMode.Plan,
+            "auto" => PermissionMode.Auto,
+            "bypass"
+            or "bypassall"
+            or "bypass_all"
+            or "bypasspermissions"
+            or "bypass_permissions" => PermissionMode.Bypass,
+            _ => PermissionMode.Normal,
+        };
 
     /// <summary>
     /// Whether a raw session status of <paramref name="rawStatus"/> with hint
@@ -1267,7 +1247,7 @@ internal sealed class SessionMonitor : IDisposable
                 var watcher = new FileSystemWatcher(dir)
                 {
                     // Watch every file in the directory: *.json session files and their sibling
-                    // *.mode files. Re-scanning is cheap and idempotent, so a slightly broad
+                    // sidecars. Re-scanning is cheap and idempotent, so a slightly broad
                     // trigger is harmless and simpler than running two watchers.
                     NotifyFilter = NotifyFilters.FileName
                         | NotifyFilters.LastWrite

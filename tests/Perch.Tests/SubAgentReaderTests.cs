@@ -238,10 +238,10 @@ public class SubAgentReaderTests
         Assert.Equal("anestkid", child.AgentId);
     }
 
-    // ----- Hook-driven turn markers (SubagentStop / TeammateIdle) -----------------------------
+    // ----- Hook-driven turn markers (TeammateIdle, and SubagentStop from older builds) ---------
     //
-    // The plugin drops agent-{id}.stopped / .idle beside an agent's transcript when Claude Code fires
-    // the matching hook. The reader treats a marker as authoritative — provided it's at least as new as
+    // perch-hook drops agent-{id}.idle (and older builds agent-{id}.stopped) beside an agent's transcript
+    // when Claude Code fires the matching hook. The reader treats a marker as authoritative — provided it's at least as new as
     // the transcript — so a "working"-looking tail is retired immediately rather than after the 90s
     // staleness window. A later transcript write (a re-tasked teammate) ages the marker out.
 
@@ -328,6 +328,44 @@ public class SubAgentReaderTests
         finally
         {
             DeleteMarker("sessTeam", "agent-plainwork3333.jsonl", ".stopped");
+        }
+    }
+
+    // ----- Claude Code's own end flags in the meta sidecar ---------------------------------------
+    //
+    // Claude Code rewrites agent-{id}.meta.json with "finished": true when a sub-agent completes, or
+    // "stoppedByUser": true when the user stops it. Like a marker, it counts only while it's at least as new as
+    // the transcript, and the reader must notice the rewrite of a sidecar it has already cached.
+
+    [Theory]
+    [InlineData("finished")]
+    [InlineData("stoppedByUser")]
+    public void ScanBackground_MetaEndFlag_DropsAWorkingLookingSubAgent(string flag)
+    {
+        var src = Path.Combine(TestEnvironment.FixtureConfigDir, "projects", "C--fixtures-proj", "sessTeam", "subagents");
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "perch-subend-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            var jsonl = Path.Combine(dir, "agent-plainwork3333.jsonl");
+            var meta = Path.Combine(dir, "agent-plainwork3333.meta.json");
+            File.Copy(Path.Combine(src, "agent-plainwork3333.jsonl"), jsonl);
+            File.Copy(Path.Combine(src, "agent-plainwork3333.meta.json"), meta);
+            File.SetLastWriteTimeUtc(meta, DateTime.UtcNow - TimeSpan.FromMinutes(2));
+            File.SetLastWriteTimeUtc(jsonl, DateTime.UtcNow - TimeSpan.FromMinutes(1));
+
+            var reader = new SubAgentReader();
+            Assert.Single(reader.ScanBackground(dir));   // tail reads working, no end flag yet
+
+            File.WriteAllText(meta,
+                $$"""{"description":"explore code","agentType":"Explore","toolUseId":"toolu_plainwork","spawnDepth":1,"{{flag}}":true}""");
+            Assert.Empty(reader.ScanBackground(dir));   // the cached sidecar is re-read and ends it at once
+
+            File.SetLastWriteTimeUtc(jsonl, DateTime.UtcNow + TimeSpan.FromSeconds(5));
+            Assert.Single(reader.ScanBackground(dir));   // re-tasked after the flag: working again
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
 

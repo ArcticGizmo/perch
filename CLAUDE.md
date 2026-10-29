@@ -186,7 +186,9 @@ running the tray app.
   Midnight (so a future `Theme` role never reads back as black on an old file). Eyeball changes with
   `dotnet run … -- render <dir> [themeId]`.
 - **Data sources are files under `~/.claude/`**, read best-effort:
-  - Live session state: `~/.claude/sessions/{sessionId}.json` plus sidecars (`.mode`, `.notify`, `.history`).
+  - Live session state: `~/.claude/sessions/{pid}.json` plus sidecars (`.notify`, `.configdir`).
+    The permission-mode badge comes from the transcript's `permission-mode` records, not a sidecar; a
+    transcript without one (older Claude Code) shows no badge.
   - Transcripts: `~/.claude/projects/{enc-cwd}/{sessionId}.jsonl` (append-only, one JSON record per line,
     each with a `timestamp`; assistant records carry `message.usage` and `message.model`).
   Open with `FileShare.ReadWrite` (files are written live) and tolerate malformed/partial trailing lines —
