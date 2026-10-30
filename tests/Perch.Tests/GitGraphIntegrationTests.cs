@@ -270,6 +270,118 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal(new GitHeadState("spot", f1), GitOps.Head(_repo));
     }
 
+    // A branch "side" off m1 with one commit of its own, for the drop tests.
+    private bool AddSide() =>
+        Run("checkout", "-b", "side", "HEAD~1").exit == 0 && Commit("s.txt", "s1") && Run("checkout", "main").exit == 0;
+
+    private static DropOption DropOf(GraphSnapshot s, string from, string onto, DropKind kind) =>
+        GraphDrop.Menu(s, DragSource.Of(s.Refs.Single(r => r.Name == from)), DropTarget.Of(s.Refs.Single(r => r.Name == onto)))
+            .Options.Single(o => o.Kind == kind);
+
+    private string Hash(string rev) => Run("rev-parse", rev).stdout.Trim();
+
+    [Fact]
+    public void Drop_MergeThenUndo()
+    {
+        if (!_ready || !AddSide()) return;
+        var before = Hash("main");
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+
+        var (r, undo) = GitOps.RunDrop(s.Root, DropOf(s, "side", "main", DropKind.Merge));
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal(before, Hash("main^1"));
+        Assert.Equal(Hash("side"), Hash("main^2"));
+
+        Assert.True(undo!().Ok);
+        Assert.Equal(before, Hash("main"));
+    }
+
+    [Fact]
+    public void Drop_FastForwardABranchNoWorktreeHasThenUndo()
+    {
+        if (!_ready) return;
+        Assert.Equal(0, Run("branch", "behind", "HEAD~1").exit);
+        var old = Hash("behind");
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+        var ff = DropOf(s, "main", "behind", DropKind.FastForward);
+        Assert.Null(ff.RunIn);
+
+        var (r, undo) = GitOps.RunDrop(s.Root, ff);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal(Hash("main"), Hash("behind"));
+
+        Assert.True(undo!().Ok);
+        Assert.Equal(old, Hash("behind"));
+    }
+
+    [Fact]
+    public void Drop_RebaseABranchNoWorktreeHasSwitchesAndUndoSwitchesBack()
+    {
+        if (!_ready || !AddSide()) return;
+        var old = Hash("side");
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+        var rebase = DropOf(s, "side", "main", DropKind.Rebase);
+        Assert.True(rebase.SwitchFirst);
+
+        var (r, undo) = GitOps.RunDrop(s.Root, rebase);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal("side", GitOps.Head(_repo)!.Branch);
+        Assert.Equal(Hash("main"), Hash("side^"));
+
+        Assert.True(undo!().Ok);
+        Assert.Equal(old, Hash("side"));
+        Assert.Equal("main", GitOps.Head(_repo)!.Branch);
+    }
+
+    [Fact]
+    public void Drop_NewWorktreeFromTheLayoutThenUndo()
+    {
+        if (!_ready) return;
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+        var layout = new Perch.Data.WorktreeLayout("{parent}/{repo}-{name}", Perch.Data.WorktreeLayoutSource.Detected);   // the cleanup's -feature folder
+        var add = Assert.Single(GraphDrop.Menu(s, DragSource.Of(s.Refs.Single(r => r.Name == "feature")), DropTarget.NewWorktreeZone, layout).Options);
+        Assert.Equal(Path.GetFullPath(_repo + "-feature"), add.NewPath);
+
+        var (r, undo) = GitOps.RunDrop(s.Root, add);
+        Assert.True(r.Ok, r.Message);
+        Assert.Contains(GraphLoader.Load(_repo, GraphScope.All)!.Worktrees, w => w.Branch == "feature");
+
+        Assert.True(undo!().Ok);
+        Assert.DoesNotContain(GraphLoader.Load(_repo, GraphScope.All)!.Worktrees, w => w.Branch == "feature");
+    }
+
+    [Fact]
+    public void Drop_NewWorktreeOnANamedBranchFromACommitThenUndoDeletesTheBranch()
+    {
+        if (!_ready) return;
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+        var m1 = s.Commits.Single(c => c.Subject == "m1");
+        var add = Assert.Single(GraphDrop.Menu(s, DragSource.Of(m1), DropTarget.NewWorktreeZone).Options);
+        Assert.True(add.NeedsName);
+
+        var (r, undo) = GitOps.RunDrop(s.Root, add, newBranch: "spike", newPath: _repo + "-feature");
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal(m1.Hash, Hash("spike"));
+
+        Assert.True(undo!().Ok);
+        Assert.NotEqual(0, Run("rev-parse", "--verify", "--quiet", "refs/heads/spike").exit);
+    }
+
+    [Fact]
+    public void WorktreeRemove_RefusesChangesUnlessForced()
+    {
+        if (!_ready) return;
+        var wt = _repo + "-feature";
+        Assert.Equal(0, Run("worktree", "add", wt, "feature").exit);
+        File.WriteAllText(Path.Combine(wt, "dirty.txt"), "wip\n");
+
+        Assert.False(GitOps.WorktreeRemove(_repo, wt, force: false).Ok);
+        Assert.True(Directory.Exists(wt));
+        Assert.True(GitOps.WorktreeRemove(_repo, wt, force: true).Ok);
+        Assert.False(Directory.Exists(wt));
+        Assert.Equal(0, Run("rev-parse", "--verify", "--quiet", "refs/heads/feature").exit);   // the branch stays
+    }
+
     [Theory]
     [InlineData("hint: Waiting for your editor\nfatal: 'feature' is already used by worktree at 'C:/x'", "'feature' is already used by worktree at 'C:/x'")]
     [InlineData("error: Your local changes would be overwritten\n", "Your local changes would be overwritten")]

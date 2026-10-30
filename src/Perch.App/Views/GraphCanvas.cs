@@ -66,7 +66,7 @@ internal sealed class GraphCanvas : Control
     private IBrush[] _laneFill = [], _laneFillFaded = [], _laneWash = [];
     private IBrush _bg = Brushes.Transparent, _hoverBg = Brushes.Transparent, _selBg = Brushes.Transparent,
         _text = Brushes.White, _title = Brushes.White, _muted = Brushes.Gray;
-    private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray);
+    private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray), _dropPen = new ImmutablePen(Brushes.White);
 
     // Where the pills were painted, for hit-testing (drag sources and double-click targets in later checkpoints).
     private readonly List<(Rect Rect, int Row, GraphRef Ref)> _pillHits = new();
@@ -88,6 +88,10 @@ internal sealed class GraphCanvas : Control
 
     /// <summary>A ref pill was double-clicked.</summary>
     public event Action<GraphRef>? RefActivated;
+
+    /// <summary>A branch pill or a commit row was pressed and dragged past the threshold; the host runs the drag from
+    /// here (the pointer stays captured by the canvas until release).</summary>
+    public event Action<DragSource, IPointer>? DragRequested;
 
     /// <summary>The last loaded row came into view and the snapshot has more to load.</summary>
     public event Action? LoadMoreRequested;
@@ -137,6 +141,7 @@ internal sealed class GraphCanvas : Control
         _muted = B(c.Muted);
         _nodeEdge = new ImmutablePen(B(c.Background), 2);
         _sep = new ImmutablePen(B(c.Separator), 1);
+        _dropPen = new ImmutablePen(B(c.Title, 0.85), 1.8);
         InvalidateVisual();
     }
 
@@ -216,6 +221,51 @@ internal sealed class GraphCanvas : Control
             Offset = top - (Viewport - _rowH) / 2;
     }
 
+    /// <summary>
+    /// What a drag would drop on at <paramref name="p"/>: a branch pill; else a worktree's WIP row; else a row's local
+    /// branch (this worktree's first), so the drop needn't land exactly on the pill; else the worktree whose HEAD it is.
+    /// </summary>
+    public DropTarget? DropTargetAt(Point p)
+    {
+        if (_snap is null) return null;
+        if (RefAt(p) is { Kind: GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch } r) return DropTarget.Of(r);
+        int row = RowAt(p.Y);
+        if (row < 0) return null;
+        if (_snap.WipAt(row) is { } wt) return DropTarget.Of(wt);
+        var hash = _snap.Commits[row].Hash;
+        var locals = _snap.RefsAt(hash).Where(x => x.Kind == GraphRefKind.LocalBranch).ToList();
+        if (locals.Count > 0)
+            return DropTarget.Of(locals.FirstOrDefault(x => x.Name == _snap.Current?.Branch) ?? locals[0]);
+        return _snap.WorktreesAt(hash).FirstOrDefault() is { } at ? DropTarget.Of(at) : null;
+    }
+
+    /// <summary>Outlines what a drag would drop on (null clears it).</summary>
+    public void SetDropHighlight(DropTarget? target)
+    {
+        if (target == _drop) return;
+        _drop = target;
+        InvalidateVisual();
+    }
+
+    private DropTarget? _drop;
+    private (Point At, int Row)? _press;
+    private const double DragThreshold = 6;
+
+    /// <summary>Scrolls a step when <paramref name="y"/> (canvas coordinates) is near the top or bottom edge, for a drag
+    /// that wants to reach rows out of view. Returns whether it moved.</summary>
+    public bool AutoScroll(double y)
+    {
+        const double edge = 28;
+        double step = y < edge ? -(edge - Math.Max(y, 0)) : y > Viewport - edge ? y - (Viewport - edge) : 0;
+        if (step == 0) return false;
+        double before = _offset;
+        Offset += Math.Clamp(step, -edge, edge) * _rowH / 14;
+        return _offset != before;
+    }
+
+    /// <summary>The pills the last paint drew, in canvas coordinates.</summary>
+    internal IEnumerable<(Rect Rect, GraphRef Ref)> PaintedPills => _pillHits.Select(h => (h.Rect, h.Ref));
+
     /// <summary>The ref pill under <paramref name="p"/>, if any.</summary>
     public GraphRef? RefAt(Point p)
     {
@@ -285,6 +335,11 @@ internal sealed class GraphCanvas : Control
 
         for (int r = first; r <= last; r++)
             PaintRow(ctx, s, r, subjX, subjW, authorX, whenX);
+
+        if (_drop is not null)
+            for (int r = first; r <= last; r++)
+                if (IsDropRow(s, r))
+                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(new Rect(2, r * _rowH - _offset + 1.5, size.Width - 4, _rowH - 3), 6));
 
         if (s.HasMore && last == s.Rows.Length - 1)
         {
@@ -394,6 +449,8 @@ internal sealed class GraphCanvas : Control
                 if (synced)
                     ctx.DrawEllipse(null, OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.2), new Point(rect.Right - 9, y), 2.4, 2.4);
                 _pillHits.Add((rect, r, rf));
+                if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
+                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
                 if (shown == 0)
                     ctx.DrawLine(_pillBorder[lane], new Point(RefsW - 6, y), new Point(nodeX - RingR - 1, y));
                 right = rect.X - 4;
@@ -404,6 +461,16 @@ internal sealed class GraphCanvas : Control
             var more = OverlayDraw.Text($"+{total - shown}", SmallSize, _muted);
             OverlayDraw.TextLeftMid(ctx, more, Math.Max(2, right - more.Width), y);
         }
+    }
+
+    // The row a drop would land on: the target branch's commit, or the target worktree's WIP row (its HEAD when clean).
+    private bool IsDropRow(GraphSnapshot s, int r)
+    {
+        var c = s.Commits[r];
+        if (_drop?.Ref is { } dr) return dr.Target == c.Hash;
+        if (_drop?.Worktree is { } w)
+            return c.IsWorkInProgress ? c.Hash == w.WipHash : w.Changes == 0 && w.Head == c.Hash;
+        return false;
     }
 
     private static bool UpstreamOfLocal(IReadOnlyList<GraphRef> refs, GraphRef remote)
@@ -528,15 +595,49 @@ internal sealed class GraphCanvas : Control
         Select(r, scrollIntoView: false);
         if (e.ClickCount == 2)
         {
+            _press = null;
             if (RefAt(pos) is { } rf) RefActivated?.Invoke(rf);
             else RowActivated?.Invoke(r);
         }
+        else
+        {
+            _press = (pos, r);
+            e.Pointer.Capture(this);
+        }
         e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        _press = null;
+    }
+
+    // Past the threshold, a press on a branch pill drags that branch and a press elsewhere on a commit row drags the
+    // commit. WIP rows, tags and stashes don't drag.
+    private DragSource? SourceAt(Point p, int row)
+    {
+        if (_snap is null || row < 0 || row >= _snap.Commits.Count) return null;
+        if (RefAt(p) is { } r)
+            return r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch ? DragSource.Of(r) : null;
+        var c = _snap.Commits[row];
+        return c.IsWorkInProgress ? null : DragSource.Of(c);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
+        if (_press is { } press && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            var d = e.GetPosition(this) - press.At;
+            if (Math.Abs(d.X) + Math.Abs(d.Y) >= DragThreshold)
+            {
+                _press = null;
+                if (SourceAt(press.At, press.Row) is { } src)
+                    DragRequested?.Invoke(src, e.Pointer);
+                return;
+            }
+        }
         int r = RowAt(e.GetPosition(this).Y);
         if (r == _hover) return;
         _hover = r;

@@ -55,3 +55,36 @@ Use a throwaway clone or a branch you don't mind moving, with at least one extra
 8. **Session guard.** With a Claude session running in this worktree, any checkout first shows a menu whose top line warns "A Claude session is working in this worktree…" with **Check out X anyway** / **Cancel** (or the stash/bring-along choices when dirty). It warns; it never blocks.
 9. **Already there.** Double-click the branch this worktree is on: toast "<worktree> is already on <branch>." Nothing runs.
 10. **Light/dark** recolours the toast and the branch bar.
+
+## CP12–CP14: drag to merge, rebase, cherry-pick and make worktrees
+
+Use a throwaway clone. Set it up with: two local branches that have diverged (`a` and `b`, each with a commit the other lacks), a branch `behind` that is an ancestor of `main` (`git branch behind main~2`), and one extra worktree (`git worktree add ..\<repo>--try b`). *Before (all of these):* nothing in the graph or rail could be dragged.
+
+**The gesture (CP12)**
+
+1. **Start a drag.** Press on a branch pill in the graph (or a branch in the rail's Local/Remotes lists, or a worktree card) and move a few pixels. A small card follows the pointer with the branch name, and a hint line under it. Pressing on a commit row (not a pill) and moving drags the commit (the card shows its short hash and subject). Tags, stashes and WIP rows don't drag. A plain click still just selects/jumps as before.
+2. **Targets light up.** Over a branch pill: that row gets an outline and the pill a ring, and the hint says what a drop would do ("Merge a into b in <worktree>", "· 1 more on drop" when the menu has more). Over a row but not on a pill, the row's local branch is the target. Over a worktree's WIP row, or a worktree card in the rail, the target is that worktree. Over nothing useful: "Drop on a branch, a worktree or + New worktree. Esc cancels."
+3. **New worktree zone.** While dragging, a "+ New worktree" box appears under the worktree cards in the rail; it disappears when the drag ends.
+4. **Auto-scroll.** Drag towards the top or bottom edge of the graph: it scrolls, and the target under the pointer updates.
+5. **Cancel.** Esc during a drag, or releasing over nothing, ends it with no menu and no change.
+
+**The drop menu and operations (CP13)**
+
+Every menu item names what happens and where (the worktree), with the git command underneath in mono. A session working in the worktree an option runs in adds an italic warning line at the top (warning only). Every success shows the toast with **Undo**.
+
+6. **Diverged branches.** Drag `a` onto `b`: **Merge a into b in <worktree that has b>** and **Rebase a onto b** (if no worktree has `a`, the rebase says "(checks out a in <this worktree> first)"). Pick Merge: `b` gets a merge commit in the worktree that has it (that can be the extra worktree; this window's worktree isn't touched). **Undo** resets `b` back (`reset --keep`, so it refuses rather than lose changes).
+7. **Rebase.** Drag `a` onto `b` again and pick Rebase: `a` is replayed on `b`. Undo puts `a` back where it was, and switches this worktree back if the rebase had to check `a` out.
+8. **Fast-forward.** Drag `main` onto `behind`: one option, **Fast-forward behind to main** (`git fetch . main:behind` when no worktree has `behind`, `git merge --ff-only` in its worktree when one does). Undo moves it back. Dragging `behind` onto `main` instead says "main already contains behind." in a toast, with no menu.
+9. **Local onto remote.** Drag a local branch onto its `origin/...` pill: rebase onto it when they've diverged, fast-forward when the local one is just behind.
+10. **Cherry-pick.** Drag a commit row from `a` onto the `b` pill: **Cherry-pick abc1234 onto b in <worktree>**. Dropping a commit onto a branch that already contains it says so.
+11. **Switch first needs a clean tree.** An option that would check a branch out in this worktree first is greyed out ("· commit or stash this worktree's changes first") while this worktree has changes.
+12. **Conflicts.** Make `a` and `b` change the same line, drag `a` onto `b` and Merge in this window's worktree: the toast says it stopped on conflicts, and an orange banner appears under the graph title: "A merge is in progress in <worktree>: N conflicted files. Resolve and stage them in Changes, then Continue." with **Continue** and **Abort** (and **Skip commit** for a rebase or cherry-pick). The conflicted files show as `U` in Changes. Abort puts it back; resolving, staging and Continue finishes it (no editor opens). If the conflict happened in *another* worktree, the toast instead offers **Open <worktree>**, which re-points the window there (where the banner then shows).
+
+**Worktrees from drag (CP14)**
+
+13. **Onto a worktree.** Drag a free branch onto the extra worktree's card: **Check out <branch> in <worktree>**; it switches that worktree, not this one. If that worktree has changes, you're asked stash / bring along / cancel first. Dragging a branch that another worktree holds offers only a detached checkout. Dragging a commit onto a card offers cherry-pick onto that worktree's branch and a detached checkout.
+14. **New worktree.** Drag a branch no worktree has onto **+ New worktree**: **New worktree for <branch>**, command `git worktree add ..\<repo>--<branch> <branch>` (or, in a repo whose existing worktrees follow another layout, that layout). The toast says "Made worktree <folder> on <branch>" with **Undo** (removes the worktree) and **Start a session there** (opens a Perch session window in it). The new worktree appears in the rail.
+15. **New worktree, new branch.** Drag a remote-only branch onto the zone: a tracking branch of the same name in a new worktree. Drag a branch another worktree holds, or a commit: the branch bar opens ("New worktree on a new branch from …"); type a name and Enter. Undo removes the worktree and deletes that new branch (only if it hasn't moved).
+16. **Card menu.** Right-click a worktree card: **Open <name> in this window**, **Start a Claude session in <name>**, **Remove <name>…** (not for this window's worktree or the main one), **Prune worktrees whose folders are gone**. Remove on a clean worktree just goes; on one with changes, or with a session working in it, it asks first (and only then forces). The branch stays.
+
+These have been verified headlessly: a synthetic pointer drag in `render` (`git_tree_drag_pill_1x.png`, `git_tree_drag_newworktree_1x.png`, `git_tree_drop_menu_1x.png`), the banner in `git_tree_checkout_1x.png`, and every git operation and its Undo by integration tests against a throwaway repo. Not on a real desktop: the feel of the drag, menu placement at the pointer, and anything multi-monitor.

@@ -281,6 +281,7 @@ internal sealed partial class GitTreeWindow : Window
         _graph.Canvas.RowActivated += OnGraphActivated;
         _graph.Canvas.RefActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _graph.Canvas); };
         _graph.Canvas.LoadMoreRequested += LoadMore;
+        _graph.Canvas.DragRequested += BeginDrag;
         _graphLabel = PaneLabel(ScopeLabel(_scope));
 
         _rail = new GraphRail();
@@ -288,6 +289,8 @@ internal sealed partial class GitTreeWindow : Window
         _rail.LaneHovered += lane => _graph.Canvas.HighlightLane(lane);
         _rail.WorktreeActivated += wt => { if (!wt.IsCurrent) Retarget(wt.Path, wt.Name, null, isActive: false); };
         _rail.BranchActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _rail); };
+        _rail.DragRequested += BeginDrag;
+        _rail.WorktreeMenuRequested += ShowWorktreeMenu;
         _railSeparator = new Border { Width = 1 };
 
         // Ctrl+G: go to a branch, tag, hash or message text; Enter again walks the matches.
@@ -311,8 +314,11 @@ internal sealed partial class GitTreeWindow : Window
         graphBody.Children.Add(WithColumn(_railSeparator, 1));
         graphBody.Children.Add(WithColumn(_graph, 2));
         BuildCheckoutUi();
+        BuildDragUi();
         graphBody.Children.Add(WithColumn(_toast, 2));
-        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, _branchBar, graphBody } };
+        _dragLayer.SetValue(Grid.ColumnSpanProperty, 3);
+        graphBody.Children.Add(_dragLayer);
+        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, _branchBar, _progressBar, graphBody } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -591,7 +597,8 @@ internal sealed partial class GitTreeWindow : Window
         }
         else if (e.Key == Key.Escape)
         {
-            if (_findBar.IsVisible) CloseFind();
+            if (CancelDrag()) { }
+            else if (_findBar.IsVisible) CloseFind();
             else if (_branchBar.IsVisible) CloseBranchBar();
             else if (_gotoBar.IsVisible) CloseGoTo();
             else Close();
@@ -652,9 +659,11 @@ internal sealed partial class GitTreeWindow : Window
     /// Re-targeting a different repo resets the base-ref override to auto.</summary>
     public void Retarget(string cwd, string title, PullRequestInfo? pr, bool isActive, string? focusPath = null)
     {
-        if (!string.Equals(cwd, _cwd, StringComparison.Ordinal))
+        bool moved = !string.Equals(cwd, _cwd, StringComparison.Ordinal);
+        if (moved)
             _baseOverride = null; // a new repo: re-decide the base automatically
         _cwd = cwd;
+        if (moved) LoadLayout(cwd);
         _retargetActive = isActive;
         _isActive = isActive;
         // A caller (the session UI's "View diff") can ask the tree to land on a specific file. Convert the
@@ -729,6 +738,7 @@ internal sealed partial class GitTreeWindow : Window
         _snap = snap;
         var ctx = snap?.Context ?? GraphSnapshot.ScopeContext.None;
         _lastStatus = ctx.CurrentStatus;
+        UpdateInProgress(ctx.InProgress);
         _branch = ctx.CurrentStatus?.Branch;
         _baseCandidates = ctx.BaseCandidates;
         _effectiveBase = ctx.BaseRef;
@@ -758,6 +768,7 @@ internal sealed partial class GitTreeWindow : Window
             if (_snap.WorktreeContaining(s.Worktree?.Dir ?? s.Cwd) is { } wt
                 && (!best.TryGetValue(wt.Path, out var had) || Urgency(s.Status) > Urgency(had.Status)))
                 best[wt.Path] = s;
+        _sessionAt = best;
 
         var shown = best.ToDictionary(kv => kv.Key, kv => SessionView(kv.Value), StringComparer.OrdinalIgnoreCase);
         _rail.SetSessions(shown);
@@ -1555,6 +1566,7 @@ internal sealed partial class GitTreeWindow : Window
         _gitDirWatcher = null;
         _busyPoll?.Stop();
         _toastTimer?.Stop();
+        _dragScroll?.Stop();
         _debounce?.Dispose();
         _debounce = null;
         base.OnClosed(e);
@@ -1631,6 +1643,7 @@ internal sealed partial class GitTreeWindow : Window
                 else
                 {
                     ApplyStatus(status, cwd);
+                    UpdateInProgress(snap?.Context.InProgress ?? GitInProgress.None);
                 }
 
                 // Repaint a still-shown WIP file only when its content actually changed (skipped when a
@@ -1934,6 +1947,7 @@ internal sealed partial class GitTreeWindow : Window
         _gotoBar.Background = _pal.WindowBg;
         _gotoLabel.Foreground = _pal.Muted;
         ApplyCheckoutPalette();
+        ApplyDragPalette();
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;

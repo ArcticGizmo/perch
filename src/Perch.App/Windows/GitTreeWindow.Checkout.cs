@@ -18,15 +18,15 @@ internal sealed partial class GitTreeWindow
 
     private Border _toast = null!;
     private TextBlock _toastMsg = null!, _toastCmd = null!;
-    private Button _toastUndo = null!, _toastClose = null!;
-    private Action? _toastUndoAction;
+    private Button _toastUndo = null!, _toastClose = null!, _toastExtra = null!;
+    private Action? _toastUndoAction, _toastExtraAction;
     private DispatcherTimer? _toastTimer;
     private bool _toastError, _toastBusy;
 
     private Border _branchBar = null!;
     private TextBox _branchBox = null!;
     private TextBlock _branchLabel = null!;
-    private CheckoutPlan? _branchPlan;
+    private Action<string>? _branchCreate;
 
     private void BuildCheckoutUi()
     {
@@ -40,6 +40,8 @@ internal sealed partial class GitTreeWindow
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), [DockPanel.DockProperty] = Dock.Right,
         };
         _toastClose.Click += (_, _) => HideToast();
+        _toastExtra = new Button { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        _toastExtra.Click += (_, _) => { var act = _toastExtraAction; HideToast(); act?.Invoke(); };
         _toast = new Border
         {
             IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
@@ -49,7 +51,7 @@ internal sealed partial class GitTreeWindow
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _toastClose, _toastUndo, new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _toastMsg, _toastCmd } } },
+                Children = { _toastClose, _toastUndo, _toastExtra, new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _toastMsg, _toastCmd } } },
             },
         };
         // Reading the toast (or reaching for Undo) holds it open.
@@ -110,7 +112,8 @@ internal sealed partial class GitTreeWindow
                 ShowMenu(anchor, atPointer: true,
                     Note(plan.Target == plan.Commit ? $"No branch points at {Short(plan.Commit)}" : $"{plan.Target} is a tag"),
                     Item($"Check out {Dest(plan, null)} here, detached", () => ConfirmAndRun(plan, null, anchor, atPointer: true)),
-                    Item($"Create a branch at {Short(plan.Commit)}…", () => OpenBranchBar(plan)));
+                    Item($"Create a branch at {Short(plan.Commit)}…", () =>
+                        OpenBranchBar($"New branch at {Dest(plan, null)}", name => ConfirmAndRun(plan, name, _branchBar, atPointer: false))));
                 return;
             default:
                 ConfirmAndRun(plan, null, anchor, atPointer: true);
@@ -128,20 +131,26 @@ internal sealed partial class GitTreeWindow
             RunCheckout(plan, newBranch, DirtyChoice.None);
             return;
         }
-        string dest = Dest(plan, newBranch);
+        AskAboutChanges(HereName(), dirty, _isActive, Dest(plan, newBranch), choice => RunCheckout(plan, newBranch, choice), anchor, atPointer);
+    }
+
+    // The checkout-with-changes menu, for any worktree: stash / bring along / cancel, or "anyway" when only a working
+    // session is the concern (it warns, never blocks).
+    private void AskAboutChanges(string where, int dirty, bool busy, string dest, Action<DirtyChoice> run, Control anchor, bool atPointer)
+    {
         string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}";
         var items = new List<Control>();
-        if (_isActive)
-            items.Add(Note("A Claude session is working in this worktree; checking out under it can confuse its edits"));
+        if (busy)
+            items.Add(Note($"A Claude session is working in {where}; checking out under it can confuse its edits"));
         if (dirty > 0)
         {
-            items.Add(Note($"{HereName()} has {changes} not committed"));
-            items.Add(Item($"Stash the {changes}, then check out {dest}", () => RunCheckout(plan, newBranch, DirtyChoice.Stash)));
-            items.Add(Item($"Bring the {changes} to {dest}", () => RunCheckout(plan, newBranch, DirtyChoice.Carry)));
+            items.Add(Note($"{where} has {changes} not committed"));
+            items.Add(Item($"Stash the {changes}, then check out {dest}", () => run(DirtyChoice.Stash)));
+            items.Add(Item($"Bring the {changes} to {dest}", () => run(DirtyChoice.Carry)));
         }
         else
         {
-            items.Add(Item($"Check out {dest} anyway", () => RunCheckout(plan, newBranch, DirtyChoice.None)));
+            items.Add(Item($"Check out {dest} anyway", () => run(DirtyChoice.None)));
         }
         items.Add(Item("Cancel", () => { }));
         ShowMenu(anchor, atPointer, items.ToArray());
@@ -201,10 +210,11 @@ internal sealed partial class GitTreeWindow
 
     // ---- new branch ----
 
-    private void OpenBranchBar(CheckoutPlan plan)
+    // The inline "name a new branch" bar, for a branch at a commit or a new worktree's branch.
+    private void OpenBranchBar(string label, Action<string> create)
     {
-        _branchPlan = plan;
-        _branchLabel.Text = $"New branch at {Dest(plan, null)}";
+        _branchCreate = create;
+        _branchLabel.Text = label;
         _branchBar.IsVisible = true;
         _branchBox.Text = "";
         Dispatcher.UIThread.Post(() => _branchBox.Focus());
@@ -213,24 +223,29 @@ internal sealed partial class GitTreeWindow
     private void CloseBranchBar()
     {
         _branchBar.IsVisible = false;
-        _branchPlan = null;
+        _branchCreate = null;
         _graph.Canvas.Focus();
     }
 
     private void CreateBranchFromBar()
     {
         string name = _branchBox.Text?.Trim() ?? "";
-        if (name.Length == 0 || _branchPlan is not { } plan) return;
+        if (name.Length == 0 || _branchCreate is not { } create) return;
         _branchBar.IsVisible = false;
-        _branchPlan = null;
-        ConfirmAndRun(plan, name, _branchBar, atPointer: false);
+        _branchCreate = null;
+        create(name);
     }
 
     // ---- toast ----
 
     // Busy toasts stay until replaced; the rest hide on their own (errors linger longer), unless the pointer is on them.
-    private void ShowToast(string message, string command, Action? undo, bool error = false, bool busy = false)
+    // <paramref name="extra"/> is a second button for a follow-up (open the worktree that has the conflicts, start a session).
+    private void ShowToast(string message, string command, Action? undo, bool error = false, bool busy = false,
+        (string Label, Action Act)? extra = null)
     {
+        _toastExtra.Content = extra?.Label;
+        _toastExtra.IsVisible = extra is not null;
+        _toastExtraAction = extra?.Act;
         _toastError = error;
         _toastMsg.Text = message;
         _toastCmd.Text = command;
@@ -253,13 +268,16 @@ internal sealed partial class GitTreeWindow
         _toastTimer?.Stop();
         _toast.IsVisible = false;
         _toastUndoAction = null;
+        _toastExtraAction = null;
     }
 
-    /// <summary>For the headless render: the toast with Undo and the new-branch bar, which otherwise need a gesture.</summary>
+    /// <summary>For the headless render: the toast with Undo, the new-branch bar and the in-progress banner, which
+    /// otherwise need a gesture or a conflict.</summary>
     internal void PreviewCheckoutChrome()
     {
+        UpdateInProgress(GitInProgress.Merge);
         var at = _snap?.Current?.Head ?? "0000000";
-        OpenBranchBar(new CheckoutPlan(CheckoutAction.Detach, at, at));
+        OpenBranchBar($"New branch at {Short(at)}", _ => { });
         ShowToast("Checked out feeds; 3 changes stashed", "git switch feeds", () => { });
     }
 
@@ -292,14 +310,11 @@ internal sealed partial class GitTreeWindow
         if (newBranch is not null) return newBranch;
         return plan.Action switch
         {
-            CheckoutAction.Track => $"{LocalNameOf(plan.Target)} (tracking {plan.Target})",
+            CheckoutAction.Track => $"{GraphCheckout.LocalName(plan.Target)} (tracking {plan.Target})",
             _ when plan.Target == plan.Commit => Short(plan.Commit),
             _ => plan.Target,
         };
     }
-
-    private static string LocalNameOf(string remoteBranch) =>
-        remoteBranch.IndexOf('/') is var i and >= 0 ? remoteBranch[(i + 1)..] : remoteBranch;
 
     private static string Short(string hash) => hash.Length > 7 ? hash[..7] : hash;
 

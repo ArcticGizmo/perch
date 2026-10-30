@@ -400,6 +400,143 @@ public class GitGraphTests
         Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForCommit(s, here.WipHash));
     }
 
+    // ---- drop planning --------------------------------------------------------------------------------
+
+    // main m2 → m1; feat f1 → m1; spike (remote only) x1 → m1; old at m1. The window's worktree C:/r is on main; a
+    // second worktree is detached at x1.
+    private static readonly GraphWorktree DropHere = new("C:/r", "main", "m2", 0, true);
+    private static readonly GraphWorktree DropOther = new("C:/r--x", null, "x1", 0, false);
+
+    private static GraphSnapshot DropSnap() =>
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("x1", "m1"), C("m1")],
+        [
+            new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2"),
+            new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "f1"),
+            new("old", "refs/heads/old", GraphRefKind.LocalBranch, "m1"),
+            new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m2"),
+            new("origin/spike", "refs/remotes/origin/spike", GraphRefKind.RemoteBranch, "x1"),
+            new("v1", "refs/tags/v1", GraphRefKind.Tag, "m1"),
+        ], [DropHere, DropOther], "main", null, 100);
+
+    private static DropMenu Drop(GraphSnapshot s, string from, string onto) =>
+        GraphDrop.Menu(s, DragSource.Of(RefNamed(s, from)), DropTarget.Of(RefNamed(s, onto)));
+
+    [Fact]
+    public void Drop_DivergedBranchesMergeInTheTargetsWorktreeAndRebaseInTheSources()
+    {
+        var s = DropSnap();
+        var m = Drop(s, "feat", "main");
+
+        Assert.Null(m.Note);
+        Assert.Equal([DropKind.Merge, DropKind.Rebase], m.Options.Select(o => o.Kind));
+        var merge = m.Options[0];
+        Assert.Equal((DropHere, "feat", "main", false, "git merge feat"), (merge.RunIn, merge.Rev, merge.Branch, merge.SwitchFirst, merge.Command));
+        // No worktree has feat, so the rebase switches this one to it (rebase <onto> <branch> does that itself).
+        var rebase = m.Options[1];
+        Assert.Equal((DropHere, "main", "feat", true, "git rebase main feat"), (rebase.RunIn, rebase.Rev, rebase.Branch, rebase.SwitchFirst, rebase.Command));
+    }
+
+    [Fact]
+    public void Drop_FastForwardsABranchThatIsBehindAndRefusesOneThatHasItAll()
+    {
+        var s = DropSnap();
+
+        var ff = Assert.Single(Drop(s, "main", "old").Options);
+        Assert.Equal((DropKind.FastForward, (GraphWorktree?)null, "git fetch . main:old"), (ff.Kind, ff.RunIn, ff.Command));
+        Assert.Equal("main already contains old.", Drop(s, "old", "main").Note);
+        Assert.Empty(Drop(s, "old", "main").Options);
+        Assert.Empty(Drop(s, "main", "main").Options);
+        Assert.Contains("tag", Drop(s, "feat", "v1").Note);
+    }
+
+    [Fact]
+    public void Drop_ARemoteSourceMergesButNeverRebasesAndALocalRebasesOntoARemote()
+    {
+        var s = DropSnap();
+
+        Assert.Equal([DropKind.Merge], Drop(s, "origin/spike", "feat").Options.Select(o => o.Kind));
+        var onto = Assert.Single(Drop(s, "feat", "origin/main").Options);
+        Assert.Equal((DropKind.Rebase, "origin/main", "feat"), (onto.Kind, onto.Rev, onto.Branch));
+        var behind = Assert.Single(Drop(s, "old", "origin/main").Options);
+        Assert.Equal((DropKind.FastForward, "origin/main", "old"), (behind.Kind, behind.Rev, behind.Branch));
+        Assert.Empty(Drop(s, "origin/spike", "origin/main").Options);
+    }
+
+    [Fact]
+    public void Drop_ACommitCherryPicksUnlessTheBranchHasIt()
+    {
+        var s = DropSnap();
+        var f1 = s.Commits[s.RowOf("f1")];
+
+        var pick = Assert.Single(GraphDrop.Menu(s, DragSource.Of(f1), DropTarget.Of(RefNamed(s, "main"))).Options);
+        Assert.Equal((DropKind.CherryPick, DropHere, "f1", "main"), (pick.Kind, pick.RunIn, pick.Rev, pick.Branch));
+        Assert.NotNull(GraphDrop.Menu(s, DragSource.Of(s.Commits[s.RowOf("m1")]), DropTarget.Of(RefNamed(s, "main"))).Note);
+    }
+
+    [Fact]
+    public void Drop_OntoAWorktreeChecksOutThere()
+    {
+        var s = DropSnap();
+
+        var sw = Assert.Single(GraphDrop.Menu(s, DragSource.Of(RefNamed(s, "feat")), DropTarget.Of(DropOther)).Options);
+        Assert.Equal((DropKind.Checkout, CheckoutAction.Switch, DropOther, "feat"), (sw.Kind, sw.Checkout, sw.RunIn, sw.Rev));
+
+        var held = GraphDrop.Menu(s, DragSource.Of(RefNamed(s, "main")), DropTarget.Of(DropOther));
+        Assert.Contains("checked out in r", held.Note);
+        Assert.Equal(CheckoutAction.Detach, Assert.Single(held.Options).Checkout);
+
+        var f1 = GraphDrop.Menu(s, DragSource.Of(s.Commits[s.RowOf("f1")]), DropTarget.Of(DropHere));
+        Assert.Equal([DropKind.CherryPick, DropKind.Checkout], f1.Options.Select(o => o.Kind));
+    }
+
+    [Fact]
+    public void Drop_OntoNewWorktreeUsesTheLayoutAndAsksForANameWhenItMust()
+    {
+        var s = DropSnap();
+        var layout = new Perch.Data.WorktreeLayout("{parent}/{repo}--{name}", Perch.Data.WorktreeLayoutSource.Detected);
+        DropMenu New(DragSource src) => GraphDrop.Menu(s, src, DropTarget.NewWorktreeZone, layout);
+
+        var feat = Assert.Single(New(DragSource.Of(RefNamed(s, "feat"))).Options);
+        Assert.Equal(Path.GetFullPath("C:/r--feat"), feat.NewPath);
+        Assert.Equal(("feat", false, false), (feat.Branch, feat.NeedsName, feat.Track));
+
+        var spike = Assert.Single(New(DragSource.Of(RefNamed(s, "origin/spike"))).Options);
+        Assert.Equal(("spike", true, "origin/spike"), (spike.Branch, spike.Track, spike.Rev));
+
+        var main = New(DragSource.Of(RefNamed(s, "main")));
+        Assert.Contains("checked out in r", main.Note);
+        Assert.True(Assert.Single(main.Options).NeedsName);
+        Assert.True(Assert.Single(New(DragSource.Of(s.Commits[s.RowOf("x1")])).Options).NeedsName);
+    }
+
+    [Fact]
+    public void NewWorktreePath_FollowsTheUsersWorktreesElseGoesBesideTheRepo()
+    {
+        var detected = new Perch.Data.WorktreeLayout("{root}/.worktrees/{name}", Perch.Data.WorktreeLayoutSource.Detected);
+        var hinted = new Perch.Data.WorktreeLayout("{root}/.claude/worktrees/{name}", Perch.Data.WorktreeLayoutSource.IgnoreHint);
+
+        Assert.Equal(Path.GetFullPath("C:/r/.worktrees/feature-x"), GraphDrop.NewWorktreePath("C:/r", detected, "feature/x"));
+        Assert.Equal(Path.GetFullPath("C:/r--feature-x"), GraphDrop.NewWorktreePath("C:/r", hinted, "feature/x"));
+        Assert.Equal(Path.GetFullPath("C:/r--feature-x"), GraphDrop.NewWorktreePath("C:/r", null, "feature/x"));
+
+        // Opened on a linked worktree, a new one still goes beside the main worktree, not beside the linked one.
+        var fromLinked = GraphSnapshot.Build("C:/r--x", GraphScope.All, GraphLogQuery.Everything, [C("m1")],
+            [new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "m1")], [], "main", null, 100);
+        var opt = Assert.Single(GraphDrop.Menu(fromLinked, DragSource.Of(fromLinked.Refs[0]), DropTarget.NewWorktreeZone, null, "C:/r").Options);
+        Assert.Equal(Path.GetFullPath("C:/r--feat"), opt.NewPath);
+    }
+
+    [Fact]
+    public void IsAncestor_WalksTheLoadedRows()
+    {
+        var s = DropSnap();
+        Assert.True(GraphDrop.IsAncestor(s, "m1", "m2"));
+        Assert.True(GraphDrop.IsAncestor(s, "m2", "m2"));
+        Assert.False(GraphDrop.IsAncestor(s, "f1", "m2"));
+        Assert.False(GraphDrop.IsAncestor(s, "m2", "m1"));
+        Assert.Null(GraphDrop.IsAncestor(s, "nope", "m2"));
+    }
+
     [Fact]
     public void WorktreeContaining_PicksTheDeepestWorktreeAboveTheFolder()
     {

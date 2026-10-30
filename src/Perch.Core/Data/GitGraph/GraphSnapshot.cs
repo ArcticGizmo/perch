@@ -61,6 +61,9 @@ internal sealed class GraphSnapshot
     /// candidates it chose from.</summary>
     public sealed record ScopeContext(GitRepoStatus? CurrentStatus, string? BaseRef, IReadOnlyList<string> BaseCandidates)
     {
+        /// <summary>A merge, rebase or cherry-pick the current worktree has stopped in the middle of.</summary>
+        public GitInProgress InProgress { get; init; }
+
         public static readonly ScopeContext None = new(null, null, []);
     }
 

@@ -1979,6 +1979,13 @@ public partial class App : Application
     {
         var w = new GitTreeWindow(_appSettings ?? AppSettings.Load());
         w.SetSessions(_lastSessions);
+        w.StartSessionRequested += path =>
+        {
+            var session = NewSessionWindow();
+            session.Show();
+            ForceFront(session);
+            session.StartNew(path);
+        };
         return w;
     }
 

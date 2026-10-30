@@ -110,6 +110,14 @@ internal static class GitOps
         _ => new GitOpResult(false, "Nothing is in progress.", ""),
     };
 
+    /// <summary>Drops the commit a rebase or cherry-pick stopped on and carries on with the rest.</summary>
+    public static GitOpResult Skip(string worktree, GitInProgress op) => op switch
+    {
+        GitInProgress.Rebase => Run(worktree, "rebase", "--skip"),
+        GitInProgress.CherryPick => Run(worktree, "cherry-pick", "--skip"),
+        _ => new GitOpResult(false, "Only a rebase or cherry-pick can skip a commit.", ""),
+    };
+
     public static GitOpResult Abort(string worktree, GitInProgress op) => op switch
     {
         GitInProgress.Merge => Run(worktree, "merge", "--abort"),
@@ -179,6 +187,139 @@ internal static class GitOps
         var popped = StashPop(worktree, undo.Stash);
         return popped.Ok ? r : popped;
     }
+
+    /// <summary>
+    /// Carries out a drop menu's <paramref name="o"/> for the repo at <paramref name="root"/>. <paramref name="dirty"/>
+    /// applies to a checkout; <paramref name="newBranch"/>/<paramref name="newPath"/> to a new worktree that needed a
+    /// name. On success the undo puts it back: a moved branch is reset to where it was (<c>reset --keep</c>, which
+    /// refuses rather than lose local changes; <c>update-ref</c> with the expected value for a branch no worktree has),
+    /// a switch made first is switched back, a new worktree is removed (and the branch made for it deleted, if it
+    /// hasn't moved). A failure that didn't stop on conflicts leaves things as they were.
+    /// </summary>
+    public static (GitOpResult Result, Func<GitOpResult>? Undo) RunDrop(string root, DropOption o, DirtyChoice dirty = DirtyChoice.None,
+        string? newBranch = null, string? newPath = null)
+    {
+        try
+        {
+            switch (o.Kind)
+            {
+                case DropKind.Checkout:
+                {
+                    var wt = o.RunIn!.Path;
+                    var (r, undo) = Checkout(wt, o.Checkout, o.Rev, dirty);
+                    return (r, undo is null ? null : () => Undo(wt, undo));
+                }
+                case DropKind.NewWorktree:
+                    return AddWorktree(root, o, newBranch, newPath);
+                case DropKind.FastForward when o.RunIn is null:
+                {
+                    var branch = o.Branch!;
+                    if (RevParse(root, "refs/heads/" + branch) is not { } old)
+                        return (new GitOpResult(false, $"Couldn't find {branch}.", ""), null);
+                    if (Refuse(o.Rev, branch) is { } refused) return (refused, null);
+                    var r = Run(root, "fetch", ".", $"{o.Rev}:refs/heads/{branch}");
+                    if (!r.Ok || RevParse(root, "refs/heads/" + branch) is not { } moved) return (r, null);
+                    return (r, () => Run(root, "update-ref", "refs/heads/" + branch, old, moved));
+                }
+                default:
+                    return MoveBranch(o);
+            }
+        }
+        catch (Exception e)
+        {
+            return (new GitOpResult(false, e.Message, o.Command), null);
+        }
+    }
+
+    // Merge, rebase, cherry-pick or fast-forward in the worktree that has the branch (switching to it first when none did).
+    private static (GitOpResult, Func<GitOpResult>?) MoveBranch(DropOption o)
+    {
+        var wt = o.RunIn!.Path;
+        var branch = o.Branch!;
+        if (Refuse(o.Rev, branch) is { } refused) return (refused, null);
+        var before = Head(wt);
+        if (before is null) return (new GitOpResult(false, "Couldn't read this worktree's HEAD.", ""), null);
+        if (RevParse(wt, "refs/heads/" + branch) is not { } old)
+            return (new GitOpResult(false, $"Couldn't find {branch}.", ""), null);
+
+        GitHeadState? switchedFrom = null;
+        if (o.SwitchFirst)
+        {
+            switchedFrom = before;
+            if (o.Kind != DropKind.Rebase)   // `rebase <onto> <branch>` does its own switch
+            {
+                var sw = Switch(wt, branch);
+                if (!sw.Ok) return (sw, null);
+            }
+        }
+
+        var r = o.Kind switch
+        {
+            DropKind.Merge => Merge(wt, o.Rev),
+            DropKind.FastForward => FastForward(wt, o.Rev),
+            DropKind.Rebase => o.SwitchFirst ? Run(wt, "rebase", o.Rev, branch) : Rebase(wt, o.Rev),
+            DropKind.CherryPick => CherryPick(wt, o.Rev, noCommit: false),
+            _ => new GitOpResult(false, "Not a branch operation.", o.Command),
+        };
+        if (!r.Ok)
+        {
+            if (!r.Conflicted && switchedFrom is not null && Head(wt)?.Branch != switchedFrom.Branch)
+                Restore(wt, switchedFrom);
+            return (r, null);
+        }
+
+        return (r, () =>
+        {
+            if (Head(wt)?.Branch != branch)
+                return new GitOpResult(false, $"{branch} isn't checked out in {Path.GetFileName(wt)} any more, so it can't be put back.", "");
+            var reset = Run(wt, "reset", "--keep", old);
+            if (!reset.Ok || switchedFrom is null) return reset;
+            var back = Restore(wt, switchedFrom);
+            return back.Ok ? reset : back;
+        });
+    }
+
+    private static (GitOpResult, Func<GitOpResult>?) AddWorktree(string root, DropOption o, string? newBranch, string? newPath)
+    {
+        var path = newPath ?? o.NewPath;
+        var branch = o.NeedsName ? newBranch : o.Branch;
+        if (path is null || branch is not { Length: > 0 })
+            return (new GitOpResult(false, "The new worktree needs a branch name.", ""), null);
+        if (Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any())
+            return (new GitOpResult(false, $"{path} already exists.", ""), null);
+        if (PrWorktree.Inspect(root) is { } ctx)
+            PrWorktree.EnsureExcluded(ctx.Set.Root, ctx.Layout, ctx.Set.Bare);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        bool created = o.NeedsName || o.Track;
+        var r = o.NeedsName ? WorktreeAdd(root, path, null, branch, o.Rev)
+            : o.Track ? Refuse(path, branch, o.Rev) ?? Run(root, "worktree", "add", "--track", "-b", branch, path, o.Rev)
+            : WorktreeAdd(root, path, branch, null, null);
+        if (!r.Ok) return (r, null);
+        var made = created ? RevParse(root, "refs/heads/" + branch) : null;
+
+        return (r, () =>
+        {
+            var removed = Run(root, "worktree", "remove", path);
+            if (!removed.Ok || made is null) return removed;
+            var deleted = Run(root, "update-ref", "-d", "refs/heads/" + branch, made);
+            return deleted.Ok ? removed : deleted;
+        });
+    }
+
+    private static string? RevParse(string dir, string rev)
+    {
+        var r = GitRunner.Run(dir, 6000, "rev-parse", "--verify", "--quiet", rev);
+        return r.Exit == 0 ? r.Stdout.Trim() : null;
+    }
+
+    /// <summary><c>git worktree remove</c>. Without <paramref name="force"/> git refuses a worktree with changes, which
+    /// is the point: the caller asks the user before forcing.</summary>
+    public static GitOpResult WorktreeRemove(string repo, string path, bool force) =>
+        Refuse(path) ?? (force ? Run(repo, "worktree", "remove", "--force", path) : Run(repo, "worktree", "remove", path));
+
+    /// <summary><c>git worktree prune</c>: forgets worktrees whose folders were deleted by hand.</summary>
+    public static GitOpResult WorktreePrune(string repo) => Run(repo, "worktree", "prune", "-v");
 
     /// <summary>Where HEAD is now (branch, or null when detached, plus the commit), for Undo. Null on failure.</summary>
     public static GitHeadState? Head(string worktree)

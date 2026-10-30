@@ -19,7 +19,23 @@ namespace Perch.Avalonia.Views;
 internal sealed class GraphRail : UserControl
 {
     /// <summary>What a rail row stands for.</summary>
-    public sealed record RailItem(GraphWorktree? Worktree, GraphRef? Ref);
+    public sealed record RailItem(GraphWorktree? Worktree, GraphRef? Ref, bool NewWorktree = false)
+    {
+        /// <summary>As a drop target: a worktree card, a branch row, or the "New worktree" zone. Tags and stashes take no drops.</summary>
+        public DropTarget? Target => NewWorktree ? DropTarget.NewWorktreeZone
+            : Worktree is not null ? DropTarget.Of(Worktree)
+            : Ref is { Kind: GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch } r ? DropTarget.Of(r)
+            : null;
+    }
+
+    /// <summary>A branch row or a worktree card (its branch) was pressed and dragged past the threshold; the host runs
+    /// the drag from here.</summary>
+    public event Action<DragSource, IPointer>? DragRequested;
+
+    private bool _dragging;
+    private (Control Row, Point At)? _press;
+    private Control? _dropHit;
+    private IBrush? _dropHitWas;
 
     private readonly StackPanel _stack = new() { Spacing = 2, Margin = new Thickness(8, 4, 8, 12) };
     private GraphCanvas.Colors _c = GraphCanvas.Colors.For(light: false);
@@ -46,6 +62,9 @@ internal sealed class GraphRail : UserControl
     public event Action<int>? LaneHovered;
 
     public event Action<GraphWorktree>? WorktreeActivated;
+
+    /// <summary>A worktree card was right-clicked: the host shows its menu at the pointer.</summary>
+    public event Action<GraphWorktree, Control>? WorktreeMenuRequested;
     public event Action<GraphRef>? BranchActivated;
 
     public void SetColors(GraphCanvas.Colors c)
@@ -67,6 +86,58 @@ internal sealed class GraphRail : UserControl
         Rebuild();
     }
 
+    /// <summary>While a drag is on, the rail offers a "New worktree" drop zone under the worktree cards.</summary>
+    public void SetDragging(bool dragging)
+    {
+        if (_dragging == dragging) return;
+        _dragging = dragging;
+        HighlightDrop(null);
+        Rebuild();
+    }
+
+    /// <summary>Washes the card or row a drag is over (null clears it).</summary>
+    public void HighlightDrop(Control? hit)
+    {
+        if (ReferenceEquals(hit, _dropHit)) return;
+        if (_dropHit is Border was) was.Background = _dropHitWas;
+        _dropHit = hit;
+        if (hit is Border b)
+        {
+            _dropHitWas = b.Background;
+            b.Background = Ink(_c.Lanes[0], 0.22);
+        }
+    }
+
+    // Press-and-drag on a row starts a drag of whatever it stands for; a plain click still does what it did.
+    private void TrackPress(Control row, PointerPressedEventArgs e)
+    {
+        if (e.ClickCount != 1 || !e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) { _press = null; return; }
+        _press = (row, e.GetPosition(this));
+        e.Pointer.Capture(row);
+    }
+
+    private void Draggable(Control row, Func<DragSource?> source)
+    {
+        row.PointerMoved += (_, e) =>
+        {
+            if (_press is not { } p || !ReferenceEquals(p.Row, row) || !e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) return;
+            var d = e.GetPosition(this) - p.At;
+            if (Math.Abs(d.X) + Math.Abs(d.Y) < 6) return;
+            _press = null;
+            if (source() is { } s) DragRequested?.Invoke(s, e.Pointer);
+        };
+        row.PointerReleased += (_, _) => _press = null;
+    }
+
+    // The drop zone for a new worktree, only while dragging.
+    private Control NewWorktreeZone() => new Border
+    {
+        Padding = new Thickness(8, 9), Margin = new Thickness(0, 2), CornerRadius = new CornerRadius(8),
+        BorderThickness = new Thickness(1.2), BorderBrush = Ink(_c.Muted, 0.7), Background = Brushes.Transparent,
+        Child = new TextBlock { Text = "+ New worktree", FontSize = 12, Foreground = Ink(_c.Text), HorizontalAlignment = HorizontalAlignment.Center },
+        Tag = new RailItem(null, null, NewWorktree: true),
+    };
+
     private IBrush Ink(Color c, double o = 1) => OverlayDraw.Brush(c, o);
 
     private void Rebuild()
@@ -79,6 +150,8 @@ internal sealed class GraphRail : UserControl
         _stack.Children.Add(Header($"Worktrees", s.Worktrees.Count));
         foreach (var w in s.Worktrees.OrderByDescending(w => w.IsCurrent))
             _stack.Children.Add(WorktreeCard(s, w));
+        if (_dragging)
+            _stack.Children.Add(NewWorktreeZone());
 
         var locals = s.Refs.Where(r => r.Kind == GraphRefKind.LocalBranch).ToList();
         _stack.Children.Add(Header("Local", locals.Count));
@@ -206,10 +279,14 @@ internal sealed class GraphRail : UserControl
         ToolTip.SetTip(card, w.Path);
         card.PointerPressed += (_, e) =>
         {
+            TrackPress(card, e);
             if (e.ClickCount == 2) WorktreeActivated?.Invoke(w);
             else if ((w.Changes > 0 ? w.WipHash : w.Head) is { } target) JumpRequested?.Invoke(target);
             e.Handled = true;
         };
+        card.ContextRequested += (_, e) => { WorktreeMenuRequested?.Invoke(w, card); e.Handled = true; };
+        Draggable(card, () => s.Refs.FirstOrDefault(r => r.Kind == GraphRefKind.LocalBranch && r.Name == w.Branch) is { } br
+            ? DragSource.Of(br) : null);
         Hover(card, lane, w.IsCurrent ? card.Background : null);
         return card;
     }
@@ -243,10 +320,13 @@ internal sealed class GraphRail : UserControl
         ToolTip.SetTip(row, lane >= 0 ? r.Name : $"{r.Name} · not in the loaded graph");
         row.PointerPressed += (_, e) =>
         {
+            TrackPress(row, e);
             if (e.ClickCount == 2) BranchActivated?.Invoke(r);
             else JumpRequested?.Invoke(r.Target);
             e.Handled = true;
         };
+        if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
+            Draggable(row, () => DragSource.Of(r));
         Hover(row, lane);
         return row;
     }

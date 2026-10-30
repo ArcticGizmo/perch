@@ -691,6 +691,42 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, "git_tree_live_1x.png"));
                 liveFrame.Save(fs);
             }
+
+            // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
+            // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
+            // runs on the repo.
+            if (tw.PreviewPill(0) is { } from && tw.PreviewPill(1) is { } to)
+            {
+                void Settle() { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Dispatcher.UIThread.RunJobs(); }
+                void Frame(string name)
+                {
+                    Settle();
+                    if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+                }
+                const global::Avalonia.Input.RawInputModifiers held = global::Avalonia.Input.RawInputModifiers.LeftMouseButton;
+                tw.MouseMove(from);
+                tw.MouseDown(from, global::Avalonia.Input.MouseButton.Left);
+                for (int i = 1; i <= 8; i++)
+                {
+                    tw.MouseMove(new Point(from.X + (to.X - from.X) * i / 8, from.Y + (to.Y - from.Y) * i / 8), held);
+                    Settle();
+                }
+                Console.WriteLine($"git graph drag: dragging={tw.PreviewDragging}, hint over a pill: {tw.PreviewGhostHint}");
+                Frame("git_tree_drag_pill_1x.png");
+                if (tw.PreviewNewWorktreeZone() is { } zone)
+                {
+                    tw.MouseMove(zone, held);
+                    Console.WriteLine($"git graph drag: hint over New worktree: {tw.PreviewGhostHint}");
+                    Frame("git_tree_drag_newworktree_1x.png");
+                    tw.MouseUp(zone, global::Avalonia.Input.MouseButton.Left);
+                    Frame("git_tree_drop_menu_1x.png");
+                }
+                else
+                {
+                    tw.MouseUp(to, global::Avalonia.Input.MouseButton.Left);
+                }
+                Settle();
+            }
             tw.PreviewCheckoutChrome();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

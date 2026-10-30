@@ -38,27 +38,38 @@ public sealed record CheckoutPlan(CheckoutAction Action, string Target, string C
 /// <summary>Decides what a double-click means. Pure: reads only the snapshot, so it's unit-tested.</summary>
 internal static class GraphCheckout
 {
-    /// <summary>A double-click on a ref pill or a rail row.</summary>
-    public static CheckoutPlan ForRef(GraphSnapshot snap, GraphRef r)
+    /// <summary>A double-click on a ref pill or a rail row, checking out in <paramref name="here"/> (the window's own
+    /// worktree when null; a drag onto a worktree card names another).</summary>
+    public static CheckoutPlan ForRef(GraphSnapshot snap, GraphRef r, GraphWorktree? here = null)
     {
+        here ??= snap.Current;
         switch (r.Kind)
         {
             case GraphRefKind.LocalBranch:
-                return ForBranch(snap, r.Name, r.Target);
+                return ForBranch(snap, here, r.Name, r.Target);
             case GraphRefKind.RemoteBranch:
                 // A local branch of the same name already exists: going there is what was meant; `switch --track`
                 // would only fail on the name clash.
-                int slash = r.Name.IndexOf('/');
-                string local = slash >= 0 ? r.Name[(slash + 1)..] : r.Name;
-                if (snap.Refs.FirstOrDefault(x => x.Kind == GraphRefKind.LocalBranch && x.Name == local) is { } l)
-                    return ForBranch(snap, l.Name, l.Target);
+                if (LocalOf(snap, r) is { } l)
+                    return ForBranch(snap, here, l.Name, l.Target);
                 return new CheckoutPlan(CheckoutAction.Track, r.Name, r.Target);
             case GraphRefKind.Tag:
-                return Detached(snap, r.Name, r.Target);
+                return Detached(here, r.Name, r.Target);
             default:
                 return CheckoutPlan.Nothing;
         }
     }
+
+    /// <summary>The local branch named like remote branch <paramref name="remote"/> (<c>origin/x</c> → <c>x</c>), if any.</summary>
+    public static GraphRef? LocalOf(GraphSnapshot snap, GraphRef remote)
+    {
+        string local = LocalName(remote.Name);
+        return snap.Refs.FirstOrDefault(x => x.Kind == GraphRefKind.LocalBranch && x.Name == local);
+    }
+
+    /// <summary><c>origin/x</c> → <c>x</c>.</summary>
+    public static string LocalName(string remoteBranch) =>
+        remoteBranch.IndexOf('/') is var i and >= 0 ? remoteBranch[(i + 1)..] : remoteBranch;
 
     /// <summary>A double-click on a commit row (not on a pill): its local branch if it has one (this worktree's own
     /// first, then one no other worktree holds), else a remote branch to track, else the bare commit.</summary>
@@ -71,29 +82,29 @@ internal static class GraphCheckout
         {
             var current = snap.Current?.Branch;
             var pick = locals.FirstOrDefault(x => x.Name == current)
-                       ?? locals.FirstOrDefault(x => HolderOf(snap, x.Name) is null)
+                       ?? locals.FirstOrDefault(x => HolderOf(snap, snap.Current, x.Name) is null)
                        ?? locals[0];
-            return ForBranch(snap, pick.Name, pick.Target);
+            return ForBranch(snap, snap.Current, pick.Name, pick.Target);
         }
         if (refs.FirstOrDefault(x => x.Kind == GraphRefKind.RemoteBranch) is { } remote)
             return ForRef(snap, remote);
-        return Detached(snap, hash, hash);
+        return Detached(snap.Current, hash, hash);
     }
 
-    private static CheckoutPlan ForBranch(GraphSnapshot snap, string branch, string commit)
+    private static CheckoutPlan ForBranch(GraphSnapshot snap, GraphWorktree? here, string branch, string commit)
     {
-        if (snap.Current is { } cur && cur.Branch == branch)
+        if (here is not null && here.Branch == branch)
             return new CheckoutPlan(CheckoutAction.AlreadyHere, branch, commit);
-        if (HolderOf(snap, branch) is { } holder)
+        if (HolderOf(snap, here, branch) is { } holder)
             return new CheckoutPlan(CheckoutAction.HeldElsewhere, branch, commit, holder);
         return new CheckoutPlan(CheckoutAction.Switch, branch, commit);
     }
 
-    private static CheckoutPlan Detached(GraphSnapshot snap, string target, string commit) =>
-        snap.Current is { Branch: null } cur && cur.Head == commit
+    private static CheckoutPlan Detached(GraphWorktree? here, string target, string commit) =>
+        here is { Branch: null } && here.Head == commit
             ? new CheckoutPlan(CheckoutAction.AlreadyHere, target, commit)
             : new CheckoutPlan(CheckoutAction.Detach, target, commit);
 
-    private static GraphWorktree? HolderOf(GraphSnapshot snap, string branch) =>
-        snap.Worktrees.FirstOrDefault(w => !w.IsCurrent && w.Branch == branch);
+    private static GraphWorktree? HolderOf(GraphSnapshot snap, GraphWorktree? here, string branch) =>
+        snap.Worktrees.FirstOrDefault(w => w.Branch == branch && !string.Equals(w.Path, here?.Path, StringComparison.OrdinalIgnoreCase));
 }

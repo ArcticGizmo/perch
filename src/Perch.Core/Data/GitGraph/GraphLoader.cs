@@ -42,7 +42,10 @@ internal static class GraphLoader
         Mark("parse");
         var hints = previous is not null && previous.Scope == scope ? previous.Hints() : null;
         int current = trees.ToList().FindIndex(t => t.IsCurrent);
-        var context = new GraphSnapshot.ScopeContext(current >= 0 ? statusTask.Result[current] : null, baseRef, candidates);
+        var context = new GraphSnapshot.ScopeContext(current >= 0 ? statusTask.Result[current] : null, baseRef, candidates)
+        {
+            InProgress = GitOps.InProgress(cwd),
+        };
         var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context);
         Mark("layout");
         return snapshot;
