@@ -96,10 +96,14 @@ internal sealed class LaneAllocator
         for (int k = 1; k < c.Parents.Length; k++)
         {
             var p = c.Parents[k];
-            int j = _lanes.IndexOf(p);
-            if (j < 0)
+            // A parent on the primary chain will land in lane 0, so the merge line heads there rather than joining
+            // some other branch's lane that happens to be waiting for it too.
+            bool toPrimary = p == _primaryNext && FreeAt(0);
+            int j = toPrimary ? 0 : _lanes.IndexOf(p);
+            if (toPrimary || j < 0)
             {
-                j = Allocate(Hint(p));
+                if (!toPrimary)
+                    j = Allocate(Hint(p));
                 Set(j, p);
                 (opened ??= new()).Add(j);
             }

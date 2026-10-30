@@ -670,6 +670,12 @@ internal static class HeadlessRenderer
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
         RenderControl(BuildTreeSurface(light: true), Path.Combine(outDir, "git_tree_light_1x.png"), 96);
 
+        // The git graph canvas: lanes, merges, ref pills, worktree rings and two dirty worktrees' WIP rows with their
+        // dashed tethers, selected on a commit, in both of the Tree window's polarities.
+        RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1x.png"), 96);
+        RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1.5x.png"), 144);
+        RenderControl(BuildGraphCanvas(light: true), Path.Combine(outDir, "git_graph_light_1x.png"), 96);
+
         // Markdown viewer window: the file tree (session produced/referenced groups + the project folder
         // tree) beside the rendered preview. Unlike the owner-drawn surfaces this uses templated controls
         // (TreeView/ScrollViewer/SelectableTextBlock) that only realise inside a shown window, so it's
@@ -3667,6 +3673,68 @@ internal static class HeadlessRenderer
             }
             w.Close();
         }
+    }
+
+    // A sample history shaped like docs/git-graph-design.html: main with tags, three feature branches (one merged
+    // from main, one left behind), worktrees on two of them (both dirty) and a clean one on a third.
+    private static Control BuildGraphCanvas(bool light)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        int age = 0;
+        Perch.Data.GitGraph.GraphCommit C(string hash, string subject, params string[] parents) =>
+            new(hash.PadRight(40, '0'), parents.Select(p => p.PadRight(40, '0')).ToArray(), "Jon Howell", "jon@x", now - (age += 2700), subject);
+        var log = new[]
+        {
+            C("a1f3c9e", "Roost tabs: rail sort survives a restart", "e02d5b1"),
+            C("7be0d42", "Graph: lane allocator + topo-order reader", "9083893"),
+            C("4c19a07", "Feeds: OPML import, per-feed images", "b7d2e90"),
+            C("e02d5b1", "Merge branch 'main' into roost-tabs", "31ac6f8", "9083893"),
+            C("9083893", "PR glyph: green approval tick beside the CI dot; bump to 0.6.1 (#94)", "ea56d6d"),
+            C("ea56d6d", "Slim perch-hook to native signals; bump to 0.6.0 (#93)", "58cc471"),
+            C("b7d2e90", "Feeds: story player + injection guard", "926a009"),
+            C("31ac6f8", "Roost tabs: Focus tab + tab painter", "926a009"),
+            C("58cc471", "Idle compaction toggle, per-directory Edit in search (#92)", "926a009"),
+            C("3c51d94", "GitHub dashboard: card redesign + simpler dialog", "d81f2aa"),
+            C("926a009", "Keep sign-ins fresh (experimental), Login required (#91)", "309e0f1"),
+            C("309e0f1", "PR glyph: emoji in check names, terminal-started trays (#90)", "6fa0b3c"),
+            C("d81f2aa", "GitHub alerts: dismiss + filters", "6fa0b3c"),
+            C("6fa0b3c", "Per-dir expected account; drift warning (#89)", "0e7c4d5"),
+            C("0e7c4d5", "Mermaid diagrams: flowchart, sequence, ER (#85)"),
+        };
+        Perch.Data.GitGraph.GraphRef R(string name, Perch.Data.GitGraph.GraphRefKind kind, string at) =>
+            new(name, name, kind, at.PadRight(40, '0'));
+        var refs = new[]
+        {
+            R("main", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "9083893"),
+            R("roost-tabs", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "a1f3c9e"),
+            R("feeds", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "4c19a07"),
+            R("git-graph", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "7be0d42"),
+            R("github-dashboard", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "3c51d94"),
+            R("origin/main", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "9083893"),
+            R("origin/roost-tabs", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "31ac6f8"),
+            R("origin/github-dashboard", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "3c51d94"),
+            R("v0.6.1", Perch.Data.GitGraph.GraphRefKind.Tag, "9083893"),
+            R("v0.6.0", Perch.Data.GitGraph.GraphRefKind.Tag, "ea56d6d"),
+            R("v0.5.46", Perch.Data.GitGraph.GraphRefKind.Tag, "926a009"),
+        };
+        string P(string name) => Path.Combine(@"C:\src", name);
+        var worktrees = new[]
+        {
+            new Perch.Data.GitGraph.GraphWorktree(P("perch"), "main", "9083893".PadRight(40, '0'), 0, IsCurrent: true),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--roost-tabs"), "roost-tabs", "a1f3c9e".PadRight(40, '0'), 3, false),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--feeds"), "feeds", "4c19a07".PadRight(40, '0'), 1, false),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--git-graph"), "git-graph", "7be0d42".PadRight(40, '0'), 0, false),
+        };
+        var snap = Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
+            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
+        var canvas = new Views.GraphCanvas { Width = 1180 };
+        canvas.Height = snap.Rows.Length * canvas.RowHeight;
+        canvas.SetColors(Views.GraphCanvas.Colors.For(light));
+        canvas.SetSnapshot(snap, keepPlace: false);
+        canvas.Measure(new Size(canvas.Width, canvas.Height));
+        canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
+        canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
+        return canvas;
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph

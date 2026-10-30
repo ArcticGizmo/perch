@@ -136,6 +136,17 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void Merge_FromThePrimaryBranchHeadsForLaneZero()
+    {
+        // g forks from main's tip m2 (and waits for it in lane 1); then f merges m2 in. The merge line goes
+        // straight to lane 0, where m2 will land, not across into g's lane.
+        var a = Layout([C("g1", "m2"), C("f2", "f1", "m2"), C("m2", "m1"), C("f1", "m1"), C("m1")], primary: "m2");
+
+        Assert.Equal([1, 2, 0, 2, 0], a.Rows.Select(r => r.Lane));
+        AssertEdges(a.Rows[2], E(1, 0, 1), E(2, 0, 0), E(2, 2, 2));
+    }
+
+    [Fact]
     public void Octopus_OpensALanePerExtraParent()
     {
         var a = Layout([C("o", "a", "b", "c"), C("c", "r"), C("b", "r"), C("a", "r"), C("r")], primary: "o");
