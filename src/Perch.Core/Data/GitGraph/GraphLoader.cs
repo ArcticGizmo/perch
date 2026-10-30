@@ -139,21 +139,33 @@ internal static class GraphLoader
             return new GraphWorktree(t.Path, branch, head, statuses[i]?.Changes.Count ?? 0, t.IsCurrent);
         }).ToList();
 
-    // A detached worktree's HEAD file holds the commit hash itself; its .git is a folder (main worktree) or a file
-    // naming the per-worktree git dir (linked worktree).
+    // A detached worktree's HEAD file holds the commit hash itself.
     internal static string? DetachedHead(string worktree)
     {
         try
         {
-            var dotGit = Path.Combine(worktree, ".git");
-            string? gitDir = Directory.Exists(dotGit) ? dotGit
-                : File.Exists(dotGit) && File.ReadLines(dotGit).FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) is { } line
-                    ? Path.GetFullPath(Path.Combine(worktree, line["gitdir:".Length..].Trim()))
-                    : null;
-            if (gitDir is null)
+            if (GitDirOf(worktree) is not { } gitDir)
                 return null;
             var head = File.ReadLines(Path.Combine(gitDir, "HEAD")).FirstOrDefault()?.Trim() ?? "";
             return head.Length >= 40 && head.All(Uri.IsHexDigit) ? head : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A worktree's own git dir: its <c>.git</c> folder (main worktree) or the per-worktree dir its
+    /// <c>.git</c> file names (linked worktree). Null when there's neither.</summary>
+    internal static string? GitDirOf(string worktree)
+    {
+        try
+        {
+            var dotGit = Path.Combine(worktree, ".git");
+            if (Directory.Exists(dotGit)) return dotGit;
+            return File.Exists(dotGit) && File.ReadLines(dotGit).FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) is { } line
+                ? Path.GetFullPath(Path.Combine(worktree, line["gitdir:".Length..].Trim()))
+                : null;
         }
         catch
         {

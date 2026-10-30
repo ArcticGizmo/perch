@@ -103,6 +103,110 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal(["f1", "m1", "merge feature"], branch.Commits.Where(c => !c.IsWorkInProgress).Select(c => c.Subject).Order());
     }
 
+    [Fact]
+    public void Ops_SwitchAndRestore()
+    {
+        if (!_ready) return;
+        var before = GitOps.Head(_repo)!;
+        Assert.Equal("main", before.Branch);
+
+        var r = GitOps.Switch(_repo, "feature");
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal("git switch feature", r.Command);
+        Assert.Equal("feature", GitOps.Head(_repo)!.Branch);
+
+        Assert.True(GitOps.Restore(_repo, before).Ok);
+        Assert.Equal(before, GitOps.Head(_repo));
+
+        Assert.True(GitOps.SwitchDetach(_repo, before.Hash).Ok);
+        Assert.Null(GitOps.Head(_repo)!.Branch);
+    }
+
+    [Fact]
+    public void Ops_RefuseABranchHeldByAnotherWorktree()
+    {
+        if (!_ready) return;
+        Assert.Equal(0, Run("worktree", "add", _repo + "-feature", "feature").exit);
+
+        var r = GitOps.Switch(_repo, "feature");
+        Assert.False(r.Ok);
+        Assert.Contains("worktree", r.Message);
+        Assert.DoesNotContain("fatal:", r.Message);
+    }
+
+    [Fact]
+    public void Ops_StashCleansTheTree()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "changed\n");
+        File.WriteAllText(Path.Combine(_repo, "new.txt"), "untracked\n");
+
+        Assert.True(GitOps.StashPush(_repo, "Perch: before switching").Ok);
+        Assert.True(new Perch.Data.GitRepoService().GetStatus(_repo)!.Value.IsClean);
+        Assert.Contains(GraphLogReader.LoadRefs(_repo), r => r.Kind == GraphRefKind.Stash);
+    }
+
+    [Fact]
+    public void Ops_MergeConflictThenAbort()
+    {
+        if (!_ready) return;
+        Assert.Equal(0, Run("checkout", "-b", "clash", "HEAD~1").exit);
+        File.WriteAllText(Path.Combine(_repo, "m.txt"), "theirs\n");
+        Run("add", "m.txt");
+        Run("commit", "-m", "clash");
+        Run("checkout", "main");
+        Assert.True(Commit("m.txt", "ours"));
+
+        var r = GitOps.Merge(_repo, "clash");
+        Assert.False(r.Ok);
+        Assert.True(r.Conflicted);
+        Assert.Equal(GitInProgress.Merge, GitOps.InProgress(_repo));
+
+        Assert.True(GitOps.Abort(_repo, GitInProgress.Merge).Ok);
+        Assert.Equal(GitInProgress.None, GitOps.InProgress(_repo));
+    }
+
+    [Fact]
+    public void Ops_CherryPickAndFastForward()
+    {
+        if (!_ready) return;
+        var f1 = GraphLogReader.LoadLog(_repo, 10).Single(c => c.Subject == "f1").Hash;
+        Assert.Equal(0, Run("checkout", "-b", "pick", "HEAD~1").exit);   // m1, before the merge
+        Assert.True(GitOps.CherryPick(_repo, f1, noCommit: false).Ok);
+        Assert.Equal("f1", GraphLogReader.LoadLog(_repo, 1, query: new(["HEAD"], []))[0].Subject);
+
+        Assert.True(GitOps.Switch(_repo, "feature").Ok);
+        Assert.False(GitOps.FastForward(_repo, "pick").Ok);              // feature has f1 itself; not an ancestor
+        Assert.True(GitOps.FastForward(_repo, "main").Ok);               // main merged feature, so it fast-forwards
+    }
+
+    [Fact]
+    public void Ops_WorktreeAddOnANewBranch()
+    {
+        if (!_ready) return;
+        var path = _repo + "-feature";
+        var r = GitOps.WorktreeAdd(_repo, path, null, "spike", "main");
+        Assert.True(r.Ok, r.Message);
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+        Assert.Contains(s.Worktrees, w => w.Branch == "spike");
+    }
+
+    [Fact]
+    public void Ops_RefuseOptionLookingInput()
+    {
+        if (!_ready) return;
+        var r = GitOps.Switch(_repo, "--orphan");
+        Assert.False(r.Ok);
+        Assert.Equal("main", GitOps.Head(_repo)!.Branch);
+    }
+
+    [Theory]
+    [InlineData("hint: Waiting for your editor\nfatal: 'feature' is already used by worktree at 'C:/x'", "'feature' is already used by worktree at 'C:/x'")]
+    [InlineData("error: Your local changes would be overwritten\n", "Your local changes would be overwritten")]
+    [InlineData("", "fallback")]
+    public void Ops_FirstLineDropsHintsAndPrefixes(string stderr, string expected) =>
+        Assert.Equal(expected, GitOps.FirstLine(stderr, "fallback"));
+
     private bool Commit(string file, string message)
     {
         File.WriteAllText(Path.Combine(_repo, file), message + "\n");
