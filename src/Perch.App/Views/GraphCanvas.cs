@@ -55,7 +55,7 @@ internal sealed class GraphCanvas : Control
 
     private const double FontSize = 12.5, SmallSize = 11.5, PillSize = 11.5;
     private const double LaneW = 16, GraphPad = 12, MinGraphW = 44, MaxGraphW = 280;
-    private const double RefsW = 188, AuthorW = 136, WhenW = 62, Gap = 10;
+    private const double RefsW = 188, AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760;
     private const double NodeR = 4.5, MergeR = 3.6, RingR = 8, WipR = 5.5;
     private const int CurveSteps = 8;
 
@@ -221,7 +221,8 @@ internal sealed class GraphCanvas : Control
         double graphW = GraphWidth;
         double subjX = RefsW + graphW + Gap;
         double whenX = size.Width - WhenW - Gap;
-        double authorX = whenX - AuthorW;
+        // In a narrow pane the subject matters more than the author, so the author column goes first.
+        double authorX = whenX - (size.Width < NarrowW ? 0 : AuthorW);
         double subjW = Math.Max(40, authorX - Gap - subjX);
 
         for (int r = first; r <= last; r++)
@@ -298,8 +299,11 @@ internal sealed class GraphCanvas : Control
 
         var subject = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW - tagsW), FontSize, _title);
         OverlayDraw.TextLeftMid(ctx, subject, subjX, y);
-        var author = OverlayDraw.Text(Fit(c.AuthorName, SmallSize, AuthorW - Gap), SmallSize, _muted);
-        OverlayDraw.TextLeftMid(ctx, author, authorX, y);
+        if (authorX < whenX)
+        {
+            var author = OverlayDraw.Text(Fit(c.AuthorName, SmallSize, AuthorW - Gap), SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, author, authorX, y);
+        }
         var when = OverlayDraw.Text(Age(c), SmallSize, _muted);
         OverlayDraw.TextLeftMid(ctx, when, whenX + WhenW - when.Width, y);
     }

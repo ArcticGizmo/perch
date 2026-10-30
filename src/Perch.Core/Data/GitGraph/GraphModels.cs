@@ -68,6 +68,7 @@ public readonly record struct GraphEdge(short From, short To, short Color);
 public readonly record struct GraphRow(int Lane, GraphEdge[] Up);
 
 /// <summary>Which commits the graph shows.</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(TolerantStringEnumConverter<GraphScope>))]
 public enum GraphScope
 {
     /// <summary>Every branch, remote branch, tag, HEAD and worktree head.</summary>

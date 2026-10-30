@@ -21,11 +21,12 @@ internal sealed class GraphSnapshot
 
     private GraphSnapshot(string root, GraphScope scope, GraphLogQuery query, GraphCommit[] commits, int realCount,
         bool hasMore, IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryTip,
-        LaneAllocator lanes, Dictionary<string, int> rowOf)
+        LaneAllocator lanes, Dictionary<string, int> rowOf, ScopeContext context)
     {
         Root = root;
         Scope = scope;
         Query = query;
+        Context = context;
         Commits = commits;
         RealCommitCount = realCount;
         HasMore = hasMore;
@@ -55,10 +56,19 @@ internal sealed class GraphSnapshot
         Tethers = tethers;
     }
 
+    /// <summary>What the loader learned on the way that the window needs too: the current worktree's full status
+    /// (for the staging panes) and, for <see cref="GraphScope.Branch"/>, the base ref it scoped against and the
+    /// candidates it chose from.</summary>
+    public sealed record ScopeContext(GitRepoStatus? CurrentStatus, string? BaseRef, IReadOnlyList<string> BaseCandidates)
+    {
+        public static readonly ScopeContext None = new(null, null, []);
+    }
+
     /// <summary>The worktree the git commands run in (the one the window was opened on).</summary>
     public string Root { get; }
     public GraphScope Scope { get; }
     public GraphLogQuery Query { get; }
+    public ScopeContext Context { get; }
 
     /// <summary>Every row's commit, in display order: WIP pseudo-commits first.</summary>
     public IReadOnlyList<GraphCommit> Commits { get; }
@@ -85,6 +95,27 @@ internal sealed class GraphSnapshot
     /// <summary>The worktrees whose HEAD is <paramref name="hash"/>.</summary>
     public IReadOnlyList<GraphWorktree> WorktreesAt(string hash) => _worktreesAt.TryGetValue(hash, out var l) ? l : [];
 
+    /// <summary>The worktree the window was opened on, if the repo reported one.</summary>
+    public GraphWorktree? Current => Worktrees.FirstOrDefault(w => w.IsCurrent);
+
+    /// <summary>The row to land on with nothing else to go by: the current worktree's WIP row when it's dirty,
+    /// else its HEAD commit, else the top.</summary>
+    public int HomeRow()
+    {
+        if (Current is not { } w) return Rows.Length > 0 ? 0 : -1;
+        int r = RowOf(w.WipHash);
+        if (r < 0 && w.Head is not null) r = RowOf(w.Head);
+        return r >= 0 ? r : Rows.Length > 0 ? 0 : -1;
+    }
+
+    /// <summary>The worktree whose WIP row is <paramref name="row"/>, or null for a commit row.</summary>
+    public GraphWorktree? WipAt(int row)
+    {
+        foreach (var t in Tethers)
+            if (t.WipRow == row) return t.Worktree;
+        return null;
+    }
+
     /// <summary>True when <paramref name="e"/>, in the band above <paramref name="row"/>, is part of a WIP tether
     /// and should be drawn dashed.</summary>
     public bool IsTether(int row, GraphEdge e)
@@ -105,7 +136,7 @@ internal sealed class GraphSnapshot
     /// </summary>
     public static GraphSnapshot Build(string root, GraphScope scope, GraphLogQuery query, IReadOnlyList<GraphCommit> log,
         IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryBranch,
-        IReadOnlyDictionary<string, int>? hints, int pageSize)
+        IReadOnlyDictionary<string, int>? hints, int pageSize, ScopeContext? context = null)
     {
         var logRow = new Dictionary<string, int>(log.Count, StringComparer.Ordinal);
         for (int i = 0; i < log.Count; i++)
@@ -133,7 +164,7 @@ internal sealed class GraphSnapshot
         var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip, hints));
         lanes.Add(commits);
         return new GraphSnapshot(root, scope, query, commits, log.Count, log.Count >= pageSize, refs, worktrees,
-            primaryTip, lanes, rowOf);
+            primaryTip, lanes, rowOf, context ?? ScopeContext.None);
     }
 
     /// <summary>
@@ -157,6 +188,6 @@ internal sealed class GraphSnapshot
         }
         _lanes.Add(page);
         return new GraphSnapshot(Root, Scope, Query, commits, RealCommitCount + page.Count, page.Count >= pageSize,
-            Refs, Worktrees, _primaryTip, _lanes, rowOf);
+            Refs, Worktrees, _primaryTip, _lanes, rowOf, Context);
     }
 }

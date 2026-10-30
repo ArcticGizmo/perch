@@ -3677,7 +3677,7 @@ internal static class HeadlessRenderer
 
     // A sample history shaped like docs/git-graph-design.html: main with tags, three feature branches (one merged
     // from main, one left behind), worktrees on two of them (both dirty) and a clean one on a third.
-    private static Control BuildGraphCanvas(bool light)
+    private static Control BuildGraphCanvas(bool light, double width = 1180, double? height = null)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         int age = 0;
@@ -3727,8 +3727,8 @@ internal static class HeadlessRenderer
         };
         var snap = Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
             Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
-        var canvas = new Views.GraphCanvas { Width = 1180 };
-        canvas.Height = snap.Rows.Length * canvas.RowHeight;
+        var canvas = new Views.GraphCanvas { Width = width };
+        canvas.Height = height ?? snap.Rows.Length * canvas.RowHeight;
         canvas.SetColors(Views.GraphCanvas.Colors.For(light));
         canvas.SetSnapshot(snap, keepPlace: false);
         canvas.Measure(new Size(canvas.Width, canvas.Height));
@@ -3737,25 +3737,13 @@ internal static class HeadlessRenderer
         return canvas;
     }
 
-    // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph
-    // node rows (built by the real GitTreeWindow.NodeRow), a sample files list, and the diff view. Painted
-    // from the window's own light/dark palette so both modes can be eyeballed.
+    // Composes the git Tree window's three panes into one static surface for eyeballing: the graph (the real
+    // GraphCanvas over the sample history), a sample files list, and the diff view. Painted from the window's own
+    // light/dark palette so both modes can be eyeballed.
     private static Control BuildTreeSurface(bool light)
     {
         var pal = light ? GitTreeWindow.TreePalette.Light() : GitTreeWindow.TreePalette.Dark();
-        var now = DateTimeOffset.Now;
-        GitTreeWindow.TreeNode Commit(string hash, string subj, int hoursAgo, bool head) =>
-            new(GitTreeWindow.NodeKind.Commit, head, false, false,
-                new GitCommit(hash + "0000000", hash, "Jon Howell", now.AddHours(-hoursAgo), subj, subj, "p"), 0, null);
-
-        var nodes = new StackPanel();
-        nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Wip, false, IsFirst: true, IsLast: false, default, 3, null), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Base, false, IsFirst: false, IsLast: true, default, 0, "origin/main"), pal));
+        var graph = BuildGraphCanvas(light, width: 700, height: 360);
 
         var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
         TextBlock FileRow(string t, IBrush c) => new()
@@ -3799,17 +3787,17 @@ internal static class HeadlessRenderer
 
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("300,16,254,16,*"),
+            ColumnDefinitions = new ColumnDefinitions("702,16,254,16,*"),
             Margin = new Thickness(14, 12, 14, 14),   // the padded "page"
         };
         void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }
-        Add(Pane("Commits · this branch", nodes), 0);
+        Add(Pane("Graph · all branches", graph), 0);
         Add(Gutter(), 1);
         Add(Pane("Files", files), 2);
         Add(Gutter(), 3);
         Add(Pane("Diff", diff), 4);
 
-        return new Border { Width = 1180, Height = 340, Background = pal.WindowBg, Child = grid };
+        return new Border { Width = 1600, Height = 420, Background = pal.WindowBg, Child = grid };
     }
 
     private static StatsReport SampleStatsReport()

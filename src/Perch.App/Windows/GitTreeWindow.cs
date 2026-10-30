@@ -5,7 +5,6 @@ using Avalonia;
 using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -16,21 +15,19 @@ using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Data;
+using Perch.Data.GitGraph;
 
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The git <b>Tree</b> window (Phase 1 of the git-flow feature — see
-/// <c>docs/git-tree-window-design.html</c>). It replaces the read-only "Review changes" window with a
-/// GitKraken-style, three-pane view scoped to the current branch: a scrollable list of commit nodes on the
-/// left (a working-tree "WIP" node at the tip when the tree is dirty, then the branch's own commits back to
-/// where it diverged from its base), the files that the selected node touched in the middle, and the diff
-/// (<see cref="DiffView"/>) on the right. Selecting a node loads its files; selecting a file shows its diff.
+/// The git <b>Tree</b> window: a GitKraken-style, three-pane view of a repository (see
+/// <c>docs/git-graph-plan.md</c>). On the left the commit graph (<see cref="GraphCanvas"/>) for a scope chosen in the
+/// header: every branch, the worktrees, or this branch back to its base; each dirty worktree has a WIP row on top.
+/// In the middle the files the selected node touched (for this worktree's WIP row: the unstaged and staged groups
+/// with the commit composer), and on the right the diff (<see cref="DiffView"/>).
 ///
-/// The branch is scoped against a base ref chosen by <see cref="GitRepoService.GetBaseRefCandidates"/> —
-/// preferring an <c>upstream</c> remote (the fork convention) — and overridable from the header's base
-/// picker. Phase 2 adds inline commit authoring at the WIP node; Phase 3 the full multi-branch graph
-/// (the ghosted "Expand to full tree" button).
+/// "This branch" is scoped against a base ref chosen by <see cref="GitRepoService.GetBaseRefCandidates"/>,
+/// preferring an <c>upstream</c> remote (the fork convention) and overridable from the header's base picker.
 ///
 /// A single reused instance (via <c>WindowHost.ShowOrFocus</c>); <see cref="Retarget"/> re-points it at a
 /// different session without reopening. All git work runs off the UI thread and marshals back guarded by
@@ -40,13 +37,6 @@ namespace Perch.Avalonia.Windows;
 internal sealed class GitTreeWindow : Window
 {
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
-
-    // The branch names treated as a trunk: on one of these we show recent history unscoped rather than
-    // scoping "trunk..HEAD" (which would only show unpushed commits). Mirrors GitRepoService.TrunkNames.
-    private static readonly string[] TrunkNames = ["main", "master", "trunk", "develop"];
-
-    private const int RecentCount = 50;   // unscoped fallback
-    private const int ScopedCount = 300;  // bound on a branch's own commits since divergence
 
     private readonly GitRepoService _git = new();
     private readonly AppSettings _settings;
@@ -65,7 +55,7 @@ internal sealed class GitTreeWindow : Window
     private readonly Border _modeSegment;   // Unified/Split/Hunk segment — hidden unless content mode is Diff
     private readonly Border _floatingBar;    // floating control bar over the bottom of the diff pane
     private readonly Button _themeBtn;       // sun/moon light-dark glyph, lives in the floating bar
-    private readonly Button _expandBtn;
+    private readonly Button _scopeAllBtn, _scopeWorktreesBtn, _scopeBranchBtn;
     private readonly Button _stageLinesBtn;
     private readonly Border _headerBorder;
     private readonly TextBlock _graphLabel;
@@ -75,7 +65,7 @@ internal sealed class GitTreeWindow : Window
     private readonly Button _stageAllBtn;
     private readonly Button _unstageAllBtn;
     private readonly TextBlock _composerLabel;
-    private readonly ListBox _nodesList;
+    private readonly GraphPane _graph;
     private readonly ListBox _filesList;      // commit-node files (read-only)
     private readonly ListBox _unstagedList;   // WIP: unstaged changes ("Changes")
     private readonly ListBox _stagedList;     // WIP: staged changes ("Staged · pending commit")
@@ -90,7 +80,6 @@ internal sealed class GitTreeWindow : Window
     private readonly Border _findBar;
     private readonly TextBox _findBox;
     private readonly TextBlock _findLabel;
-    private readonly TextBlock _nodesEmpty;
     private readonly TextBlock _filesEmpty;
     private readonly TextBlock _diffPlaceholder;
     private readonly List<GridSplitter> _splitters = new();
@@ -100,7 +89,6 @@ internal sealed class GitTreeWindow : Window
     private TreePalette _pal;
     private bool _light;
 
-    private readonly FuncDataTemplate<TreeNode> _nodeTemplate;
     private readonly FuncDataTemplate<GitFileChange> _unstagedRowTemplate;
     private readonly FuncDataTemplate<GitFileChange> _stagedRowTemplate;
     private readonly FuncDataTemplate<GitDiffFile> _commitFileTemplate;
@@ -128,7 +116,12 @@ internal sealed class GitTreeWindow : Window
     // Base-ref scoping. _baseOverride: null = auto-pick, "" = explicitly unscoped ("recent"), else a ref.
     private string? _baseOverride;
     private IReadOnlyList<string> _baseCandidates = [];
-    private string? _effectiveBase; // what the current node list is actually scoped to (null = unscoped)
+    private string? _effectiveBase; // what "This branch" is actually scoped to (null = unscoped)
+
+    // The graph: what it shows, the laid-out snapshot on screen, and the node the files/diff panes are showing.
+    private GraphScope _scope;
+    private GraphSnapshot? _snap;
+    private TreeNode? _selectedNode;
 
     // Auto-refresh (filesystem watcher, debounced). The debounce is a pool timer that the watcher's own thread
     // re-arms, so a burst of events costs one UI post when it settles, not one per event.
@@ -141,13 +134,11 @@ internal sealed class GitTreeWindow : Window
     // What is currently shown, so an auto-refresh updates only what changed and leaves the diff (and its
     // scroll) untouched otherwise.
     private GitRepoStatus? _lastStatus;
-    private IReadOnlyList<GitCommit> _lastCommits = [];
-    private IReadOnlyList<TreeNode> _nodes = [];
     private GitDiff? _selectedCommitDiff; // the selected commit node's whole diff, so file clicks are instant
     private string _shownDiffSig = "";
     private HashSet<string> _invisiblePaths = new(StringComparer.Ordinal);
 
-    internal enum NodeKind { Wip, Commit, Base }
+    internal enum NodeKind { Wip, Commit }
 
     /// <summary>The three mutually-exclusive diff view modes. <see cref="Unified"/> and <see cref="Split"/>
     /// stage whole files (buttons on the file header); <see cref="Hunk"/> builds on the split layout and adds
@@ -161,21 +152,12 @@ internal sealed class GitTreeWindow : Window
     /// with the change applied — as a plain listing with no deltas.</summary>
     internal enum ContentMode { Diff, Previous, Current }
 
-    /// <summary>A row in the left graph: the working-tree (WIP) node, one commit, or the terminal base node
-    /// (the ref the branch is scoped against, e.g. <c>origin/main</c>). <see cref="IsFirst"/>/<see cref="IsLast"/>
-    /// trim the lane rail so it doesn't run past the top of the first knot or below the last one. Internal so
-    /// the headless render harness can build sample rows via <see cref="NodeRow"/>.</summary>
-    internal sealed record TreeNode(
-        NodeKind Kind, bool IsHead, bool IsFirst, bool IsLast, GitCommit Commit, int ChangeCount, string? Label)
+    /// <summary>What the files and diff panes are showing: this worktree's uncommitted changes (the WIP node) or
+    /// one commit. <see cref="Key"/> finds the same node again in a refreshed graph.</summary>
+    internal sealed record TreeNode(NodeKind Kind, bool IsHead, GitCommit Commit, int ChangeCount)
     {
         public bool IsWip => Kind == NodeKind.Wip;
-        public bool IsBase => Kind == NodeKind.Base;
-        public string Key => Kind switch
-        {
-            NodeKind.Wip => "\0wip",
-            NodeKind.Base => "\0base",
-            _ => Commit.Hash,
-        };
+        public string Key => Kind == NodeKind.Wip ? "\0wip" : Commit.Hash;
     }
 
     public GitTreeWindow(AppSettings settings)
@@ -185,6 +167,7 @@ internal sealed class GitTreeWindow : Window
               : settings.GitReviewSplitView ? DiffViewMode.Split
               : DiffViewMode.Unified;
         _light = settings.GitTreeLight;
+        _scope = settings.GitTreeScope;
         _pal = _light ? TreePalette.Light() : TreePalette.Dark();
         Title = "Tree";
         Width = 1560;
@@ -193,7 +176,6 @@ internal sealed class GitTreeWindow : Window
         MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        _nodeTemplate = NodeTemplate();
         _unstagedRowTemplate = WipRowTemplate(staged: false);
         _stagedRowTemplate = WipRowTemplate(staged: true);
         _commitFileTemplate = CommitFileTemplate();
@@ -257,17 +239,16 @@ internal sealed class GitTreeWindow : Window
         _themeBtn.Click += (_, _) => ToggleLight();
         ToolTip.SetTip(_themeBtn, "Light / dark — affects this window only");
 
-        // Ghosted Phase-3 affordance: the full multi-branch graph. Present so the destination is visible; a
-        // tooltip says why it's disabled.
-        _expandBtn = new Button
-        {
-            Content = "⤢ Expand to full tree", IsEnabled = false, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0), Foreground = Palette.MutedBrush,
-            [DockPanel.DockProperty] = Dock.Right,
-        };
-        ToolTip.SetTip(_expandBtn, "The all-branches graph is coming in a later pass.");
+        // Which commits the graph shows. "This branch" is the old View tree (with its base picker beside it).
+        _scopeAllBtn = ScopeButton("All", GraphScope.All, "Every branch, remote branch and tag");
+        _scopeWorktreesBtn = ScopeButton("Worktrees", GraphScope.Worktrees, "The main branch and whatever each worktree has checked out");
+        _scopeBranchBtn = ScopeButton("This branch", GraphScope.Branch, "This worktree's branch back to where it left its base");
+        var scopeSegment = Segment(_scopeAllBtn, _scopeWorktreesBtn, _scopeBranchBtn);
+        scopeSegment.Margin = new Thickness(14, 0, 0, 0);
+        scopeSegment.SetValue(DockPanel.DockProperty, Dock.Left);
 
         var headerText = new StackPanel { Orientation = Orientation.Vertical, Children = { _titleText, _subText } };
+        headerText.SetValue(DockPanel.DockProperty, Dock.Left);
         _headerBorder = new Border
         {
             Padding = new Thickness(14, 10),
@@ -275,29 +256,21 @@ internal sealed class GitTreeWindow : Window
             [DockPanel.DockProperty] = Dock.Top,
             Child = new DockPanel
             {
-                LastChildFill = true,
-                // _themeBtn is first so it sits at the far right of the header.
-                Children = { _themeBtn, _prChip, refreshBtn, _stageLinesBtn, _expandBtn, _baseBtn, headerText },
+                // _themeBtn is first so it sits at the far right of the header; the title, then the scope
+                // segment and base picker, read left to right.
+                LastChildFill = false,
+                Children = { _themeBtn, _prChip, refreshBtn, _stageLinesBtn, headerText, scopeSegment, _baseBtn },
             },
         };
 
-        // ---- pane 1: graph nodes ----
-        _nodesList = MakeList(_nodeTemplate);
-        _nodesList.SelectionChanged += OnNodeSelected;
-        // The terminal base node is a reference marker, not a destination — disable its container so it can't
-        // be clicked or keyboard-selected.
-        _nodesList.ContainerPrepared += (_, e) =>
-        {
-            if (e.Container is ListBoxItem lbi && e.Index >= 0 && e.Index < _nodes.Count)
-                lbi.IsEnabled = !_nodes[e.Index].IsBase;
-        };
-        _nodesEmpty = EmptyHint("No commits");
-        _graphLabel = PaneLabel("Commits · this branch");
-        var graphPane = new DockPanel
-        {
-            LastChildFill = true,
-            Children = { _graphLabel, new Grid { Children = { _nodesList, _nodesEmpty } } },
-        };
+        // ---- pane 1: the graph ----
+        _graph = new GraphPane();
+        _graph.Canvas.SetColors(GraphCanvas.Colors.For(_light));
+        _graph.Canvas.SelectionChanged += OnGraphSelected;
+        _graph.Canvas.RowActivated += OnGraphActivated;
+        _graph.Canvas.LoadMoreRequested += LoadMore;
+        _graphLabel = PaneLabel(ScopeLabel(_scope));
+        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _graph } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -453,7 +426,8 @@ internal sealed class GitTreeWindow : Window
             Margin = new Thickness(14, 12, 14, 14),
             ColumnDefinitions = new ColumnDefinitions
             {
-                new(new GridLength(300, GridUnitType.Pixel)) { MinWidth = 200 },
+                // The graph carries ref pills, lanes, subjects and authors, so it takes the larger share.
+                new(new GridLength(1.4, GridUnitType.Star)) { MinWidth = 420 },
                 new(GridLength.Auto),
                 new(new GridLength(280, GridUnitType.Pixel)) { MinWidth = 180 },
                 new(GridLength.Auto),
@@ -587,7 +561,7 @@ internal sealed class GitTreeWindow : Window
     {
         _findBar.IsVisible = false;
         _diff.ClearSearch();
-        _nodesList.Focus();
+        _graph.Canvas.Focus();
     }
 
     private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
@@ -636,26 +610,15 @@ internal sealed class GitTreeWindow : Window
         RefreshStatus();
     }
 
-    // Resolves the base ref to scope against from the discovered candidates and the user's override. null
-    // means "unscoped" (show recent history): the explicit "recent" choice, being on a trunk branch, or no
-    // candidate existing.
-    private string? ResolveBase(string? branch, IReadOnlyList<string> candidates)
-    {
-        if (_baseOverride is not null)
-            return _baseOverride.Length == 0 ? null : _baseOverride;
-        if (branch is null || TrunkNames.Contains(branch))
-            return null;
-        return candidates.Count > 0 ? candidates[0] : null;
-    }
-
-    // Loads status + candidates + (scoped) log + invisible set off the UI thread, then rebuilds the node
-    // list. When preserveSelection, the selected node and file are reselected after reload.
+    // Loads the graph for the current scope (refs, worktrees and their status, the first page of the log, the
+    // lane layout) plus the invisible set off the UI thread, then shows it. When preserveSelection, the selected
+    // node and file are reselected after reload; otherwise it lands on this worktree's WIP row or HEAD.
     private void RefreshStatus(bool preserveSelection = false)
     {
         if (_cwd is not { } cwd) return;
         int gen = ++_gen;
 
-        string? keepNode = preserveSelection && _nodesList.SelectedItem is TreeNode n ? n.Key : null;
+        string? keepNode = preserveSelection ? _selectedNode?.Key : null;
         string? keepFile = preserveSelection ? CurrentFilePath() : null;
         bool keepStaged = _shownWip?.Staged ?? false;
 
@@ -665,16 +628,11 @@ internal sealed class GitTreeWindow : Window
             _diff.SetDiff(null, "");
         }
 
+        var (scope, previous, baseOverride) = (_scope, _snap, _baseOverride);
         System.Threading.Tasks.Task.Run(() =>
             {
-                var status = _git.GetStatus(cwd);
-                var branch = status?.Branch;
-                var candidates = _git.GetBaseRefCandidates(cwd, branch);
-                var baseRef = ResolveBase(branch, candidates);
-                IReadOnlyList<GitCommit> commits = baseRef is null
-                    ? _git.GetLog(cwd, RecentCount)
-                    : _git.GetBranchLog(cwd, baseRef, ScopedCount) ?? _git.GetLog(cwd, RecentCount);
-                return (status, branch, candidates, baseRef, commits, invisible: ComputeInvisible(cwd, status));
+                var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride);
+                return (snap, invisible: ComputeInvisible(cwd, snap?.Context.CurrentStatus));
             })
             .ContinueWith(t =>
             {
@@ -682,35 +640,106 @@ internal sealed class GitTreeWindow : Window
                 Dispatcher.UIThread.Post(() =>
                 {
                     if (!IsVisible || gen != _gen) return;
-                    var (status, branch, candidates, baseRef, commits, invisible) = t.Result;
-                    _branch = branch;
-                    _baseCandidates = candidates;
-                    _effectiveBase = baseRef;
-                    _lastStatus = status;
-                    _lastCommits = commits;
+                    var (snap, invisible) = t.Result;
                     _invisiblePaths = invisible;
+                    ShowSnapshot(snap, cwd, keepPlace: preserveSelection);
 
-                    ApplyStatus(status, cwd);
-                    RebuildBaseMenu();
-
-                    _nodes = BuildNodes(status, commits, baseRef);
-                    _suppressSelect = true;
-                    _nodesList.ItemsSource = _nodes;
-                    _nodesList.SelectedIndex = -1;
-                    _suppressSelect = false;
-
-                    int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
-                    if (idx < 0) idx = FirstSelectable(_nodes); // default: the tip (never the base node)
                     // A one-shot focus request (Retarget's focusPath) takes precedence over the default when
-                    // we're not preserving a prior selection — land the tip node on that file.
-                    _pendingFilePath = keepFile ?? _pendingFocusFile;   // OnNodeSelected reselects this file after load
+                    // we're not preserving a prior selection: land the home node on that file.
+                    _pendingFilePath = keepFile ?? _pendingFocusFile;   // ShowNode reselects this file after load
                     _pendingFocusFile = null;
-                    _pendingWipStaged = keepStaged;             // …on the same side (staged/unstaged)
-                    _nodesList.SelectedIndex = idx;
-
+                    _pendingWipStaged = keepStaged;                     // …on the same side (staged/unstaged)
+                    int row = keepNode is not null ? RowOfNodeKey(keepNode) : -1;
+                    SelectRow(row >= 0 ? row : snap?.HomeRow() ?? -1);
                     UpdateEmptyStates();
                 });
             });
+    }
+
+    // Puts a freshly loaded snapshot on screen and updates everything derived from it except the selection.
+    private void ShowSnapshot(GraphSnapshot? snap, string cwd, bool keepPlace)
+    {
+        _snap = snap;
+        var ctx = snap?.Context ?? GraphSnapshot.ScopeContext.None;
+        _lastStatus = ctx.CurrentStatus;
+        _branch = ctx.CurrentStatus?.Branch;
+        _baseCandidates = ctx.BaseCandidates;
+        _effectiveBase = ctx.BaseRef;
+        ApplyStatus(_lastStatus, cwd);
+        RebuildBaseMenu();
+        _suppressSelect = true;
+        _graph.Canvas.SetSnapshot(snap, keepPlace);
+        _suppressSelect = false;
+    }
+
+    // Selects a graph row and shows its node, even when the canvas already had it selected (a reload).
+    private void SelectRow(int row)
+    {
+        _suppressSelect = true;
+        _graph.Canvas.Select(row);
+        _suppressSelect = false;
+        _selectedNode = null;
+        OnGraphSelected(row);
+    }
+
+    // The row of a node key in the current snapshot: the WIP key is this worktree's WIP row.
+    private int RowOfNodeKey(string key)
+    {
+        if (_snap is null) return -1;
+        if (key != "\0wip") return _snap.RowOf(key);
+        return _snap.Current is { } w ? _snap.RowOf(w.WipHash) : -1;
+    }
+
+    // The next page of history, laid out under the current one. Dropped if a refresh replaced the snapshot first.
+    private void LoadMore()
+    {
+        if (_snap is not { HasMore: true } before) return;
+        System.Threading.Tasks.Task.Run(() => GraphLoader.LoadMore(before)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || _snap != before) return;
+                _snap = t.Result;
+                _suppressSelect = true;
+                _graph.Canvas.SetSnapshot(_snap, keepPlace: true);
+                _suppressSelect = false;
+            });
+        });
+    }
+
+    private void SetScope(GraphScope scope)
+    {
+        if (_scope == scope) return;
+        _scope = scope;
+        _settings.GitTreeScope = scope;
+        _settings.Save();
+        _graphLabel.Text = ScopeLabel(scope);
+        UpdateScopeButtons();
+        RefreshStatus(preserveSelection: true);
+    }
+
+    private static string ScopeLabel(GraphScope scope) => scope switch
+    {
+        GraphScope.Worktrees => "Graph · worktrees",
+        GraphScope.Branch => "Graph · this branch",
+        _ => "Graph · all branches",
+    };
+
+    private Button ScopeButton(string label, GraphScope scope, string tip)
+    {
+        var b = SegButton(label);
+        b.Click += (_, _) => SetScope(scope);
+        ToolTip.SetTip(b, tip);
+        return b;
+    }
+
+    private void UpdateScopeButtons()
+    {
+        StyleSeg(_scopeAllBtn, _scope == GraphScope.All);
+        StyleSeg(_scopeWorktreesBtn, _scope == GraphScope.Worktrees);
+        StyleSeg(_scopeBranchBtn, _scope == GraphScope.Branch);
+        _baseBtn.IsVisible = _scope == GraphScope.Branch;
     }
 
     // A fast refresh after a working-tree staging action (stage/unstage/discard a hunk, line, or file, or
@@ -723,7 +752,7 @@ internal sealed class GitTreeWindow : Window
     private void RefreshWorkingTree(bool advanceUnstaged = false)
     {
         if (_cwd is not { } cwd) return;
-        if (_nodesList.SelectedItem is not TreeNode { IsWip: true }) { RefreshStatus(preserveSelection: true); return; }
+        if (_selectedNode is not { IsWip: true }) { RefreshStatus(preserveSelection: true); return; }
 
         int gen = ++_gen;
         string? keepPath = _shownWip?.Path;
@@ -747,20 +776,9 @@ internal sealed class GitTreeWindow : Window
 
                 if (countChanged)
                 {
-                    // A file entered/left the change set → rebuild the node list (WIP count) from the cached
-                    // commits — no git — and reselect the WIP node, which repopulates its groups + diff.
-                    string? keepNode = _nodesList.SelectedItem is TreeNode n ? n.Key : null;
-                    _nodes = BuildNodes(status, _lastCommits, _effectiveBase);
-                    _suppressSelect = true;
-                    _nodesList.ItemsSource = _nodes;
-                    _nodesList.SelectedIndex = -1;
-                    _suppressSelect = false;
-                    int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
-                    if (idx < 0) idx = FirstSelectable(_nodes);
-                    _pendingFilePath = keepPath;
-                    _pendingWipStaged = keepStaged;
-                    _nodesList.SelectedIndex = idx;
-                    UpdateEmptyStates();
+                    // A file entered/left the change set → the WIP row's count changed: reload the graph and
+                    // reselect the WIP node, which repopulates its groups + diff.
+                    RefreshStatus(preserveSelection: true);
                     return;
                 }
 
@@ -770,35 +788,6 @@ internal sealed class GitTreeWindow : Window
                 PopulateWip(s.Changes, keepPath, keepStaged, preferUnstagedTop: advanceUnstaged);
             });
         });
-    }
-
-    private static IReadOnlyList<TreeNode> BuildNodes(
-        GitRepoStatus? status, IReadOnlyList<GitCommit> commits, string? baseRef)
-    {
-        var nodes = new List<TreeNode>();
-        if (status is { IsClean: false } s)
-            nodes.Add(new TreeNode(NodeKind.Wip, false, false, false, default, s.Changes.Count, null));
-        for (int i = 0; i < commits.Count; i++)
-            nodes.Add(new TreeNode(NodeKind.Commit, i == 0, false, false, commits[i], 0, null));
-        // The terminal base node: where this branch left its base. Non-selectable, no lane below it.
-        if (baseRef is { } b)
-            nodes.Add(new TreeNode(NodeKind.Base, false, false, false, default, 0, b));
-
-        // Trim the rail at the ends: no line above the first knot, none below the last.
-        if (nodes.Count > 0)
-        {
-            nodes[0] = nodes[0] with { IsFirst = true };
-            nodes[^1] = nodes[^1] with { IsLast = true };
-        }
-        return nodes;
-    }
-
-    // The index of the first row a user can actually land on (skips the non-selectable base node).
-    private static int FirstSelectable(IReadOnlyList<TreeNode> nodes)
-    {
-        for (int i = 0; i < nodes.Count; i++)
-            if (!nodes[i].IsBase) return i;
-        return -1;
     }
 
     // ---- node selection -> files pane ----
@@ -819,10 +808,71 @@ internal sealed class GitTreeWindow : Window
         catch { return null; }
     }
 
-    private void OnNodeSelected(object? sender, SelectionChangedEventArgs e)
+    // A graph row was selected: this worktree's WIP row or a commit drives the files + diff panes; another
+    // worktree's WIP row says how to open it (its changes live in a different working tree).
+    private void OnGraphSelected(int row)
     {
-        if (_suppressSelect || _nodesList.SelectedItem is not TreeNode node || _cwd is not { } cwd) return;
-        if (node.IsBase) return; // the base marker isn't a destination
+        if (_suppressSelect || _cwd is null) return;
+        if (_snap is null || row < 0 || row >= _snap.Commits.Count)
+        {
+            ShowNothing("Select a commit");
+            return;
+        }
+        var c = _snap.Commits[row];
+        TreeNode node;
+        if (c.IsWorkInProgress)
+        {
+            if (_snap.WipAt(row) is not { IsCurrent: true } wt)
+            {
+                var other = _snap.WipAt(row);
+                ShowNothing(other is null ? "" : $"{other.Changes} uncommitted in {other.Name}.\nDouble-click to open that worktree here.");
+                return;
+            }
+            node = new TreeNode(NodeKind.Wip, false, default, wt.Changes);
+        }
+        else
+        {
+            bool head = _snap.Current?.Head == c.Hash;
+            node = new TreeNode(NodeKind.Commit, head,
+                new GitCommit(c.Hash, c.ShortHash, c.AuthorName, c.Date, c.Subject, c.Subject, string.Join(' ', c.Parents)), 0);
+        }
+        if (node == _selectedNode) return;
+        ShowNode(node);
+    }
+
+    // Double-click / Enter on a row. Another worktree's WIP row opens that worktree in this window; checking out
+    // a commit or branch arrives with CP11.
+    private void OnGraphActivated(int row)
+    {
+        if (_snap?.WipAt(row) is { IsCurrent: false } wt)
+            Retarget(wt.Path, wt.Name, null, isActive: false);
+    }
+
+    // Clears the files and diff panes, with a hint where the file list would be.
+    private void ShowNothing(string hint)
+    {
+        _selectedNode = null;
+        ++_gen;
+        _wipPanel.IsVisible = false;
+        _commitAreaHost.IsVisible = true;
+        _shownWip = null;
+        _shownCommit = null;
+        _selectedCommitDiff = null;
+        _suppressSelect = true;
+        _filesList.ItemsSource = null;
+        _unstagedList.ItemsSource = null;
+        _stagedList.ItemsSource = null;
+        _suppressSelect = false;
+        _diff.SetDiff(null, "");
+        _diffPlaceholder.IsVisible = true;
+        _filesEmpty.Text = hint;
+        _filesEmpty.IsVisible = hint.Length > 0;
+    }
+
+    private void ShowNode(TreeNode node)
+    {
+        if (_cwd is not { } cwd) return;
+        _selectedNode = node;
 
         string? wantFile = _pendingFilePath;
         bool wantStaged = _pendingWipStaged;
@@ -1369,75 +1419,68 @@ internal sealed class GitTreeWindow : Window
         if (_cwd is not { } cwd) return;
         int gen = ++_gen;
 
-        bool wipSelected = _nodesList.SelectedItem is TreeNode { IsWip: true };
+        bool wipSelected = _selectedNode is { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
         var contentMode = _contentMode;
+        var (scope, previous, baseOverride) = (_scope, _snap, _baseOverride);
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var status = _git.GetStatus(cwd);
-            var branch = status?.Branch;
-            var candidates = _git.GetBaseRefCandidates(cwd, branch);
-            var baseRef = ResolveBase(branch, candidates);
-            IReadOnlyList<GitCommit> commits = baseRef is null
-                ? _git.GetLog(cwd, RecentCount)
-                : _git.GetBranchLog(cwd, baseRef, ScopedCount) ?? _git.GetLog(cwd, RecentCount);
+            var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride);
+            var status = snap?.Context.CurrentStatus;
             var invisible = ComputeInvisible(cwd, status);
             // The shown working-tree file's content in the active content mode, for the repaint-if-changed
             // guard. (Commit content is immutable, so only a WIP file is ever re-fetched.)
             (IReadOnlyList<DiffSection> sections, string? note)? sel =
                 shown is { } sw ? WipContentSections(cwd, status, sw.Path, sw.Staged, contentMode) : null;
-            return (status, branch, candidates, baseRef, commits, invisible, sel);
+            return (snap, invisible, sel);
         }).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                var (status, branch, candidates, baseRef, commits, invisible, sel) = t.Result;
+                var (snap, invisible, sel) = t.Result;
+                var status = snap?.Context.CurrentStatus;
 
                 bool changed = !StatusEqual(status, _lastStatus)
-                               || !CommitsEqual(commits, _lastCommits)
+                               || !SameGraph(snap, _snap)
                                || !invisible.SetEquals(_invisiblePaths)
-                               || baseRef != _effectiveBase;
-
-                _branch = branch;
-                _baseCandidates = candidates;
-                _effectiveBase = baseRef;
-                _lastStatus = status;
-                _lastCommits = commits;
+                               || snap?.Context.BaseRef != _effectiveBase;
                 _invisiblePaths = invisible;
-                ApplyStatus(status, cwd);
-                RebuildBaseMenu();
 
                 bool reselected = false;
                 if (changed)
                 {
-                    string? keepNode = _nodesList.SelectedItem is TreeNode n ? n.Key : null;
+                    string? keepNode = _selectedNode?.Key;
                     string? keepFile = CurrentFilePath();
                     bool keepStaged = _shownWip?.Staged ?? false;
-                    _nodes = BuildNodes(status, commits, baseRef);
-                    _suppressSelect = true;
-                    _nodesList.ItemsSource = _nodes;
-                    _nodesList.SelectedIndex = -1;
-                    _suppressSelect = false;
-                    int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
-                    if (idx < 0) idx = FirstSelectable(_nodes);
-                    // If the same WIP node stays selected, keep it and refresh its groups quietly below;
+                    ShowSnapshot(snap, cwd, keepPlace: true);
+                    int row = keepNode is not null ? RowOfNodeKey(keepNode) : -1;
+                    if (row < 0) row = snap?.HomeRow() ?? -1;
+                    // If the same node stays selected, keep it and refresh a WIP node's groups quietly below;
                     // reselecting would reload the diff. Only drive a reselect when the node changed identity.
-                    if (_nodesList.SelectedIndex != idx || keepNode is null)
+                    _suppressSelect = true;
+                    _graph.Canvas.Select(row, scrollIntoView: false);
+                    _suppressSelect = false;
+                    if (row < 0 || keepNode is null || RowOfNodeKey(keepNode) != row)
                     {
                         _pendingFilePath = keepFile;
                         _pendingWipStaged = keepStaged;
-                        _nodesList.SelectedIndex = idx;
+                        _selectedNode = null;
+                        OnGraphSelected(row);
                         reselected = true;
                     }
                     UpdateEmptyStates();
 
                     // Same WIP node stayed selected → repopulate its two groups (a file may have been staged/
                     // added/removed externally), quietly so the shown diff & scroll survive.
-                    if (!reselected && _nodesList.SelectedItem is TreeNode { IsWip: true })
+                    if (!reselected && _selectedNode is { IsWip: true })
                         PopulateWip(status?.Changes ?? [], _shownWip?.Path, _shownWip?.Staged ?? false, quiet: true);
+                }
+                else
+                {
+                    ApplyStatus(status, cwd);
                 }
 
                 // Repaint a still-shown WIP file only when its content actually changed (skipped when a
@@ -1461,7 +1504,12 @@ internal sealed class GitTreeWindow : Window
         string branch = s.Branch ?? "(detached)";
         string ab = (s.Ahead, s.Behind) switch { (0, 0) => "", var (a, b) => $"  ·  ↑{a} ↓{b}" };
         string dirty = s.IsClean ? "clean" : $"{s.Changes.Count} change{(s.Changes.Count == 1 ? "" : "s")}";
-        string scope = _effectiveBase is { } b2 ? $"since {b2}" : "recent";
+        string scope = _scope switch
+        {
+            GraphScope.Branch => _effectiveBase is { } b2 ? $"since {b2}" : "recent",
+            GraphScope.Worktrees => $"{_snap?.Worktrees.Count ?? 1} worktree{(_snap?.Worktrees.Count == 1 ? "" : "s")}",
+            _ => "all branches",
+        };
         _subText.Text = $"{branch}{ab}  ·  {scope}  ·  {dirty}  ·  {cwd}";
         _baseBtn.Content = _effectiveBase is { } b3 ? $"since ⑂ {b3}" : "recent (all)";
     }
@@ -1539,7 +1587,15 @@ internal sealed class GitTreeWindow : Window
             && x.Changes.SequenceEqual(y.Changes);
     }
 
-    private static bool CommitsEqual(IReadOnlyList<GitCommit> a, IReadOnlyList<GitCommit> b) => a.SequenceEqual(b);
+    // Same rows, refs and worktrees: a refresh that changes none of them leaves the graph (and its scroll) alone.
+    private static bool SameGraph(GraphSnapshot? a, GraphSnapshot? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.Scope != b.Scope || a.Commits.Count != b.Commits.Count) return false;
+        for (int i = 0; i < a.Commits.Count; i++)
+            if (a.Commits[i].Hash != b.Commits[i].Hash) return false;
+        return a.Refs.SequenceEqual(b.Refs) && a.Worktrees.SequenceEqual(b.Worktrees);
+    }
 
     private static GitFileChange? FindByPath(GitRepoStatus? status, string path)
     {
@@ -1553,15 +1609,8 @@ internal sealed class GitTreeWindow : Window
     // commit file. Used to reselect the same file across a refresh.
     private string? CurrentFilePath()
     {
-        if (_nodesList.SelectedItem is TreeNode { IsWip: true }) return _shownWip?.Path;
+        if (_selectedNode is { IsWip: true }) return _shownWip?.Path;
         return _filesList.SelectedItem is GitDiffFile gf ? gf.NewPath ?? gf.OldPath : null;
-    }
-
-    private static int IndexOfNodeKey(IReadOnlyList<TreeNode> nodes, string key)
-    {
-        for (int i = 0; i < nodes.Count; i++)
-            if (nodes[i].Key == key) return i;
-        return -1;
     }
 
     private static int IndexOfPath(IReadOnlyList<GitFileChange> list, string? path)
@@ -1727,9 +1776,8 @@ internal sealed class GitTreeWindow : Window
         _composerLabel.Foreground = _pal.Muted;
         _findLabel.Foreground = _pal.Muted;
         _diffPlaceholder.Foreground = _pal.Muted;
-        _nodesEmpty.Foreground = _pal.Muted;
         _filesEmpty.Foreground = _pal.Muted;
-        _expandBtn.Foreground = _pal.Muted;
+        _graph.Canvas.SetColors(GraphCanvas.Colors.For(_light));
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;
@@ -1751,6 +1799,7 @@ internal sealed class GitTreeWindow : Window
 
         UpdateModeButtons();
         UpdateContentButtons();
+        UpdateScopeButtons();
         _diff.SetLight(_light);
     }
 
@@ -1783,141 +1832,13 @@ internal sealed class GitTreeWindow : Window
 
     private void UpdateEmptyStates()
     {
-        _nodesEmpty.IsVisible = _nodesList.ItemCount == 0;
-        // _filesEmpty covers the commit-node list only; the WIP node uses its per-group counts instead.
+        // _filesEmpty covers the commit-node list only; the WIP node uses its per-group counts instead. With no
+        // node shown it keeps the hint ShowNothing gave it.
         _filesEmpty.IsVisible = _commitAreaHost.IsVisible && _filesList.ItemCount == 0;
-        _filesEmpty.Text = _nodesList.SelectedItem is null ? "Select a node" : "No files";
+        if (_selectedNode is not null) _filesEmpty.Text = "No files";
     }
 
     // ---- templates ----
-
-    // A graph node row: a lane rail (vertical line + a knot) beside the commit / working-tree summary.
-    private FuncDataTemplate<TreeNode> NodeTemplate() =>
-        new((node, _) => node is null ? new Control() : NodeRow(node, _pal), supportsRecycling: false);
-
-    /// <summary>Builds one graph-node row (the lane rail + knot beside the commit / working-tree / base
-    /// summary), painted from <paramref name="pal"/>. The rail is split into an upper and a lower segment so
-    /// the line can be trimmed at the ends — no line above the first knot, none below the last. Static and
-    /// self-contained so the render harness can eyeball it with sample data.</summary>
-    internal static Control NodeRow(TreeNode node, TreePalette pal)
-    {
-        // Rail: [upper segment | knot | lower segment]. Upper is hidden on the first row, lower on the last.
-        var rail = new Grid { Width = 26, RowDefinitions = new RowDefinitions("*,Auto,*") };
-        var upper = LaneSegment(pal);
-        upper.SetValue(Grid.RowProperty, 0);
-        upper.IsVisible = !node.IsFirst;
-        var lower = LaneSegment(pal);
-        lower.SetValue(Grid.RowProperty, 2);
-        lower.IsVisible = !node.IsLast;
-        Shape knot = Knot(node, pal);
-        knot.SetValue(Grid.RowProperty, 1);
-        rail.Children.Add(upper);
-        rail.Children.Add(lower);
-        rail.Children.Add(knot);
-
-        var content = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(6, 10, 10, 10) };
-        if (node.IsWip)
-        {
-            content.Children.Add(new TextBlock
-            {
-                Text = "Working tree", Foreground = pal.Brand,
-                FontSize = 13, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = $"{node.ChangeCount} uncommitted change{(node.ChangeCount == 1 ? "" : "s")}",
-                Foreground = pal.Muted, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
-            });
-        }
-        else if (node.IsBase)
-        {
-            // The base marker: where this branch left its base ref. Not a destination.
-            content.Children.Add(new TextBlock
-            {
-                Text = node.Label ?? "base", Foreground = pal.Fg, FontFamily = Mono, FontSize = 12,
-                FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = "branch base", Foreground = pal.Muted, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
-            });
-        }
-        else
-        {
-            var c = node.Commit;
-            // Subject wraps; the HEAD tag docks top-right so a long subject flows beneath it.
-            var subjRow = new DockPanel { LastChildFill = true };
-            if (node.IsHead)
-            {
-                var tag = new Border
-                {
-                    Background = pal.Accent, CornerRadius = new CornerRadius(3),
-                    Padding = new Thickness(5, 0, 5, 1), Margin = new Thickness(6, 1, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Top, [DockPanel.DockProperty] = Dock.Right,
-                    Child = new TextBlock { Text = "HEAD", Foreground = pal.OnAccent, FontSize = 9, FontFamily = Mono },
-                };
-                subjRow.Children.Add(tag);
-            }
-            subjRow.Children.Add(new TextBlock
-            {
-                Text = c.Subject, Foreground = pal.Title, FontSize = 13, TextWrapping = TextWrapping.Wrap,
-            });
-            content.Children.Add(subjRow);
-            content.Children.Add(new TextBlock
-            {
-                Text = $"{c.ShortHash} · {c.Author} · {RelTime(c.Date)}",
-                Foreground = pal.Muted, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            });
-        }
-
-        // A transparent background makes the whole row (rail column + any gaps around the text) hit-testable,
-        // so the commit-body tooltip opens from anywhere on the card — not just over the text.
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Background = Brushes.Transparent };
-        grid.Children.Add(rail);
-        content.SetValue(Grid.ColumnProperty, 1);
-        grid.Children.Add(content);
-        if (node.Kind == NodeKind.Commit)
-        {
-            ToolTip.SetTip(grid, node.Commit.Body);
-            ToolTip.SetShowDelay(grid, 750);
-        }
-        return grid;
-    }
-
-    // One half of the lane line, painted from the palette's accent at half strength.
-    private static Rectangle LaneSegment(TreePalette pal) => new()
-    {
-        Width = 2, Fill = pal.Accent, Opacity = 0.5,
-        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch,
-    };
-
-    // The knot on the rail: a dashed brand ring for WIP, a hollow muted ring for the base marker, else a
-    // filled accent dot (with a ring on HEAD).
-    private static Shape Knot(TreeNode node, TreePalette pal) => node.Kind switch
-    {
-        NodeKind.Wip => new Ellipse
-        {
-            Width = 13, Height = 13, StrokeThickness = 2,
-            Stroke = pal.Brand, Fill = pal.HollowFill,
-            StrokeDashArray = new AvaloniaList<double> { 2, 1.4 },
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-        },
-        NodeKind.Base => new Ellipse
-        {
-            Width = 11, Height = 11, StrokeThickness = 2,
-            Stroke = pal.Muted, Fill = pal.HollowFill,
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-        },
-        _ => new Ellipse
-        {
-            Width = 12, Height = 12,
-            Fill = pal.Accent,
-            Stroke = node.IsHead ? pal.AccentHover : null,
-            StrokeThickness = node.IsHead ? 3 : 0,
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-        },
-    };
 
     /// <summary>The window-local colour set the Tree window and its diff paint from, so light/dark applies to
     /// just this window. Both polarities are pinned to the shared Aurora reading palette (see
@@ -2073,13 +1994,4 @@ internal sealed class GitTreeWindow : Window
         GitChangeKind.Unmerged => 'U',
         _ => ' ',
     };
-
-    private static string RelTime(DateTimeOffset d)
-    {
-        var s = DateTimeOffset.Now - d;
-        if (s.TotalDays >= 1) return $"{(int)s.TotalDays}d";
-        if (s.TotalHours >= 1) return $"{(int)s.TotalHours}h";
-        if (s.TotalMinutes >= 1) return $"{(int)s.TotalMinutes}m";
-        return "now";
-    }
 }

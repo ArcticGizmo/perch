@@ -15,8 +15,10 @@ internal static class GraphLoader
     private static readonly string[] TrunkNames = ["main", "master", "trunk", "develop"];
 
     /// <param name="timing">Called with each stage's name and duration, for <c>perch bench-graph</c>.</param>
+    /// <param name="baseOverride">For <see cref="GraphScope.Branch"/>: the base ref to scope against; null picks
+    /// the best candidate, and an empty string shows HEAD's history unscoped.</param>
     public static GraphSnapshot? Load(string cwd, GraphScope scope, GraphSnapshot? previous = null,
-        Action<string, TimeSpan>? timing = null, int pageSize = PageSize)
+        Action<string, TimeSpan>? timing = null, int pageSize = PageSize, string? baseOverride = null)
     {
         if (GitCheckoutScanner.FindRoot(cwd) is not { } root)
             return null;
@@ -27,7 +29,7 @@ internal static class GraphLoader
         // worktree's status and the log run side by side: the query names branches rather than resolved hashes, so
         // none of them waits on another.
         var trees = ScanWorktrees(root);
-        var query = QueryFor(scope, root, trees);
+        var (query, baseRef, candidates) = QueryFor(scope, root, trees, baseOverride);
         Mark("scope");
         var refsTask = Task.Run(() => GraphLogReader.LoadRefs(root));
         var logTask = Task.Run(() => GraphLogReader.ReadLog(root, pageSize, 0, query));
@@ -39,7 +41,9 @@ internal static class GraphLoader
         var log = logTask.Result is { } raw ? GraphLogReader.ParseLog(raw) : [];
         Mark("parse");
         var hints = previous is not null && previous.Scope == scope ? previous.Hints() : null;
-        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize);
+        int current = trees.ToList().FindIndex(t => t.IsCurrent);
+        var context = new GraphSnapshot.ScopeContext(current >= 0 ? statusTask.Result[current] : null, baseRef, candidates);
+        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context);
         Mark("layout");
         return snapshot;
     }
@@ -73,7 +77,8 @@ internal static class GraphLoader
     /// What each scope walks. Worktrees are named by branch (<c>refs/heads/…</c>) or detached hash, so the walk
     /// doesn't wait for the ref listing. Only <see cref="GraphScope.Branch"/> runs git (base ref and merge-base).
     /// </summary>
-    internal static GraphLogQuery QueryFor(GraphScope scope, string root, IReadOnlyList<ScannedWorktree> trees)
+    internal static (GraphLogQuery Query, string? BaseRef, IReadOnlyList<string> Candidates) QueryFor(
+        GraphScope scope, string root, IReadOnlyList<ScannedWorktree> trees, string? baseOverride = null)
     {
         switch (scope)
         {
@@ -82,23 +87,25 @@ internal static class GraphLoader
                     .OfType<string>().Distinct(StringComparer.Ordinal).ToList();
                 // Whichever trunk names exist (a pattern that matches nothing adds nothing).
                 tips.AddRange(TrunkNames.Select(t => "--branches=" + t));
-                return new(tips, []);
+                return (new(tips, []), null, []);
 
             case GraphScope.Branch:
                 var current = trees.FirstOrDefault(t => t.IsCurrent);
                 var git = new GitRepoService();
-                var baseRef = current.Branch is { } b && !TrunkNames.Contains(b)
-                    ? git.GetBaseRefCandidates(root, b).FirstOrDefault()
-                    : null;
+                var candidates = git.GetBaseRefCandidates(root, current.Branch);
+                // On a trunk there's nothing to scope against: show its recent history.
+                var baseRef = baseOverride is { Length: 0 } ? null
+                    : baseOverride ?? (current.Branch is { } b && !TrunkNames.Contains(b) ? candidates.FirstOrDefault() : null);
                 if (baseRef is null)
-                    return new(["HEAD"], []);
+                    return (new(["HEAD"], []), null, candidates);
                 var mergeBase = git.GetMergeBase(root, baseRef);
-                return new(["HEAD", baseRef], mergeBase is null ? [] : [mergeBase + "^@"]);
+                return (new(["HEAD", baseRef], mergeBase is null ? [] : [mergeBase + "^@"]), baseRef, candidates);
 
             default:
                 // Detached worktree heads aren't reachable from any ref, so they're named explicitly.
                 var detached = trees.Select(t => t.DetachedHead).OfType<string>().ToList();
-                return detached.Count == 0 ? GraphLogQuery.Everything : new([.. GraphLogQuery.Everything.Tips, .. detached], []);
+                var all = detached.Count == 0 ? GraphLogQuery.Everything : new([.. GraphLogQuery.Everything.Tips, .. detached], []);
+                return (all, null, []);
         }
     }
 
