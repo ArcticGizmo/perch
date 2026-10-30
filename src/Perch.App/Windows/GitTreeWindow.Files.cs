@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Perch.Avalonia.Views;
@@ -50,6 +51,34 @@ internal sealed partial class GitTreeWindow
         if (!go || !IsVisible) return;
         RunWorkingTreeOp(_ => _git.DiscardFileEntirely(cwd, fc.Path, fc.OrigPath));
     }
+
+    // ---- headless render hooks ----
+
+    /// <summary>For the headless render: a spot in a file list below its last row, a point on the Files heading, and one
+    /// in the collapsed strip, to click with synthetic pointer input.</summary>
+    internal Point? PreviewBlankListSpot()
+    {
+        foreach (var list in new[] { _filesList, _unstagedList, _stagedList })
+        {
+            if (!list.IsEffectivelyVisible || list.Bounds.Height < 30) continue;
+            double bottom = list.GetRealizedContainers().Select(c => c.TranslatePoint(new Point(0, c.Bounds.Height), list)?.Y ?? 0)
+                .DefaultIfEmpty(0).Max();
+            if (list.Bounds.Height - bottom > 24)
+                return list.TranslatePoint(new Point(list.Bounds.Width / 2, (bottom + list.Bounds.Height) / 2), this);
+        }
+        return null;
+    }
+
+    internal string PreviewShownFile => CurrentFilePath() ?? "(none)";
+
+    internal Point? PreviewFilesHeading() =>
+        _filesLabel.TranslatePoint(new Point(_filesLabel.Bounds.Width / 2, _filesLabel.Bounds.Height / 2), this);
+
+    internal Point? PreviewFilesStrip() => _filesStrip.IsVisible
+        ? _filesStrip.TranslatePoint(new Point(_filesStrip.Bounds.Width / 2, _filesStrip.Bounds.Height * 0.6), this) : null;
+
+    internal bool PreviewDiffOpen => _diffOverlay.IsVisible;
+    internal bool PreviewFilesCollapsed => !_filesPane.IsVisible;
 
     private async void DeleteFile(GitFileChange fc)
     {

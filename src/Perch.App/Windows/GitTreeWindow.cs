@@ -453,7 +453,14 @@ internal sealed partial class GitTreeWindow : Window
         };
         ToolTip.SetTip(collapseFiles, "Hide the files pane");
         collapseFiles.Click += (_, _) => SetFilesCollapsed(true);
-        var filesHeader = new DockPanel { LastChildFill = false, [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel } };
+        // The whole heading toggles, not just its chevron (as does the whole strip when collapsed).
+        var filesHeader = new DockPanel
+        {
+            LastChildFill = false, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel },
+        };
+        ToolTip.SetTip(filesHeader, "Hide the files pane");
+        filesHeader.Tapped += (_, e) => { if (!FromButton(e, filesHeader)) SetFilesCollapsed(true); };
         var expandFiles = new Button
         {
             Content = "‹", FontSize = 15, Padding = new Thickness(6, 2), Margin = new Thickness(0, 8, 0, 0),
@@ -464,7 +471,7 @@ internal sealed partial class GitTreeWindow : Window
         expandFiles.Click += (_, _) => SetFilesCollapsed(false);
         _filesStrip = new StackPanel
         {
-            IsVisible = false,
+            IsVisible = false, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
             Children =
             {
                 expandFiles,
@@ -475,6 +482,8 @@ internal sealed partial class GitTreeWindow : Window
                 },
             },
         };
+        ToolTip.SetTip(_filesStrip, "Show the files pane");
+        _filesStrip.Tapped += (_, e) => { if (!FromButton(e, _filesStrip)) SetFilesCollapsed(false); };
         var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
         var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, filesBody } };
 
@@ -606,6 +615,14 @@ internal sealed partial class GitTreeWindow : Window
     private readonly DockPanel _filesPane;
     private double _filesWidth = 380;
 
+    // A tap that landed on a button inside <paramref name="within"/>: the button's own Click has it.
+    private static bool FromButton(RoutedEventArgs e, Visual within)
+    {
+        for (var v = e.Source as Visual; v is not null && v != within; v = v.GetVisualParent())
+            if (v is Button) return true;
+        return false;
+    }
+
     private void SetFilesCollapsed(bool collapsed, bool persist = true)
     {
         if (collapsed && _filesColumn.ActualWidth > 0 && _filesPane.IsVisible)
@@ -623,14 +640,19 @@ internal sealed partial class GitTreeWindow : Window
     // ---- the diff over the graph ----
 
     // A click or Enter on a file row opens its diff; selecting a commit only fills the file list, so browsing the
-    // graph never covers it. The row's own stage/unstage button doesn't count as opening.
+    // graph never covers it. The row's own stage/unstage button doesn't count as opening, and nor does a click on the
+    // list's empty space below the rows (that would open whichever file was already selected).
     private void OpensDiff(ListBox list)
     {
         list.Tapped += (_, e) =>
         {
+            bool onRow = false;
             for (var v = e.Source as Visual; v is not null && v != list; v = v.GetVisualParent())
+            {
                 if (v is Button) return;
-            OpenDiff();
+                if (v is ListBoxItem) onRow = true;
+            }
+            if (onRow) OpenDiff();
         };
         list.KeyDown += (_, e) =>
         {

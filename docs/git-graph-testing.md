@@ -91,6 +91,11 @@ Use a throwaway clone that has a remote you can push to (a fork, or a bare repo:
    - A credential prompt can't hang the window: if git would need to ask for a password in a terminal, the push or pull fails with git's message. A credential manager's own sign-in window still appears.
 4. **Long branch names in menus.** Double-click a pill with a long name (a Dependabot branch) while this worktree has changes. The "Stash the 1 change, then check out …" and "Bring the 1 change to …" items wrap onto a second line inside the menu instead of running past its edge. The same goes for the session warning line, the drop menu and the right-click menus. *Before:* the text ran out past the menu's right edge.
 
+## Feedback round 4: files pane clicks
+
+1. **The heading toggles.** Click anywhere on the Files heading row (not only the **›**): the pane collapses to its strip. Click anywhere on the strip (not only the **‹**): it comes back at its old width. *Before:* only the chevrons did it.
+2. **Empty space opens nothing.** With a few files in Changes (or a commit with a few files selected), click in the blank area below the last row. No diff opens. Clicking a row still opens its diff. *Before:* a click below the rows opened the diff of whichever file was selected, usually the first.
+
 ## Feedback round 1: hiding branches
 
 1. **Hide one.** Hover a branch in the rail's Local or Remotes list: an eye appears at the right. Click it: the branch leaves the graph (its pill, and any commits only it reaches), and its rail row stays, dimmed and italic with the eye struck through. The header shows "N · 1 hidden". Click the struck eye to bring it back. Or right-click a pill in the graph → **Hide <branch> from the graph** (the toast offers Undo). Branches a worktree has checked out, and the main line (`main` / `origin/main`), can't be hidden; they get no eye, and the pill menu says why.

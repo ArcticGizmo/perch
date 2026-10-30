@@ -730,6 +730,32 @@ internal static class HeadlessRenderer
                 hiddenFrame.Save(fs);
             }
 
+            // Clicks with synthetic pointer input: empty space under a file list opens nothing; the Files heading collapses
+            // the pane and a click on the strip brings it back.
+            void Click(Point p)
+            {
+                tw.MouseMove(p);
+                tw.MouseDown(p, global::Avalonia.Input.MouseButton.Left);
+                tw.MouseUp(p, global::Avalonia.Input.MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+            }
+            if (tw.PreviewBlankListSpot() is { } blank)
+            {
+                Click(blank);
+                Console.WriteLine($"git graph files: after a click below the rows, diff open = {tw.PreviewDiffOpen}, shown = {tw.PreviewShownFile}");
+                tw.PreviewDiff(open: false);
+            }
+            else Console.WriteLine("git graph files: no blank space under a file list to click");
+            if (tw.PreviewFilesHeading() is { } heading)
+            {
+                Click(heading);
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                Dispatcher.UIThread.RunJobs();
+                bool collapsed = tw.PreviewFilesCollapsed;
+                if (tw.PreviewFilesStrip() is { } strip) Click(strip);
+                Console.WriteLine($"git graph files: heading click collapsed = {collapsed}, strip click expanded = {!tw.PreviewFilesCollapsed}");
+            }
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.
