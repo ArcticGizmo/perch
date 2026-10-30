@@ -86,6 +86,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.GitTreeScope),
         nameof(AppSettings.GitTreeRefsWidth),
         nameof(AppSettings.GitTreeLanesWidth),
+        nameof(AppSettings.GitTreeRepos),
+        nameof(AppSettings.GitTreeAutoHideOthers),
         // Perch-managed session auto-compaction (enable + threshold) is set from the session window's own
         // /autocompact modal (a slider), not a Settings-window control.
         nameof(AppSettings.SessionAutoCompactEnabled),

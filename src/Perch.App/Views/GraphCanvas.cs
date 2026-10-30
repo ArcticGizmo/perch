@@ -100,6 +100,9 @@ internal sealed class GraphCanvas : Control
     /// <summary>A ref pill was double-clicked.</summary>
     public event Action<GraphRef>? RefActivated;
 
+    /// <summary>A ref pill was right-clicked: the host shows its menu at the pointer.</summary>
+    public event Action<GraphRef>? RefMenuRequested;
+
     /// <summary>A branch pill or a commit row was pressed and dragged past the threshold; the host runs the drag from
     /// here (the pointer stays captured by the canvas until release).</summary>
     public event Action<DragSource, IPointer>? DragRequested;
@@ -624,7 +627,14 @@ internal sealed class GraphCanvas : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsRightButtonPressed && RefAt(e.GetPosition(this)) is { } menuRef)
+        {
+            RefMenuRequested?.Invoke(menuRef);
+            e.Handled = true;
+            return;
+        }
+        if (!props.IsLeftButtonPressed) return;
         Focus();
         var pos = e.GetPosition(this);
         if (EdgeAt(pos.X) is var edge and > 0)

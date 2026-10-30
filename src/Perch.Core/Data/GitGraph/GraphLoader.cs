@@ -17,9 +17,12 @@ internal static class GraphLoader
     /// <param name="timing">Called with each stage's name and duration, for <c>perch bench-graph</c>.</param>
     /// <param name="baseOverride">For <see cref="GraphScope.Branch"/>: the base ref to scope against; null picks
     /// the best candidate, and an empty string shows HEAD's history unscoped.</param>
+    /// <param name="hidden">Branches (full ref names) to leave out of the All scope's walk and the pills.</param>
     public static GraphSnapshot? Load(string cwd, GraphScope scope, GraphSnapshot? previous = null,
-        Action<string, TimeSpan>? timing = null, int pageSize = PageSize, string? baseOverride = null)
+        Action<string, TimeSpan>? timing = null, int pageSize = PageSize, string? baseOverride = null,
+        IReadOnlySet<string>? hidden = null)
     {
+        hidden ??= new HashSet<string>();
         if (GitCheckoutScanner.FindRoot(cwd) is not { } root)
             return null;
         var sw = Stopwatch.StartNew();
@@ -29,7 +32,7 @@ internal static class GraphLoader
         // worktree's status and the log run side by side: the query names branches rather than resolved hashes, so
         // none of them waits on another.
         var trees = ScanWorktrees(root);
-        var (query, baseRef, candidates) = QueryFor(scope, root, trees, baseOverride);
+        var (query, baseRef, candidates) = QueryFor(scope, root, trees, baseOverride, hidden);
         Mark("scope");
         var refsTask = Task.Run(() => GraphLogReader.LoadRefs(root));
         var logTask = Task.Run(() => GraphLogReader.ReadLog(root, pageSize, 0, query));
@@ -45,6 +48,7 @@ internal static class GraphLoader
         var context = new GraphSnapshot.ScopeContext(current >= 0 ? statusTask.Result[current] : null, baseRef, candidates)
         {
             InProgress = GitOps.InProgress(cwd),
+            Hidden = hidden,
         };
         var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context);
         Mark("layout");
@@ -81,7 +85,8 @@ internal static class GraphLoader
     /// doesn't wait for the ref listing. Only <see cref="GraphScope.Branch"/> runs git (base ref and merge-base).
     /// </summary>
     internal static (GraphLogQuery Query, string? BaseRef, IReadOnlyList<string> Candidates) QueryFor(
-        GraphScope scope, string root, IReadOnlyList<ScannedWorktree> trees, string? baseOverride = null)
+        GraphScope scope, string root, IReadOnlyList<ScannedWorktree> trees, string? baseOverride = null,
+        IReadOnlyCollection<string>? hidden = null)
     {
         switch (scope)
         {
@@ -107,6 +112,8 @@ internal static class GraphLoader
             default:
                 // Detached worktree heads aren't reachable from any ref, so they're named explicitly.
                 var detached = trees.Select(t => t.DetachedHead).OfType<string>().ToList();
+                if (hidden is { Count: > 0 })
+                    return (BranchVisibility.AllExcept(hidden, detached), null, []);
                 var all = detached.Count == 0 ? GraphLogQuery.Everything : new([.. GraphLogQuery.Everything.Tips, .. detached], []);
                 return (all, null, []);
         }

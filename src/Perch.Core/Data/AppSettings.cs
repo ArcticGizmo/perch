@@ -458,6 +458,12 @@ internal sealed class AppSettings
     public double GitTreeRefsWidth { get; set; }
     public double GitTreeLanesWidth { get; set; }
 
+    // Branches hidden from the git Tree graph and the remote branches it has seen, per repo, keyed by the repo's
+    // shared git dir (see GitGraph.GraphRepoPrefs); and whether new remote branches that aren't the user's are hidden
+    // as they arrive. Both set from the Tree window's rail, not Settings controls (see SettingsRegistryTests.NotSettings).
+    public Dictionary<string, GitGraph.GraphRepoPrefs> GitTreeRepos { get; set; } = new();
+    public bool GitTreeAutoHideOthers { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

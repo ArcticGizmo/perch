@@ -41,7 +41,8 @@ internal sealed class GraphSnapshot
 
         _refsAt = new(StringComparer.Ordinal);
         foreach (var r in refs)
-            (_refsAt.TryGetValue(r.Target, out var l) ? l : _refsAt[r.Target] = new()).Add(r);
+            if (!context.Hidden.Contains(r.FullName))
+                (_refsAt.TryGetValue(r.Target, out var l) ? l : _refsAt[r.Target] = new()).Add(r);
         _worktreesAt = new(StringComparer.Ordinal);
         foreach (var w in worktrees)
             if (w.Head is not null)
@@ -64,8 +65,13 @@ internal sealed class GraphSnapshot
         /// <summary>A merge, rebase or cherry-pick the current worktree has stopped in the middle of.</summary>
         public GitInProgress InProgress { get; init; }
 
+        /// <summary>Branches (full ref names) left out of the walk and drawn without pills; the rail still lists them.</summary>
+        public IReadOnlySet<string> Hidden { get; init; } = new HashSet<string>();
+
         public static readonly ScopeContext None = new(null, null, []);
     }
+
+    public bool IsHidden(GraphRef r) => Context.Hidden.Contains(r.FullName);
 
     /// <summary>The worktree the git commands run in (the one the window was opened on).</summary>
     public string Root { get; }

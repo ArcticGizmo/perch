@@ -368,6 +368,22 @@ public sealed class GitGraphIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void HiddenBranchLeavesTheWalkAndTheUsersOwnBranchCountsAsMine()
+    {
+        if (!_ready || !AddSide()) return;
+        Assert.Equal(0, Run("branch", "bot", "main").exit);   // nothing over trunk, so not the user's
+
+        var shown = GraphLoader.Load(_repo, GraphScope.All)!;
+        Assert.Contains(shown.Commits, c => c.Subject == "s1");
+        var hidden = GraphLoader.Load(_repo, GraphScope.All, hidden: new HashSet<string> { "refs/heads/side" })!;
+        Assert.DoesNotContain(hidden.Commits, c => c.Subject == "s1");
+        Assert.Contains(hidden.Refs, r => r.Name == "side");
+
+        var candidates = shown.Refs.Where(r => r.Name is "side" or "bot").ToList();
+        Assert.Equal(["refs/heads/side"], BranchVisibility.Mine(_repo, candidates, BranchVisibility.TrunkRefs(shown.Refs, "main")));
+    }
+
+    [Fact]
     public void WorktreeRemove_RefusesChangesUnlessForced()
     {
         if (!_ready) return;

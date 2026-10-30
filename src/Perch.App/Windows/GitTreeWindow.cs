@@ -320,6 +320,9 @@ internal sealed partial class GitTreeWindow : Window
         _rail.BranchActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _rail); };
         _rail.DragRequested += BeginDrag;
         _rail.WorktreeMenuRequested += ShowWorktreeMenu;
+        _rail.VisibilityToggled += ToggleHidden;
+        _rail.VisibilityMenuRequested += ShowVisibilityMenu;
+        _graph.Canvas.RefMenuRequested += ShowRefMenu;
         _railSeparator = new Border { Width = 1 };
 
         // Ctrl+G: go to a branch, tag, hash or message text; Enter again walks the matches.
@@ -776,7 +779,11 @@ internal sealed partial class GitTreeWindow : Window
         if (moved)
             _baseOverride = null; // a new repo: re-decide the base automatically
         _cwd = cwd;
-        if (moved) LoadLayout(cwd);
+        if (moved)
+        {
+            LoadLayout(cwd);
+            _repoKey = RepoKey(cwd);
+        }
         _retargetActive = isActive;
         _isActive = isActive;
         // A caller (the session UI's "View diff") can ask the tree to land on a specific file. Convert the
@@ -818,10 +825,10 @@ internal sealed partial class GitTreeWindow : Window
             _diff.SetDiff(null, "");
         }
 
-        var (scope, previous, baseOverride) = (_scope, _snap, _baseOverride);
+        var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
         System.Threading.Tasks.Task.Run(() =>
             {
-                var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride);
+                var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
                 return (snap, invisible: ComputeInvisible(cwd, snap?.Context.CurrentStatus));
             })
             .ContinueWith(t =>
@@ -833,6 +840,7 @@ internal sealed partial class GitTreeWindow : Window
                     var (snap, invisible) = t.Result;
                     _invisiblePaths = invisible;
                     ShowSnapshot(snap, cwd, keepPlace: preserveSelection);
+                    ApplyAutoHide(snap);
 
                     // A one-shot focus request (Retarget's focusPath) takes precedence over the default when
                     // we're not preserving a prior selection: land the home node on that file.
@@ -1696,11 +1704,11 @@ internal sealed partial class GitTreeWindow : Window
         bool wipSelected = _selectedNode is { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
         var contentMode = _contentMode;
-        var (scope, previous, baseOverride) = (_scope, _snap, _baseOverride);
+        var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride);
+            var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
             var status = snap?.Context.CurrentStatus;
             var invisible = ComputeInvisible(cwd, status);
             // The shown working-tree file's content in the active content mode, for the repaint-if-changed
@@ -1716,6 +1724,7 @@ internal sealed partial class GitTreeWindow : Window
                 if (!IsVisible || gen != _gen) return;
                 var (snap, invisible, sel) = t.Result;
                 var status = snap?.Context.CurrentStatus;
+                ApplyAutoHide(snap);   // a fetch brought new branches in: check them
 
                 bool changed = !StatusEqual(status, _lastStatus)
                                || !SameGraph(snap, _snap)

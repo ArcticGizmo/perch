@@ -526,6 +526,54 @@ public class GitGraphTests
         Assert.Equal(Path.GetFullPath("C:/r--feat"), opt.NewPath);
     }
 
+    // ---- branch visibility ------------------------------------------------------------------------------
+
+    [Fact]
+    public void Hidden_BranchesAreExcludedFromTheirOwnKindOfWalkAndLosePills()
+    {
+        var q = BranchVisibility.AllExcept(["refs/heads/old", "refs/remotes/origin/spike"], ["d1"]);
+        Assert.Equal(["--exclude=old", "--branches", "--exclude=origin/spike", "--remotes", "--tags", "HEAD", "d1"], q.Tips);
+
+        var s = GraphSnapshot.Build("C:/r", GraphScope.All, q, [C("m2", "m1"), C("m1")],
+            [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2"), new("old", "refs/heads/old", GraphRefKind.LocalBranch, "m1")],
+            [], "main", null, 100, new GraphSnapshot.ScopeContext(null, null, []) { Hidden = new HashSet<string> { "refs/heads/old" } });
+        Assert.Empty(s.RefsAt("m1"));
+        Assert.True(s.IsHidden(s.Refs[1]));
+        Assert.Equal(2, s.Refs.Count);   // the rail still lists it
+    }
+
+    [Fact]
+    public void Unseen_IsRemoteBranchesNotYetSeenOrHidden()
+    {
+        var refs = new GraphRef[]
+        {
+            new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m"),
+            new("origin/a", "refs/remotes/origin/a", GraphRefKind.RemoteBranch, "a"),
+            new("origin/b", "refs/remotes/origin/b", GraphRefKind.RemoteBranch, "b"),
+            new("origin/c", "refs/remotes/origin/c", GraphRefKind.RemoteBranch, "c"),
+        };
+        var prefs = new GraphRepoPrefs { Hidden = ["refs/remotes/origin/c"] };
+        BranchVisibility.SeedSeen(prefs, refs.Take(2));
+        Assert.Equal(["refs/remotes/origin/a"], prefs.Seen);
+        Assert.Equal(["origin/b"], BranchVisibility.Unseen(refs, prefs).Select(r => r.Name));
+        Assert.Equal(["refs/heads/main", "refs/remotes/origin/main"],
+            BranchVisibility.TrunkRefs([refs[0], new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m"), refs[1]], "main"));
+    }
+
+    [Fact]
+    public void Mine_IsABranchWithACommitOffTrunkByTheUser()
+    {
+        // b1 (dependabot) → b0 (me) on "mixed"; d1 (dependabot) alone on "bot"; "empty" adds nothing over trunk.
+        // \u001f, not \x1f: C#'s \x takes up to four hex digits, so "\x1fb0" would be one character.
+        const string log = "b1\u001fb0\u001fbot@github.com\u001fdependabot[bot]\nb0\u001ftrunk\u001fJON@x.com\u001fJon\nd1\u001ftrunk\u001fbot@github.com\u001fdependabot[bot]\n";
+        GraphRef R(string name, string target) => new(name, "refs/remotes/" + name, GraphRefKind.RemoteBranch, target);
+        var candidates = new[] { R("origin/mixed", "b1"), R("origin/bot", "d1"), R("origin/empty", "trunk") };
+
+        Assert.Equal(["refs/remotes/origin/mixed"], BranchVisibility.MineFrom(log, candidates, "jon@x.com", null));
+        Assert.Equal(["refs/remotes/origin/mixed"], BranchVisibility.MineFrom(log, candidates, null, "jon"));
+        Assert.Empty(BranchVisibility.MineFrom(log, candidates, "someone@else", "Someone"));
+    }
+
     [Fact]
     public void IsAncestor_WalksTheLoadedRows()
     {

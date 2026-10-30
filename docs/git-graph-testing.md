@@ -64,6 +64,14 @@ Use a throwaway clone or a branch you don't mind moving, with at least one extra
 4. **Resizable columns.** Hover the edge between the pills and the lanes, or between the lanes and the commit messages: the cursor becomes ↔ and a line shows. Drag to resize. Double-click an edge to put it back. The widths are remembered next time.
 5. Light/dark recolours the diff bar.
 
+## Feedback round 1: hiding branches
+
+1. **Hide one.** Hover a branch in the rail's Local or Remotes list: an eye appears at the right. Click it: the branch leaves the graph (its pill, and any commits only it reaches), and its rail row stays, dimmed and italic with the eye struck through. The header shows "N · 1 hidden". Click the struck eye to bring it back. Or right-click a pill in the graph → **Hide <branch> from the graph** (the toast offers Undo). Branches a worktree has checked out, and the main line (`main` / `origin/main`), can't be hidden; they get no eye, and the pill menu says why.
+2. **Show everything again.** The **⋯** on the Local or Remotes header → **Show all N hidden branches**.
+3. **Auto-hide.** **⋯** → **Hide new remote branches that aren't mine** (a ✓ shows when it's on). Turning it on hides nothing that's already there. Then make a remote branch that isn't yours appear: e.g. have someone push one, or run `git fetch` after Dependabot opens a PR. On the next refresh it's hidden, with a toast "Hid origin/… : a new branch that isn't yours" and Undo. A new remote branch with a commit of yours (one you pushed from another clone) stays visible. "Yours" = a commit that main doesn't have, made with your git `user.email` or `user.name`.
+4. **Per repo, every worktree.** What's hidden is remembered per repository and is the same in every worktree of it, and after closing and reopening the window.
+5. The scopes: hiding applies to **All**; **Worktrees** and **This branch** show what they always did.
+
 ## CP12–CP14: drag to merge, rebase, cherry-pick and make worktrees
 
 Use a throwaway clone. Set it up with: two local branches that have diverged (`a` and `b`, each with a commit the other lacks), a branch `behind` that is an ancestor of `main` (`git branch behind main~2`), and one extra worktree (`git worktree add ..\<repo>--try b`). *Before (all of these):* nothing in the graph or rail could be dragged.

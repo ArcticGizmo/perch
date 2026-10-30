@@ -704,6 +704,17 @@ internal static class HeadlessRenderer
             }
             tw.PreviewDiff(open: false);
 
+            // A remote branch hidden: dimmed in the rail with its eye struck through, gone from the graph.
+            tw.PreviewHideFirstRemote();
+            for (var until = DateTime.UtcNow.AddSeconds(4); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } hiddenFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_hidden_branch_1x.png"));
+                hiddenFrame.Save(fs);
+            }
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.

@@ -65,6 +65,12 @@ internal sealed class GraphRail : UserControl
 
     /// <summary>A worktree card was right-clicked: the host shows its menu at the pointer.</summary>
     public event Action<GraphWorktree, Control>? WorktreeMenuRequested;
+
+    /// <summary>A branch row's eye was clicked: hide it from the graph (true) or show it again.</summary>
+    public event Action<GraphRef, bool>? VisibilityToggled;
+
+    /// <summary>The "⋯" on the Local or Remotes header: the host shows the visibility menu there.</summary>
+    public event Action<Control>? VisibilityMenuRequested;
     public event Action<GraphRef>? BranchActivated;
 
     public void SetColors(GraphCanvas.Colors c)
@@ -154,14 +160,15 @@ internal sealed class GraphRail : UserControl
             _stack.Children.Add(NewWorktreeZone());
 
         var locals = s.Refs.Where(r => r.Kind == GraphRefKind.LocalBranch).ToList();
-        _stack.Children.Add(Header("Local", locals.Count));
+        _stack.Children.Add(Header("Local", locals.Count, hidden: locals.Count(s.IsHidden), menu: true));
         foreach (var r in locals)
             _stack.Children.Add(RefRow(s, r, r.Name, s.Worktrees.Any(w => w.Branch == r.Name)));
 
         var remotes = s.Refs.Where(r => r.Kind == GraphRefKind.RemoteBranch).ToList();
         if (remotes.Count > 0)
         {
-            _stack.Children.Add(Header("Remotes", remotes.Count, _remotesOpen, () => _remotesOpen = !_remotesOpen));
+            _stack.Children.Add(Header("Remotes", remotes.Count, _remotesOpen, () => _remotesOpen = !_remotesOpen,
+                hidden: remotes.Count(s.IsHidden), menu: true));
             if (_remotesOpen)
                 foreach (var g in remotes.GroupBy(r => r.Name.Split('/')[0]))
                 {
@@ -191,18 +198,38 @@ internal sealed class GraphRail : UserControl
         }
     }
 
-    private Control Header(string text, int count, bool? open = null, Action? toggle = null)
+    private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, bool menu = false)
     {
         var label = new TextBlock
         {
             Text = (open is null ? "" : open.Value ? "▾ " : "▸ ") + text.ToUpperInvariant(),
             FontSize = 10.5, FontWeight = FontWeight.SemiBold, LetterSpacing = 1.1, Foreground = Ink(_c.Muted),
         };
-        var n = new TextBlock { Text = count.ToString(), FontSize = 10.5, Foreground = Ink(_c.Muted), [DockPanel.DockProperty] = Dock.Right };
+        var n = new TextBlock
+        {
+            Text = hidden > 0 ? $"{count} · {hidden} hidden" : count.ToString(), FontSize = 10.5, Foreground = Ink(_c.Muted),
+            VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
+        };
+        var dock = new DockPanel();
+        if (menu)
+        {
+            var more = new Border
+            {
+                Padding = new Thickness(6, 0), Margin = new Thickness(4, 0, 0, 0), CornerRadius = new CornerRadius(4), Background = Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand), [DockPanel.DockProperty] = Dock.Right,
+                Child = new TextBlock { Text = "⋯", FontSize = 13, FontWeight = FontWeight.Bold, Foreground = Ink(_c.Muted) },
+            };
+            ToolTip.SetTip(more, "Hidden branches");
+            more.PointerPressed += (_, e) => { VisibilityMenuRequested?.Invoke(more); e.Handled = true; };
+            Hover(more, -1);
+            dock.Children.Add(more);
+        }
+        dock.Children.Add(n);
+        dock.Children.Add(label);
         var row = new Border
         {
             Padding = new Thickness(6, 4), Margin = new Thickness(0, 10, 0, 2), Background = Brushes.Transparent, CornerRadius = new CornerRadius(5),
-            Child = new DockPanel { Children = { n, label } },
+            Child = dock,
         };
         if (toggle is not null)
         {
@@ -301,23 +328,40 @@ internal sealed class GraphRail : UserControl
             Width = 8, Height = 8, CornerRadius = new CornerRadius(2), Background = Ink(color, lane >= 0 ? 1 : 0.5),
             Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center,
         });
+        bool hidden = s.IsHidden(r);
+        Control? eye = null;
         if (checkedOut)
         {
             var f = Folder(color, new Thickness(6, 0, 0, 0));
             f.SetValue(DockPanel.DockProperty, Dock.Right);
             dock.Children.Add(f);
         }
+        else if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
+        {
+            // Shown on hover, and always on a hidden row so the way back is visible.
+            eye = Eye(hidden);
+            eye.Opacity = hidden ? 1 : 0;
+            ToolTip.SetTip(eye, hidden ? "Show in the graph" : "Hide from the graph");
+            eye.PointerPressed += (_, e) => { VisibilityToggled?.Invoke(r, !hidden); e.Handled = true; };
+            dock.Children.Add(eye);
+        }
         dock.Children.Add(new TextBlock
         {
-            Text = label, FontSize = 12, Foreground = Ink(lane >= 0 ? _c.Text : _c.Muted),
-            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+            Text = label, FontSize = 12, Foreground = Ink(lane >= 0 && !hidden ? _c.Text : _c.Muted, hidden ? 0.7 : 1),
+            FontStyle = hidden ? FontStyle.Italic : FontStyle.Normal,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
         });
         var row = new Border
         {
             Padding = new Thickness(6 + indent, 3, 6, 3), CornerRadius = new CornerRadius(5), Background = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = dock, Tag = new RailItem(null, r),
         };
-        ToolTip.SetTip(row, lane >= 0 ? r.Name : $"{r.Name} · not in the loaded graph");
+        ToolTip.SetTip(row, hidden ? $"{r.Name} · hidden from the graph" : lane >= 0 ? r.Name : $"{r.Name} · not in the loaded graph");
+        if (eye is not null && !hidden)
+        {
+            row.PointerEntered += (_, _) => eye.Opacity = 1;
+            row.PointerExited += (_, _) => eye.Opacity = 0;
+        }
         row.PointerPressed += (_, e) =>
         {
             TrackPress(row, e);
@@ -329,6 +373,23 @@ internal sealed class GraphRail : UserControl
             Draggable(row, () => DragSource.Of(r));
         Hover(row, lane);
         return row;
+    }
+
+    // An eye outline (struck through when the branch is hidden), drawn because Inter has no eye glyph.
+    private Control Eye(bool struck)
+    {
+        var ink = Ink(_c.Muted);
+        var c = new global::Avalonia.Controls.Canvas { Width = 14, Height = 10 };
+        c.Children.Add(new Ellipse { Width = 13, Height = 8, Stroke = ink, StrokeThickness = 1.2, [global::Avalonia.Controls.Canvas.LeftProperty] = 0.5, [global::Avalonia.Controls.Canvas.TopProperty] = 1.0 });
+        c.Children.Add(new Ellipse { Width = 4, Height = 4, Fill = ink, [global::Avalonia.Controls.Canvas.LeftProperty] = 5.0, [global::Avalonia.Controls.Canvas.TopProperty] = 3.0 });
+        if (struck)
+            c.Children.Add(new Line { StartPoint = new Point(1, 9.5), EndPoint = new Point(13, 0.5), Stroke = ink, StrokeThickness = 1.4 });
+        return new Border
+        {
+            Child = c, Padding = new Thickness(3, 2), Margin = new Thickness(6, 0, 0, 0), Background = Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right,
+        };
     }
 
     // A small folder outline: the branch is checked out in a worktree (or this is a worktree card).
