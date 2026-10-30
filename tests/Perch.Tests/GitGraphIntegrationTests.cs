@@ -200,6 +200,76 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal("main", GitOps.Head(_repo)!.Branch);
     }
 
+    [Fact]
+    public void Checkout_StashesSwitchesAndUndoesBothSteps()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "changed\n");
+        File.WriteAllText(Path.Combine(_repo, "new.txt"), "untracked\n");
+
+        var (r, undo) = GitOps.Checkout(_repo, CheckoutAction.Switch, "feature", DirtyChoice.Stash);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal("feature", GitOps.Head(_repo)!.Branch);
+        Assert.True(new Perch.Data.GitRepoService().GetStatus(_repo)!.Value.IsClean);
+        Assert.NotNull(undo!.Stash);
+
+        // Another stash on top must not be the one Undo pops.
+        File.WriteAllText(Path.Combine(_repo, "f.txt"), "other\n");
+        Assert.True(GitOps.StashPush(_repo, "unrelated").Ok);
+
+        Assert.True(GitOps.Undo(_repo, undo).Ok);
+        Assert.Equal("main", GitOps.Head(_repo)!.Branch);
+        Assert.Equal("changed", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());   // autocrlf may rewrite the ending
+        Assert.True(File.Exists(Path.Combine(_repo, "new.txt")));
+        Assert.Equal("unrelated", Run("stash", "list", "--format=%s").stdout.Trim().Split(": ").Last());
+    }
+
+    [Fact]
+    public void Checkout_ThatFailsPutsTheStashBack()
+    {
+        if (!_ready) return;
+        Assert.Equal(0, Run("worktree", "add", _repo + "-feature", "feature").exit);
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "changed\n");
+
+        var (r, undo) = GitOps.Checkout(_repo, CheckoutAction.Switch, "feature", DirtyChoice.Stash);
+        Assert.False(r.Ok);
+        Assert.Null(undo);
+        Assert.Equal("changed", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());   // autocrlf may rewrite the ending
+        Assert.Equal("", Run("stash", "list").stdout.Trim());
+    }
+
+    [Fact]
+    public void Checkout_CarriesChangesAcrossAndBack()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "carried\n");   // a.txt is the same on both branches
+
+        var (r, undo) = GitOps.Checkout(_repo, CheckoutAction.Switch, "feature", DirtyChoice.Carry);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal("feature", GitOps.Head(_repo)!.Branch);
+        Assert.Equal("carried\n", File.ReadAllText(Path.Combine(_repo, "a.txt")));
+
+        Assert.True(GitOps.Undo(_repo, undo!).Ok);
+        Assert.Equal("main", GitOps.Head(_repo)!.Branch);
+        Assert.Equal("carried\n", File.ReadAllText(Path.Combine(_repo, "a.txt")));
+    }
+
+    [Fact]
+    public void Checkout_DetachedOrOnANewBranch()
+    {
+        if (!_ready) return;
+        var f1 = GraphLogReader.LoadLog(_repo, 10).Single(c => c.Subject == "f1").Hash;
+
+        var (detached, undo) = GitOps.Checkout(_repo, CheckoutAction.Detach, f1, DirtyChoice.None);
+        Assert.True(detached.Ok, detached.Message);
+        Assert.Equal(new GitHeadState(null, f1), GitOps.Head(_repo));
+        Assert.True(GitOps.Undo(_repo, undo!).Ok);
+
+        var (named, _) = GitOps.Checkout(_repo, CheckoutAction.Detach, f1, DirtyChoice.None, newBranch: "spot");
+        Assert.True(named.Ok, named.Message);
+        Assert.Equal(new GitHeadState("spot", f1), GitOps.Head(_repo));
+    }
+
     [Theory]
     [InlineData("hint: Waiting for your editor\nfatal: 'feature' is already used by worktree at 'C:/x'", "'feature' is already used by worktree at 'C:/x'")]
     [InlineData("error: Your local changes would be overwritten\n", "Your local changes would be overwritten")]

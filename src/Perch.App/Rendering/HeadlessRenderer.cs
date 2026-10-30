@@ -691,6 +691,14 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, "git_tree_live_1x.png"));
                 liveFrame.Save(fs);
             }
+            tw.PreviewCheckoutChrome();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } chromeFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_checkout_1x.png"));
+                chromeFrame.Save(fs);
+            }
             tw.Close();
         }
 

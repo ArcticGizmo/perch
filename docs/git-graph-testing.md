@@ -37,3 +37,21 @@ Open the Tree window as before: right-click a session row on the overlay → **V
 8. **Light/dark** (☀/☾ in the header) recolours the graph with its own lane palette.
 
 Report anything that looks off with a screenshot. These checks have only been verified through the headless renderer (`git_graph_*.png`, `git_tree_*.png`), not on a real desktop.
+
+## CP11: double-click to check out
+
+Use a throwaway clone or a branch you don't mind moving, with at least one extra worktree (`git worktree add ..\<repo>--try <branch>`). Every successful checkout shows a toast at the bottom of the graph ("Checked out X", the git command underneath in mono, **Undo**, ✕); it hides after ~6 s unless the pointer is on it. Failures show git's own line in red for ~10 s, with no Undo. *Before (all of these):* double-clicking a pill, branch or commit did nothing; only another worktree's WIP row reacted.
+
+1. **Clean tree, free branch.** With no uncommitted changes, double-click a local branch pill (or the branch in the rail's **Local** list). It checks out straight away, the solid pill and the ring move to it, and the window lands on its HEAD. Click **Undo**: back on the previous branch, toast "Back on <branch>".
+2. **Double-click a commit row** (not on a pill). A commit with a local branch checks that branch out. A commit with only a remote branch creates a tracking branch ("Checked out x (tracking origin/x)"). A commit with neither opens a menu: "No branch points at abc1234" / **Check out abc1234 here, detached** / **Create a branch at abc1234…**.
+3. **Create a branch.** From that menu pick **Create a branch at…**: a bar opens under the graph title ("New branch at abc1234", a name box, **Create and check out**, ✕). Type a name, Enter: the branch is created there and checked out. Esc closes the bar without doing anything. A bad name (e.g. with a space) shows git's error in the toast.
+4. **Tag.** Double-click a tag in the rail's **Tags** list: the menu says "<tag> is a tag" and offers the detached checkout or a branch there.
+5. **Remote branch.** Double-click a remote pill/rail row with no local branch of that name: a local tracking branch is created and checked out. If a local of that name exists, it's that local branch that gets checked out.
+6. **Branch held by another worktree.** Double-click the branch your extra worktree has checked out: a menu says it's checked out in `<name>` and offers **Open <name> in this window** (the window re-points there) or **Check out abc1234 here, detached**.
+7. **Dirty tree.** Make an uncommitted change (and an untracked file) and double-click another branch: a menu says "<worktree> has N changes not committed" and offers **Stash the N changes, then check out X**, **Bring the N changes to X**, **Cancel**.
+   - *Stash:* the tree goes clean, a "Perch: before checking out X" stash appears in the rail's **Stashes**, toast "…; N changes stashed". **Undo** switches back *and* pops that exact stash (even if you stashed something else in between): your edits and the untracked file are back.
+   - *Bring along:* the edits come with you (toast "…, changes brought along"); **Undo** carries them back.
+   - If git refuses (e.g. a branch held elsewhere), a stash made for it is popped straight back: nothing is lost and no stash is left behind.
+8. **Session guard.** With a Claude session running in this worktree, any checkout first shows a menu whose top line warns "A Claude session is working in this worktree…" with **Check out X anyway** / **Cancel** (or the stash/bring-along choices when dirty). It warns; it never blocks.
+9. **Already there.** Double-click the branch this worktree is on: toast "<worktree> is already on <branch>." Nothing runs.
+10. **Light/dark** recolours the toast and the branch bar.

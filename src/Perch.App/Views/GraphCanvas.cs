@@ -83,8 +83,11 @@ internal sealed class GraphCanvas : Control
     /// <summary>The selected row changed (−1 when cleared).</summary>
     public event Action<int>? SelectionChanged;
 
-    /// <summary>A row was double-clicked or Enter was pressed on it.</summary>
+    /// <summary>A row was double-clicked (anywhere but a pill) or Enter was pressed on it.</summary>
     public event Action<int>? RowActivated;
+
+    /// <summary>A ref pill was double-clicked.</summary>
+    public event Action<GraphRef>? RefActivated;
 
     /// <summary>The last loaded row came into view and the snapshot has more to load.</summary>
     public event Action? LoadMoreRequested;
@@ -519,11 +522,15 @@ internal sealed class GraphCanvas : Control
         base.OnPointerPressed(e);
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         Focus();
-        int r = RowAt(e.GetPosition(this).Y);
+        var pos = e.GetPosition(this);
+        int r = RowAt(pos.Y);
         if (r < 0) return;
         Select(r, scrollIntoView: false);
         if (e.ClickCount == 2)
-            RowActivated?.Invoke(r);
+        {
+            if (RefAt(pos) is { } rf) RefActivated?.Invoke(rf);
+            else RowActivated?.Invoke(r);
+        }
         e.Handled = true;
     }
 

@@ -23,6 +23,23 @@ public enum GitInProgress
 /// <summary>Where a worktree's HEAD was before an operation, so the toast's Undo can put it back.</summary>
 public sealed record GitHeadState(string? Branch, string Hash);
 
+/// <summary>What to do with a dirty worktree's changes when checking out.</summary>
+public enum DirtyChoice
+{
+    /// <summary>The tree is clean (or the caller lets git refuse).</summary>
+    None,
+
+    /// <summary>Stash everything (untracked too) first.</summary>
+    Stash,
+
+    /// <summary>Carry the changes across (<c>switch --merge</c>).</summary>
+    Carry,
+}
+
+/// <summary>How to undo a checkout: where HEAD was, the stash entry it made (popped back on Undo), and whether the
+/// changes were carried across.</summary>
+public sealed record CheckoutUndo(GitHeadState Before, string? Stash, bool Carried);
+
 /// <summary>
 /// The git graph's write side: checkout, branch, stash, merge, rebase, fast-forward, cherry-pick and worktree add,
 /// each run in a named worktree (the one that owns the branch, so nothing has to be switched first). These are
@@ -53,6 +70,26 @@ internal static class GitOps
 
     /// <summary>Stashes every change including untracked files, labelled so it can be found in the rail.</summary>
     public static GitOpResult StashPush(string worktree, string message) => Run(worktree, "stash", "push", "-u", "-m", message);
+
+    /// <summary>The newest stash entry's commit, so an Undo can pop exactly the entry a checkout made.</summary>
+    public static string? StashTop(string worktree)
+    {
+        var r = GitRunner.Run(worktree, 6000, "rev-parse", "--verify", "--quiet", "refs/stash");
+        return r.Exit == 0 ? r.Stdout.Trim() : null;
+    }
+
+    /// <summary>Pops the stash entry whose commit is <paramref name="stashHash"/>, wherever it now sits in the list
+    /// (another stash may have been pushed on top since).</summary>
+    public static GitOpResult StashPop(string worktree, string stashHash)
+    {
+        var list = GitRunner.Run(worktree, 6000, "stash", "list", "--format=%H");
+        int index = list.Exit == 0
+            ? Array.IndexOf(list.Stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries), stashHash)
+            : -1;
+        return index < 0
+            ? new GitOpResult(false, "That stash is no longer there.", "git stash pop")
+            : Run(worktree, "stash", "pop", $"stash@{{{index}}}");
+    }
 
     public static GitOpResult Merge(string worktree, string rev) => Refuse(rev) ?? Run(worktree, "merge", "--no-edit", rev);
 
@@ -89,6 +126,60 @@ internal static class GitOps
             ? Run(repo, "worktree", "add", "-b", newBranch, path, startPoint ?? "HEAD")
             : Run(repo, "worktree", "add", path, branch ?? "HEAD"));
 
+    /// <summary>
+    /// Carries out a checkout <paramref name="action"/> (<see cref="CheckoutAction.Switch"/>, <see cref="CheckoutAction.Track"/>
+    /// or <see cref="CheckoutAction.Detach"/>; with <paramref name="newBranch"/>, a new branch at <paramref name="target"/>)
+    /// in <paramref name="worktree"/>, dealing with its changes as <paramref name="dirty"/> says. A stash made for a
+    /// checkout that then fails is popped straight back, so a failure leaves the tree as it was. On success, the
+    /// <see cref="CheckoutUndo"/> puts everything back.
+    /// </summary>
+    public static (GitOpResult Result, CheckoutUndo? Undo) Checkout(string worktree, CheckoutAction action, string target,
+        DirtyChoice dirty, string? newBranch = null)
+    {
+        if (Head(worktree) is not { } before)
+            return (new GitOpResult(false, "Couldn't read this worktree's HEAD.", "git rev-parse HEAD"), null);
+
+        string? stash = null;
+        if (dirty == DirtyChoice.Stash)
+        {
+            var label = $"Perch: before checking out {newBranch ?? target}";
+            var pushed = StashPush(worktree, label);
+            if (!pushed.Ok) return (pushed, null);
+            stash = StashTop(worktree);
+        }
+
+        bool carry = dirty == DirtyChoice.Carry;
+        var r = (newBranch, action, carry) switch
+        {
+            ({ } name, _, _) => CreateBranch(worktree, name, target, checkout: true),
+            (null, CheckoutAction.Switch, false) => Switch(worktree, target),
+            (null, CheckoutAction.Switch, true) => SwitchMerge(worktree, target),
+            (null, CheckoutAction.Track, _) => Refuse(target) ?? (carry
+                ? Run(worktree, "switch", "--merge", "--track", target)
+                : SwitchTrack(worktree, target)),
+            (null, CheckoutAction.Detach, _) => Refuse(target) ?? (carry
+                ? Run(worktree, "switch", "--merge", "--detach", target)
+                : SwitchDetach(worktree, target)),
+            _ => new GitOpResult(false, "Nothing to check out.", ""),
+        };
+
+        if (!r.Ok)
+        {
+            if (stash is not null) StashPop(worktree, stash);
+            return (r, null);
+        }
+        return (r, new CheckoutUndo(before, stash, carry));
+    }
+
+    /// <summary>Undoes a <see cref="Checkout"/>: HEAD back where it was, then the stash it made popped back.</summary>
+    public static GitOpResult Undo(string worktree, CheckoutUndo undo)
+    {
+        var r = Restore(worktree, undo.Before, undo.Carried);
+        if (!r.Ok || undo.Stash is null) return r;
+        var popped = StashPop(worktree, undo.Stash);
+        return popped.Ok ? r : popped;
+    }
+
     /// <summary>Where HEAD is now (branch, or null when detached, plus the commit), for Undo. Null on failure.</summary>
     public static GitHeadState? Head(string worktree)
     {
@@ -98,9 +189,16 @@ internal static class GitOps
         return new GitHeadState(branch.Exit == 0 ? branch.Stdout.Trim() : null, hash.Stdout.Trim());
     }
 
-    /// <summary>Puts HEAD back where <paramref name="before"/> recorded it.</summary>
-    public static GitOpResult Restore(string worktree, GitHeadState before) =>
-        before.Branch is { } b ? Switch(worktree, b) : SwitchDetach(worktree, before.Hash);
+    /// <summary>Puts HEAD back where <paramref name="before"/> recorded it, carrying local changes back across when the
+    /// operation being undone carried them over.</summary>
+    public static GitOpResult Restore(string worktree, GitHeadState before, bool carryChanges = false) =>
+        (before.Branch, carryChanges) switch
+        {
+            ({ } b, false) => Switch(worktree, b),
+            ({ } b, true) => SwitchMerge(worktree, b),
+            (null, false) => SwitchDetach(worktree, before.Hash),
+            (null, true) => Refuse(before.Hash) ?? Run(worktree, "switch", "--merge", "--detach", before.Hash),
+        };
 
     /// <summary>What <paramref name="worktree"/> is in the middle of, read from the marker files in its git dir.</summary>
     public static GitInProgress InProgress(string worktree)

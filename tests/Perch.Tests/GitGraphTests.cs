@@ -335,6 +335,71 @@ public class GitGraphTests
         Assert.Equal(-1, s.LaneOf("nope"));
     }
 
+    // ---- checkout planning -------------------------------------------------------------------------------
+
+    private static GraphSnapshot CheckoutSnap(params GraphWorktree[] wts) =>
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("x1", "m1"), C("m1")],
+        [
+            .. Refs,
+            new("origin/feat", "refs/remotes/origin/feat", GraphRefKind.RemoteBranch, "f1"),
+            new("origin/spike", "refs/remotes/origin/spike", GraphRefKind.RemoteBranch, "x1"),
+            new("v1", "refs/tags/v1", GraphRefKind.Tag, "m1"),
+            new("stash", "refs/stash", GraphRefKind.Stash, "m1"),
+        ], wts, "main", null, 100);
+
+    private static GraphRef RefNamed(GraphSnapshot s, string name) => s.Refs.Single(r => r.Name == name);
+
+    [Fact]
+    public void Checkout_BranchesSwitchUnlessHereOrHeldElsewhere()
+    {
+        var here = new GraphWorktree("C:/r", "main", "m2", 0, true);
+        var other = new GraphWorktree("C:/r--feat", "feat", "f1", 0, false);
+        var s = CheckoutSnap(here, other);
+
+        Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForRef(s, RefNamed(s, "main")).Action);
+        var held = GraphCheckout.ForRef(s, RefNamed(s, "feat"));
+        Assert.Equal(new CheckoutPlan(CheckoutAction.HeldElsewhere, "feat", "f1", other), held);
+        Assert.False(held.MovesHead);
+
+        var free = CheckoutSnap(here);
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Switch, "feat", "f1"), GraphCheckout.ForRef(free, RefNamed(free, "feat")));
+    }
+
+    [Fact]
+    public void Checkout_RemoteTracksUnlessALocalOfThatNameExists()
+    {
+        var s = CheckoutSnap(new GraphWorktree("C:/r", "main", "m2", 0, true));
+
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Track, "origin/spike", "x1"), GraphCheckout.ForRef(s, RefNamed(s, "origin/spike")));
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Switch, "feat", "f1"), GraphCheckout.ForRef(s, RefNamed(s, "origin/feat")));
+        Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForRef(s, RefNamed(s, "origin/main")).Action);
+    }
+
+    [Fact]
+    public void Checkout_TagsAndBareCommitsDetach()
+    {
+        var s = CheckoutSnap(new GraphWorktree("C:/r", "main", "m2", 0, true));
+
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Detach, "v1", "m1"), GraphCheckout.ForRef(s, RefNamed(s, "v1")));
+        Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForRef(s, RefNamed(s, "stash")));
+
+        var detachedHere = CheckoutSnap(new GraphWorktree("C:/r", null, "m1", 0, true));
+        Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForRef(detachedHere, RefNamed(detachedHere, "v1")).Action);
+    }
+
+    [Fact]
+    public void Checkout_ACommitRowPrefersItsLocalBranchThenARemoteThenTheCommit()
+    {
+        var here = new GraphWorktree("C:/r", "feat", "f1", 2, true);
+        var s = CheckoutSnap(here);
+
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Switch, "main", "m2"), GraphCheckout.ForCommit(s, "m2"));
+        Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForCommit(s, "f1").Action);
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Track, "origin/spike", "x1"), GraphCheckout.ForCommit(s, "x1"));
+        Assert.Equal(new CheckoutPlan(CheckoutAction.Detach, "m1", "m1"), GraphCheckout.ForCommit(s, "m1"));
+        Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForCommit(s, here.WipHash));
+    }
+
     [Fact]
     public void WorktreeContaining_PicksTheDeepestWorktreeAboveTheFolder()
     {

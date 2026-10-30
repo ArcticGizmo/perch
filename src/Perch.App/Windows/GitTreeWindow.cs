@@ -34,7 +34,7 @@ namespace Perch.Avalonia.Windows;
 /// <see cref="Visual.IsVisible"/> and a generation token, so a result arriving after the window closed or
 /// was re-pointed is dropped (the <c>GitReviewWindow</c>/<c>StatsWindow</c> idiom).
 /// </summary>
-internal sealed class GitTreeWindow : Window
+internal sealed partial class GitTreeWindow : Window
 {
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
@@ -279,6 +279,7 @@ internal sealed class GitTreeWindow : Window
         _graph.Canvas.SetColors(GraphCanvas.Colors.For(_light));
         _graph.Canvas.SelectionChanged += OnGraphSelected;
         _graph.Canvas.RowActivated += OnGraphActivated;
+        _graph.Canvas.RefActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _graph.Canvas); };
         _graph.Canvas.LoadMoreRequested += LoadMore;
         _graphLabel = PaneLabel(ScopeLabel(_scope));
 
@@ -286,6 +287,7 @@ internal sealed class GitTreeWindow : Window
         _rail.JumpRequested += hash => { if (_snap?.RowOf(hash) is int r and >= 0) _graph.Canvas.Flash(r); };
         _rail.LaneHovered += lane => _graph.Canvas.HighlightLane(lane);
         _rail.WorktreeActivated += wt => { if (!wt.IsCurrent) Retarget(wt.Path, wt.Name, null, isActive: false); };
+        _rail.BranchActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _rail); };
         _railSeparator = new Border { Width = 1 };
 
         // Ctrl+G: go to a branch, tag, hash or message text; Enter again walks the matches.
@@ -308,7 +310,9 @@ internal sealed class GitTreeWindow : Window
         graphBody.Children.Add(WithColumn(_rail, 0));
         graphBody.Children.Add(WithColumn(_railSeparator, 1));
         graphBody.Children.Add(WithColumn(_graph, 2));
-        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, graphBody } };
+        BuildCheckoutUi();
+        graphBody.Children.Add(WithColumn(_toast, 2));
+        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, _branchBar, graphBody } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -588,6 +592,7 @@ internal sealed class GitTreeWindow : Window
         else if (e.Key == Key.Escape)
         {
             if (_findBar.IsVisible) CloseFind();
+            else if (_branchBar.IsVisible) CloseBranchBar();
             else if (_gotoBar.IsVisible) CloseGoTo();
             else Close();
         }
@@ -956,12 +961,15 @@ internal sealed class GitTreeWindow : Window
         ShowNode(node);
     }
 
-    // Double-click / Enter on a row. Another worktree's WIP row opens that worktree in this window; checking out
-    // a commit or branch arrives with CP11.
+    // Double-click / Enter on a row (a double-click on a pill arrives as RefActivated instead). Another worktree's WIP
+    // row opens that worktree in this window; a commit checks out its branch, or the commit itself.
     private void OnGraphActivated(int row)
     {
-        if (_snap?.WipAt(row) is { IsCurrent: false } wt)
+        if (_snap is null || row < 0 || row >= _snap.Commits.Count) return;
+        if (_snap.WipAt(row) is { IsCurrent: false } wt)
             Retarget(wt.Path, wt.Name, null, isActive: false);
+        else
+            BeginCheckout(GraphCheckout.ForCommit(_snap, _snap.Commits[row].Hash), _graph.Canvas);
     }
 
     // Clears the files and diff panes, with a hint where the file list would be.
@@ -1546,6 +1554,7 @@ internal sealed class GitTreeWindow : Window
         _gitDirWatcher?.Dispose();
         _gitDirWatcher = null;
         _busyPoll?.Stop();
+        _toastTimer?.Stop();
         _debounce?.Dispose();
         _debounce = null;
         base.OnClosed(e);
@@ -1924,6 +1933,7 @@ internal sealed class GitTreeWindow : Window
         _railSeparator.Background = _pal.Separator;
         _gotoBar.Background = _pal.WindowBg;
         _gotoLabel.Foreground = _pal.Muted;
+        ApplyCheckoutPalette();
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;
