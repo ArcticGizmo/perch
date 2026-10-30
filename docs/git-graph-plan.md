@@ -114,7 +114,8 @@ Perch.App
 | CP7 | ✅ built, render-verified |
 | CP8 | ✅ built, tests green |
 | CP9 | partly: retarget by double-click done; `perch tree` + Roost entry moved after M5 |
-| CP10 | next |
+| CP10 | ✅ built, integration-tested |
+| CP11 | **next**: see Handover |
 
 ## As built
 
@@ -126,6 +127,32 @@ Perch.App
 - **CP6** (`Views/GraphRail.cs`, `GraphLanes.cs`, `GraphSnapshot.Find`/`LaneOf`). The rail sits inside the graph card (210 px): worktree cards (this window's first, tinted in its lane colour; branch, change count, and a session line once CP7 feeds it), local branches, remotes grouped by remote (open), tags (collapsed, ordered by graph position), stashes. Click jumps the graph (`GraphCanvas.Flash`: select, centre, a 0.9 s wash, skipped under reduced motion); hover fades every other lane (`HighlightLane`); double-click a card retargets the window, double-click a branch raises `BranchActivated` for CP11. Every card/row carries a `RailItem` tag for CP12's drop hit-testing. **Ctrl+G** opens a go-to bar: exact ref name, then hash prefix (4+ hex), then subject/author text, Enter walks matches. Lane colours moved to Core (`GraphLanes`) and `GraphLaneContrastTests` holds them to 3:1 on the Aurora pane in both polarities (all pass) and distinct. The render harness now also opens the **real Tree window on the repo it runs in** and captures it after its background loads (`git_tree_live_1x.png`): this exercises the CP5/CP6 load and selection path end to end without a desktop (no pointer input).
 - **CP7.** The App passes each scan's sessions to the window (`SetSessions`, also on creation). `GraphSnapshot.WorktreeContaining(dir)` places a session by its resolved worktree (`ClaudeSession.Worktree`, else cwd): the deepest worktree folder containing it, string-compared, no IO. Per worktree the most urgent session wins (Needs you > API error > Running > Done > Idle). Shown on the rail card (dot, name, state) and as a pill on the WIP row. The commit guard (`_isActive`) is now "opened from a working session OR a working session is placed in this worktree", so it survives a retarget.
 - **CP8.** A second watcher on the repo's shared git dir (`RepoWatchFilter.IsRelevantInGitDir`: HEAD, index, packed-refs, refs/, each linked worktree's folder/HEAD/index, merge/rebase/cherry-pick markers) so another worktree's commits, branch moves and staging refresh the graph. Unstaged edits in other worktrees aren't watched (that would mean a recursive watcher per worktree); instead, while a session is **Running** in another worktree, a 15 s poll refreshes. The tests caught a real bug in the first cut: `Split('/', '\\', options)` binds to the `(char, int count, options)` overload, so backslash paths never split.
+- **CP10** (`GitGraph/GitOps.cs`). `Switch`, `SwitchMerge`, `SwitchDetach`, `SwitchTrack`, `CreateBranch`, `StashPush` (`-u`, labelled), `Merge` (`--no-edit`), `FastForward` (`--ff-only`), `Rebase`, `CherryPick` (`-n` optional), `Continue`/`Abort` (with `-c core.editor=true` so continue never opens an editor), `WorktreeAdd` (existing branch or `-b new start`), `Head`/`Restore` (for Undo), `InProgress` (marker files in the worktree's own git dir via `GraphLoader.GitDirOf`). All return `GitOpResult(Ok, Message, Command)` + `Conflicted`; never throw. UserAction trust; one `SemaphoreSlim` per common git dir; a held `index.lock` gets one 700 ms retry, then "Another git process is using <worktree>…". Values starting with `-` are refused before git runs (`Refuse`). `FirstLine` drops `hint:` lines and `error:`/`fatal:` prefixes. 9 new integration tests (switch/restore, branch held by another worktree, stash, merge conflict → InProgress → abort, cherry-pick + ff-only both ways, worktree add on a new branch, option refusal).
+
+## Handover (2026-10-30, end of session 1)
+
+Branch `git-graph`, 9 commits on top of main 9083893, **not pushed**: 208345a (plan + design), e36bf7c (CP1–2), f42167b (CP3), b43421d (CP4), 740a3e1 (CP5), 7c91c13 (CP6), fd92c4d (CP7–8), c38a552 (CP10). The user asked to keep going until there's something worth their testing; the agreed stopping point is **double-click checkout (CP11) and drag (CP12–CP14) working**, then hand over with a test script.
+
+**State.** Read model, canvas, window integration, rail, go-to, sessions on worktrees, live refresh and the git write side are done. Nothing has run on a real desktop; the closest is `render`, which now opens the real Tree window on the repo it runs in (`git_tree_live_1x.png`). That's the best self-check for window changes. Pointer input can't be exercised headlessly.
+
+**CP11 (next): double-click to check out.** Everything it needs exists:
+- Canvas: `RowActivated(row)` fires on double-click/Enter. Add a `RefActivated(GraphRef, row)` raised from `OnPointerPressed` when `ClickCount == 2 && RefAt(pos) is { } r` (pill hit-rects are already recorded in `_pillHits`), and handle that before `RowActivated`.
+- Rail: `BranchActivated(GraphRef)` is already raised on double-click; the window doesn't subscribe yet.
+- Window (`GitTreeWindow.OnGraphActivated`, currently only retargets another worktree's WIP row): branch → if `_snap.Worktrees` has another worktree on that branch, a `MenuFlyout` at the pointer offering *Open that worktree here* (`Retarget`), *Check out a detached copy here* (`GitOps.SwitchDetach`); else if this worktree is dirty (`_lastStatus`), offer *Stash N changes and switch* (`StashPush` then `Switch`), *Bring changes along* (`SwitchMerge`), *Cancel*; if a session is working here (`_isActive`), say so in the menu (the agreed guard is a warning, not a block). Remote branch → `SwitchTrack`. Commit row with no local branch → *Check out detached* / *Create branch here…* (a small name box). Run ops with `Task.Run`, then `RefreshStatus(preserveSelection: false)`.
+- Needs a **toast** in the window (bottom of the graph card): message + the command in mono + **Undo** (`GitOps.Head` before the op, `GitOps.Restore` on Undo), auto-hide ~6 s. CP13 reuses it.
+- Add CP11 checks to `docs/git-graph-testing.md`.
+
+**CP12–CP14 (then): drag.** Use hand-rolled pointer capture as Roost does (no OS DragDrop): press on a pill or row in the canvas, move > 6 px → drag; the canvas draws its own ghost and highlights the pill/row under the pointer; for targets outside the canvas, the window hit-tests (`InputHitTest`) and walks up to a control whose `Tag` is a `GraphRail.RailItem` (worktree card or branch row; the rail already tags them). Add a "New worktree" drop zone at the end of the rail's worktree list. Drop opens a `MenuFlyout` per the design's table: branch→branch merge (in the target's worktree) / rebase (in the source's) / fast-forward (only when `isAncestor`; compute from `_snap` parents) ; commit→branch cherry-pick in the branch's worktree; branch→card switch that worktree; →New worktree `GitOps.WorktreeAdd` with `WorktreeLayout` naming (look at `PrSetup`/`PrWorktree` for how Perch already creates `..\repo--branch`). Every menu names the worktree and command first. After an op that stops on conflicts, show an in-progress banner from `GitOps.InProgress` with Continue/Abort.
+
+**Gotchas learned this session.**
+- Avalonia **12**. Templated controls (ScrollViewer etc.) render blank through `RenderControl`; put them in a shown headless window and `CaptureRenderedFrame` (see the live Tree window block in `HeadlessRenderer`).
+- Inter has no ▣ ⇅ ◇, so owner-drawn marks are drawn shapes.
+- `string.Split(char, char, options)` silently binds to the `(char, int, options)` overload. Use `Split(['/', '\\'], …)`.
+- Lane colours live in Core `GraphLanes` (tested), not app theme roles: the Tree window keeps its own Aurora palette.
+- Commit messages: write to a file and `git commit -F`.
+- `perch bench-graph` output: run the built exe with stdout redirected to a file.
+
+**Owed from the user** (not blocking): bench numbers from their big repos; the CP4–CP8 desktop checks.
 
 ## Owed live checks
 
