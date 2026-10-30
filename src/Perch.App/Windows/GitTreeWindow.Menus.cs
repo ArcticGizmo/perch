@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
+using Perch.Data;
 using Perch.Data.GitGraph;
 
 namespace Perch.Avalonia.Windows;
@@ -13,6 +14,11 @@ internal sealed partial class GitTreeWindow
     private void ShowRefMenu(GraphRef r, Control anchor)
     {
         if (_snap is not { } snap) return;
+        if (r.Kind == GraphRefKind.Stash)
+        {
+            if (snap.Stashes.FirstOrDefault(s => s.Selector == r.Name) is { } st) ShowStashMenu(st, anchor);
+            return;
+        }
         bool branch = r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch;
         var items = new List<Control>();
         if (branch || r.Kind == GraphRefKind.Tag)
@@ -34,16 +40,26 @@ internal sealed partial class GitTreeWindow
     }
 
     // A commit row: its branches to check out, a detached checkout, a branch or worktree starting there, and copying.
-    // Another worktree's WIP row offers to open that worktree.
+    // A WIP row offers to stash its changes (and, for another worktree's, to open it); a stash row, its stash menu.
     private void ShowRowMenu(int row)
     {
         if (_snap is not { } snap || row < 0 || row >= snap.Commits.Count) return;
         var c = snap.Commits[row];
         var items = new List<Control>();
+        if (snap.StashAt(row) is { } st)
+        {
+            ShowStashMenu(st, _graph.Canvas);
+            return;
+        }
         if (c.IsWorkInProgress)
         {
-            if (snap.WipAt(row) is not { IsCurrent: false } wt) return;
-            items.Add(Item($"Open {wt.Name} in this window", () => Retarget(wt.Path, wt.Name, null, isActive: false)));
+            if (snap.WipAt(row) is not { } wt) return;
+            int dirty = wt.IsCurrent ? _lastStatus?.Changes.Count ?? wt.Changes : wt.Changes;
+            if (_sessionAt.TryGetValue(wt.Path, out var s) && s.Status is SessionStatus.Running or SessionStatus.AwaitingInput)
+                items.Add(Note($"A Claude session ({s.DisplayName}) is working in {wt.Name}; stashing takes its changes out from under it"));
+            items.Add(Item($"Stash the {dirty} change{(dirty == 1 ? "" : "s")}{(wt.IsCurrent ? "" : $" in {wt.Name}")}", () => Stash(wt)));
+            if (!wt.IsCurrent)
+                items.Add(Item($"Open {wt.Name} in this window", () => Retarget(wt.Path, wt.Name, null, isActive: false)));
         }
         else
         {

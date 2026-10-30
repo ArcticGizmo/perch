@@ -465,6 +465,25 @@ internal sealed class GraphCanvas : Control
             return;
         }
 
+        if (c.IsStash)
+        {
+            // A small lidded box on its own dashed line down to the commit it was made on, its stash@{n} as a pill.
+            if (inGraph)
+            {
+                var box = new Rect(x - WipR, y - WipR + 0.5, WipR * 2, WipR * 2 - 1);
+                ctx.DrawRectangle(_bg, _ring[lane], box, 1.5, 1.5);
+                ctx.DrawLine(_ring[lane], new Point(box.X, box.Y + 3.2), new Point(box.Right, box.Y + 3.2));
+            }
+            var pills = s.RefsAt(c.Hash);
+            if (pills.Count > 0)
+                Pills(ctx, s, r, pills, [], lane, x, y);
+            var message = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW), FontSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, message, subjX, y);
+            var age = OverlayDraw.Text(Age(c), SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, age, whenX + WhenW - age.Width, y);
+            return;
+        }
+
         var worktrees = s.WorktreesAt(c.Hash);
         if (inGraph)
         {
@@ -603,7 +622,8 @@ internal sealed class GraphCanvas : Control
         {
             GraphRefKind.RemoteBranch => $"{r.Name}\nRemote branch",
             GraphRefKind.Tag => $"{r.Name}\nTag",
-            GraphRefKind.Stash => "Stash",
+            GraphRefKind.Stash => s?.Stashes.FirstOrDefault(x => x.Selector == r.Name) is { } st
+                ? $"{r.Name}\n{st.Message}\nRight-click to apply, pop or drop it" : r.Name,
             _ when r.Upstream is null => $"{r.Name}\nLocal only: no remote branch{where}",
             _ when r.UpstreamGone => $"{r.Name}\nIts remote branch {r.Upstream} is gone{where}",
             _ when r.InSync => $"{r.Name}\nSame commit as {r.Upstream} (●){where}",
@@ -778,7 +798,7 @@ internal sealed class GraphCanvas : Control
         if (RefAt(p) is { } r)
             return r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch ? DragSource.Of(r) : null;
         var c = _snap.Commits[row];
-        return c.IsWorkInProgress ? null : DragSource.Of(c);
+        return c.IsPseudo ? null : DragSource.Of(c);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)

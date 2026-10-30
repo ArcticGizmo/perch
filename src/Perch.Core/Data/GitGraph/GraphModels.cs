@@ -34,6 +34,13 @@ public sealed class GraphCommit
     /// <summary>A worktree's uncommitted changes, laid out as a pseudo-commit on top of its HEAD (see
     /// <see cref="GraphWorktree.WipHash"/>), so its tether gets a lane of its own.</summary>
     public bool IsWorkInProgress => Hash.StartsWith(GraphWorktree.WipPrefix, StringComparison.Ordinal);
+
+    /// <summary>A stash entry, laid out as a pseudo-commit on top of the commit it was made on (see
+    /// <see cref="GraphStash.RowHash"/>).</summary>
+    public bool IsStash => Hash.StartsWith(GraphStash.Prefix, StringComparison.Ordinal);
+
+    /// <summary>A row that isn't a real commit: a worktree's changes or a stash.</summary>
+    public bool IsPseudo => IsWorkInProgress || IsStash;
     public bool IsMerge => Parents.Length > 1;
     public DateTimeOffset Date => DateTimeOffset.FromUnixTimeSeconds(UnixTime);
 }
@@ -107,6 +114,21 @@ public sealed record GraphLogQuery(IReadOnlyList<string> Tips, IReadOnlyList<str
 /// the commit at its HEAD (null for an unborn branch), how many paths it has changed, and whether it's the one the
 /// window was opened on.
 /// </summary>
+/// <summary>
+/// One stash entry: its commit, the commit it was made on (<see cref="Base"/>, its first parent), its place in the list
+/// (<c>stash@{0}</c>), git's message ("WIP on main: …" or "On main: &lt;message&gt;") and when it was made.
+/// </summary>
+public sealed record GraphStash(string Hash, string Base, string Selector, string Message, long UnixTime)
+{
+    internal const string Prefix = "stash:";
+
+    /// <summary>The pseudo-commit id of this entry's row; stable while the entry exists, so lane hints keep it in place.</summary>
+    public string RowHash => Prefix + Hash;
+
+    /// <summary>The entry as a ref, for the rail's Stashes list and the pill on its row.</summary>
+    public GraphRef AsRef() => new(Selector, Selector, GraphRefKind.Stash, RowHash);
+}
+
 public sealed record GraphWorktree(string Path, string? Branch, string? Head, int Changes, bool IsCurrent)
 {
     internal const string WipPrefix = "wip:";

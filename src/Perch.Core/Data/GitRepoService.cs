@@ -144,6 +144,21 @@ internal sealed class GitRepoService
         return exit == 0 ? ParseUnifiedDiff(stdout) : null;
     }
 
+    /// <summary>What a stash entry holds, against the commit it was made on, untracked files included (<c>git stash show
+    /// -p --include-untracked</c>; a git older than 2.32 doesn't know that flag, so it falls back to the tracked files).
+    /// A stash commit is a merge, so <see cref="GetCommitDiff"/> would show a combined diff instead.</summary>
+    public GitDiff? GetStashDiff(string cwd, string hash)
+    {
+        if (string.IsNullOrEmpty(hash) || hash[0] == '-' || !IsRepo(cwd))
+            return null;
+        // GitRunner hardens diff/show/log by name; `stash show -p` renders a diff too, so it's hardened here by hand.
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "stash", "show", "--patch", "--no-ext-diff", "--no-textconv",
+            "--include-untracked", hash);
+        if (exit != 0)
+            (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "stash", "show", "--patch", "--no-ext-diff", "--no-textconv", hash);
+        return exit == 0 ? ParseUnifiedDiff(stdout) : null;
+    }
+
     /// <summary>
     /// The full contents of an untracked file rendered as an added-file diff, so the review window can show
     /// what a session's new files contain; null on any failure. Runs <c>git diff --no-index -- /dev/null

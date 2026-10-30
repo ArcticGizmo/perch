@@ -37,8 +37,9 @@ internal static class GraphLoader
         var refsTask = Task.Run(() => GraphLogReader.LoadRefs(root));
         var logTask = Task.Run(() => GraphLogReader.ReadLog(root, pageSize, 0, query));
         var statusTask = Task.Run(() => ReadStatuses(trees));
-        Task.WaitAll(refsTask, logTask, statusTask);
-        Mark("git: refs, status, log");
+        var stashTask = Task.Run(() => GraphLogReader.LoadStashes(root));
+        Task.WaitAll(refsTask, logTask, statusTask, stashTask);
+        Mark("git: refs, status, log, stashes");
         var refs = refsTask.Result;
         var worktrees = Resolve(trees, statusTask.Result, refs);
         var log = logTask.Result is { } raw ? GraphLogReader.ParseLog(raw) : [];
@@ -50,7 +51,8 @@ internal static class GraphLoader
             InProgress = GitOps.InProgress(cwd),
             Hidden = hidden,
         };
-        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context);
+        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context,
+            stashTask.Result);
         Mark("layout");
         return snapshot;
     }

@@ -93,15 +93,28 @@ internal static class GitOps
 
     /// <summary>Pops the stash entry whose commit is <paramref name="stashHash"/>, wherever it now sits in the list
     /// (another stash may have been pushed on top since).</summary>
-    public static GitOpResult StashPop(string worktree, string stashHash)
+    public static GitOpResult StashPop(string worktree, string stashHash) => StashByHash(worktree, "pop", stashHash);
+
+    /// <summary>Applies the stash entry <paramref name="stashHash"/> and keeps it in the list.</summary>
+    public static GitOpResult StashApply(string worktree, string stashHash) => StashByHash(worktree, "apply", stashHash);
+
+    /// <summary>Deletes the stash entry <paramref name="stashHash"/> without applying it.</summary>
+    public static GitOpResult StashDrop(string worktree, string stashHash) => StashByHash(worktree, "drop", stashHash);
+
+    /// <summary>Puts a dropped entry back in the list (its commit lingers until git collects it), for Undo.</summary>
+    public static GitOpResult StashRestore(string worktree, string stashHash, string message) =>
+        Refuse(stashHash) ?? Run(worktree, "stash", "store", "-m", message, stashHash);
+
+    // Entries are addressed by position, which moves as others are pushed and dropped, so find this one's now.
+    private static GitOpResult StashByHash(string worktree, string verb, string stashHash)
     {
         var list = GitRunner.Run(worktree, 6000, "stash", "list", "--format=%H");
         int index = list.Exit == 0
             ? Array.IndexOf(list.Stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries), stashHash)
             : -1;
         return index < 0
-            ? new GitOpResult(false, "That stash is no longer there.", "git stash pop")
-            : Run(worktree, "stash", "pop", $"stash@{{{index}}}");
+            ? new GitOpResult(false, "That stash is no longer there.", $"git stash {verb}")
+            : Run(worktree, "stash", verb, $"stash@{{{index}}}");
     }
 
     /// <summary>Pops the newest stash entry. A pop that conflicts leaves the entry in the list, as git does.</summary>

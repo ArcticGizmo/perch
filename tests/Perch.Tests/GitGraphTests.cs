@@ -68,13 +68,29 @@ public class GitGraphTests
             "");
         var refs = GraphLogReader.ParseRefs(output);
 
-        Assert.Equal(6, refs.Count);
+        Assert.Equal(5, refs.Count);
         Assert.Contains(refs, r => r is { Name: "feature/x", Kind: GraphRefKind.LocalBranch });
         Assert.Contains(refs, r => r is { Name: "origin/main", Kind: GraphRefKind.RemoteBranch });
         Assert.DoesNotContain(refs, r => r.Name == "origin/HEAD");
         Assert.Contains(refs, r => r is { Name: "v0.6.1", Kind: GraphRefKind.Tag, Target: "3333333" });
         Assert.Contains(refs, r => r is { Name: "light", Target: "4444444" });
-        Assert.Contains(refs, r => r is { Name: "stash", Kind: GraphRefKind.Stash });
+        Assert.DoesNotContain(refs, r => r.Kind == GraphRefKind.Stash);   // stashes come from `stash list`
+    }
+
+    [Fact]
+    public void ParseStashes_ReadsEachEntryWithItsBaseCommit()
+    {
+        var output = string.Join('\n',
+            $"aaaaaaa{Us}1111111 2222222 3333333{Us}stash@{{0}}{Us}1700000100{Us}WIP on main: 1111111 subject",
+            $"bbbbbbb{Us}4444444 5555555{Us}stash@{{1}}{Us}1700000000{Us}On feature: my message",
+            $"broken{Us}{Us}stash@{{2}}{Us}x{Us}y",
+            "");
+        var stashes = GraphLogReader.ParseStashes(output);
+
+        Assert.Equal(2, stashes.Count);
+        Assert.Equal(new GraphStash("aaaaaaa", "1111111", "stash@{0}", "WIP on main: 1111111 subject", 1700000100), stashes[0]);
+        Assert.Equal("4444444", stashes[1].Base);
+        Assert.Equal("stash:bbbbbbb", stashes[1].RowHash);
     }
 
     [Fact]
@@ -316,6 +332,33 @@ public class GitGraphTests
         Assert.Equal(["main", "origin/main"], s.RefsAt("m2").Select(r => r.Name));
         Assert.Equal(2, s.RowOf("m2"));
         Assert.Equal(-1, s.RowOf("nope"));
+    }
+
+    [Fact]
+    public void Snapshot_PutsStashRowsUnderTheWipRowsTetheredToTheirBase()
+    {
+        var main = new GraphWorktree("C:/r", "main", "m2", Changes: 1, IsCurrent: true);
+        var onM1 = new GraphStash("s0", "m1", "stash@{0}", "WIP on main: m1", 10);
+        var onF1 = new GraphStash("s1", "f1", "stash@{1}", "On feat: spike", 5);
+        var lost = new GraphStash("s2", "old", "stash@{2}", "On main: ancient", 1);
+        var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("m1")],
+            Refs, [main], "main", null, 100, stashes: [onM1, onF1, lost]);
+
+        // Ordered by where their commit sits; one made on a commit outside the page gets no row.
+        Assert.Equal([main.WipHash, onF1.RowHash, onM1.RowHash, "m2", "f1", "m1"], s.Commits.Select(c => c.Hash));
+        Assert.True(s.Commits[1].IsStash && s.Commits[1].IsPseudo);
+        Assert.Equal(3, s.RealCommitCount);
+        Assert.Equal(onF1, s.StashAt(1));
+        Assert.Null(s.StashAt(0));
+        Assert.Equal([1, 2], s.StashTethers.Select(t => t.StashRow));
+        Assert.Equal([4, 5], s.StashTethers.Select(t => t.BaseRow));
+        var t0 = s.StashTethers[0];
+        Assert.True(s.IsTether(3, s.Rows[3].Up.Single(e => e.Color == t0.Lane)));
+
+        // Every stash is listed (the rail), each as a ref on its own row.
+        Assert.Equal(3, s.Stashes.Count);
+        Assert.Equal(["stash@{1}"], s.RefsAt(onF1.RowHash).Select(r => r.Name));
+        Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForCommit(s, onF1.RowHash));
     }
 
     [Fact]

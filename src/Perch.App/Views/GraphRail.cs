@@ -41,7 +41,7 @@ internal sealed class GraphRail : UserControl
     private GraphCanvas.Colors _c = GraphCanvas.Colors.For(light: false);
     private GraphSnapshot? _snap;
     private IReadOnlyDictionary<string, WorktreeSession> _sessions = new Dictionary<string, WorktreeSession>();
-    private bool _remotesOpen = true, _tagsOpen, _stashesOpen;
+    private bool _remotesOpen = true, _tagsOpen, _stashesOpen = true;
 
     /// <summary>The Claude session working in a worktree, as the rail shows it.</summary>
     public sealed record WorktreeSession(string Name, string State, Color Color);
@@ -191,13 +191,12 @@ internal sealed class GraphRail : UserControl
                     _stack.Children.Add(RefRow(s, r, r.Name, false));
         }
 
-        var stashes = s.Refs.Where(r => r.Kind == GraphRefKind.Stash).ToList();
-        if (stashes.Count > 0)
+        if (s.Stashes.Count > 0)
         {
-            _stack.Children.Add(Header("Stashes", stashes.Count, _stashesOpen, () => _stashesOpen = !_stashesOpen));
+            _stack.Children.Add(Header("Stashes", s.Stashes.Count, _stashesOpen, () => _stashesOpen = !_stashesOpen));
             if (_stashesOpen)
-                foreach (var r in stashes)
-                    _stack.Children.Add(RefRow(s, r, r.Name, false));
+                foreach (var st in s.Stashes)
+                    _stack.Children.Add(RefRow(s, st.AsRef(), st.Message, false));
         }
     }
 
@@ -360,7 +359,9 @@ internal sealed class GraphRail : UserControl
         {
             Text = label, FontSize = 12, Foreground = Ink(lane >= 0 && !hidden ? _c.Text : _c.Muted, hidden ? 0.7 : 1),
             FontStyle = hidden ? FontStyle.Italic : FontStyle.Normal,
-            TextTrimming = TextTrimming.PrefixCharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+            // A ref name is path-like and keeps its tail; a stash's label is its message, which reads from the start.
+            TextTrimming = r.Kind == GraphRefKind.Stash ? TextTrimming.CharacterEllipsis : TextTrimming.PrefixCharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
         });
         var row = new Border
         {
@@ -383,8 +384,7 @@ internal sealed class GraphRail : UserControl
         };
         if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
             Draggable(row, () => DragSource.Of(r));
-        if (r.Kind != GraphRefKind.Stash)
-            row.ContextRequested += (_, e) => { RefMenuRequested?.Invoke(r, row); e.Handled = true; };
+        row.ContextRequested += (_, e) => { RefMenuRequested?.Invoke(r, row); e.Handled = true; };
         Hover(row, lane);
         return row;
     }

@@ -131,7 +131,7 @@ internal sealed partial class GitTreeWindow
     private void ApplyCheckoutPalette()
     {
         if (_pal.PaneBg is ISolidColorBrush pane)
-            _busyOverlay.Background = new SolidColorBrush(pane.Color, 0.85);
+            _busyOverlay.Background = new SolidColorBrush(pane.Color, 0.45);
         _busyCard.Background = _pal.WindowBg;
         _busyCard.BorderBrush = _pal.Border;
         _busyText.Foreground = _pal.Title;

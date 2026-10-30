@@ -154,7 +154,7 @@ internal sealed partial class GitTreeWindow : Window
     private string _shownDiffSig = "";
     private HashSet<string> _invisiblePaths = new(StringComparer.Ordinal);
 
-    internal enum NodeKind { Wip, Commit }
+    internal enum NodeKind { Wip, Commit, Stash }
 
     /// <summary>The three mutually-exclusive diff view modes. <see cref="Unified"/> and <see cref="Split"/>
     /// stage whole files (buttons on the file header); <see cref="Hunk"/> builds on the split layout and adds
@@ -1032,7 +1032,7 @@ internal sealed partial class GitTreeWindow : Window
     private int RowOfNodeKey(string key)
     {
         if (_snap is null) return -1;
-        if (key != "\0wip") return _snap.RowOf(key);
+        if (key != "\0wip") return _snap.RowOf(key) is var r and >= 0 ? r : _snap.RowOf(GraphStash.Prefix + key);
         return _snap.Current is { } w ? _snap.RowOf(w.WipHash) : -1;
     }
 
@@ -1170,6 +1170,11 @@ internal sealed partial class GitTreeWindow : Window
             }
             node = new TreeNode(NodeKind.Wip, false, default, wt.Changes);
         }
+        else if (_snap.StashAt(row) is { } st)
+        {
+            node = new TreeNode(NodeKind.Stash, false,
+                new GitCommit(st.Hash, st.Hash[..7], "", c.Date, st.Message, st.Message, st.Base), 0);
+        }
         else
         {
             bool head = _snap.Current?.Head == c.Hash;
@@ -1247,7 +1252,8 @@ internal sealed partial class GitTreeWindow : Window
             _suppressSelect = false;
 
             string hash = node.Commit.Hash;
-            System.Threading.Tasks.Task.Run(() => _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
+            bool stash = node.Kind == NodeKind.Stash;
+            System.Threading.Tasks.Task.Run(() => stash ? _git.GetStashDiff(cwd, hash) : _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully) return;
                 Dispatcher.UIThread.Post(() =>
@@ -2182,7 +2188,7 @@ internal sealed partial class GitTreeWindow : Window
         UpdateModeButtons();
         UpdateContentButtons();
         UpdateScopeButtons();
-        foreach (var b in _actionButtons) StyleSeg(b, active: false);
+        ApplyActionPalette();
         _diff.SetLight(_light);
     }
 

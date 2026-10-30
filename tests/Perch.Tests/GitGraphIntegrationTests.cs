@@ -143,7 +143,7 @@ public sealed class GitGraphIntegrationTests : IDisposable
 
         Assert.True(GitOps.StashPush(_repo, "Perch: before switching").Ok);
         Assert.True(new Perch.Data.GitRepoService().GetStatus(_repo)!.Value.IsClean);
-        Assert.Contains(GraphLogReader.LoadRefs(_repo), r => r.Kind == GraphRefKind.Stash);
+        Assert.Single(GraphLogReader.LoadStashes(_repo));
     }
 
     [Fact]
@@ -471,6 +471,37 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal("wip", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());
         Assert.True(File.Exists(Path.Combine(_repo, "u.txt")));
         Assert.Equal("", Run("stash", "list").stdout.Trim());
+    }
+
+    [Fact]
+    public void Stashes_LoadAsRowsAndApplyDropAndComeBack()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "first\n");
+        Assert.True(GitOps.StashPush(_repo, "WIP on main").Ok);
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "second\n");
+        Assert.True(GitOps.StashPush(_repo, "second one").Ok);
+
+        var snap = GraphLoader.Load(_repo, GraphScope.All)!;
+        Assert.Equal(2, snap.Stashes.Count);
+        Assert.Equal("On main: second one", snap.Stashes[0].Message);
+        Assert.Equal(Hash("main"), snap.Stashes[0].Base);
+        Assert.Equal(2, snap.StashTethers.Count);
+        var older = snap.Stashes[1];
+
+        var diff = new Perch.Data.GitRepoService().GetStashDiff(_repo, older.Hash);
+        Assert.NotNull(diff);
+        Assert.Contains(diff.Value.Files, f => f.NewPath == "a.txt");
+
+        Assert.True(GitOps.StashApply(_repo, older.Hash).Ok);              // by commit, though it's stash@{1}
+        Assert.Equal("first", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());
+        Assert.Equal(2, GraphLogReader.LoadStashes(_repo).Count);           // apply keeps it
+        Run("checkout", "--", "a.txt");
+
+        Assert.True(GitOps.StashDrop(_repo, older.Hash).Ok);
+        Assert.Single(GraphLogReader.LoadStashes(_repo));
+        Assert.True(GitOps.StashRestore(_repo, older.Hash, older.Message).Ok);   // what Undo does
+        Assert.Contains(GraphLogReader.LoadStashes(_repo), s => s.Hash == older.Hash);
     }
 
     [Fact]

@@ -4,6 +4,9 @@ namespace Perch.Data.GitGraph;
 /// (<see cref="int.MaxValue"/> while that commit isn't loaded yet).</summary>
 public readonly record struct GraphTether(int WipRow, int HeadRow, int Lane, GraphWorktree Worktree);
 
+/// <summary>A stash entry's dashed line: from its row down its own lane to the commit it was made on.</summary>
+public readonly record struct GraphStashTether(int StashRow, int BaseRow, int Lane, GraphStash Stash);
+
 /// <summary>
 /// One immutable, laid-out view of a repo's graph for a scope: the rows in display order (a WIP pseudo-commit per
 /// dirty worktree first, then the log), their lanes and edges, and lookups from a commit to its refs and the
@@ -20,9 +23,10 @@ internal sealed class GraphSnapshot
     private bool _handedOn;
 
     private GraphSnapshot(string root, GraphScope scope, GraphLogQuery query, GraphCommit[] commits, int realCount,
-        bool hasMore, IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryTip,
-        LaneAllocator lanes, Dictionary<string, int> rowOf, ScopeContext context)
+        bool hasMore, IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphStash> stashes,
+        string? primaryTip, LaneAllocator lanes, Dictionary<string, int> rowOf, ScopeContext context)
     {
+        Stashes = stashes;
         Root = root;
         Scope = scope;
         Query = query;
@@ -49,12 +53,20 @@ internal sealed class GraphSnapshot
                 (_worktreesAt.TryGetValue(w.Head, out var l) ? l : _worktreesAt[w.Head] = new()).Add(w);
 
         var tethers = new List<GraphTether>();
-        for (int i = 0; i < commits.Length && commits[i].IsWorkInProgress; i++)
+        int i = 0;
+        for (; i < commits.Length && commits[i].IsWorkInProgress; i++)
         {
             var wt = worktrees.First(w => w.WipHash == commits[i].Hash);
             tethers.Add(new(i, RowOf(commits[i].Parents[0]) is var h and >= 0 ? h : int.MaxValue, Rows[i].Lane, wt));
         }
         Tethers = tethers;
+        var stashTethers = new List<GraphStashTether>();
+        for (; i < commits.Length && commits[i].IsStash; i++)
+        {
+            var st = stashes.First(x => x.RowHash == commits[i].Hash);
+            stashTethers.Add(new(i, RowOf(st.Base) is var b and >= 0 ? b : int.MaxValue, Rows[i].Lane, st));
+        }
+        StashTethers = stashTethers;
     }
 
     /// <summary>What the loader learned on the way that the window needs too: the current worktree's full status
@@ -79,7 +91,7 @@ internal sealed class GraphSnapshot
     public GraphLogQuery Query { get; }
     public ScopeContext Context { get; }
 
-    /// <summary>Every row's commit, in display order: WIP pseudo-commits first.</summary>
+    /// <summary>Every row's commit, in display order: WIP pseudo-commits first, then stash ones.</summary>
     public IReadOnlyList<GraphCommit> Commits { get; }
     public GraphRow[] Rows { get; }
     public int Width { get; }
@@ -96,6 +108,21 @@ internal sealed class GraphSnapshot
     public IReadOnlyList<GraphRef> Refs { get; }
     public IReadOnlyList<GraphWorktree> Worktrees { get; }
     public IReadOnlyList<GraphTether> Tethers { get; }
+
+    /// <summary>Every stash entry, newest first, whether or not it has a row (one made on a commit outside what's loaded
+    /// has none).</summary>
+    public IReadOnlyList<GraphStash> Stashes { get; }
+
+    /// <summary>The stashes that have rows, under the WIP rows.</summary>
+    public IReadOnlyList<GraphStashTether> StashTethers { get; }
+
+    /// <summary>The stash entry whose row is <paramref name="row"/>, or null.</summary>
+    public GraphStash? StashAt(int row)
+    {
+        foreach (var t in StashTethers)
+            if (t.StashRow == row) return t.Stash;
+        return null;
+    }
 
     public int RowOf(string hash) => _rowOf.TryGetValue(hash, out var r) ? r : -1;
 
@@ -201,12 +228,15 @@ internal sealed class GraphSnapshot
         return null;
     }
 
-    /// <summary>True when <paramref name="e"/>, in the band above <paramref name="row"/>, is part of a WIP tether
-    /// and should be drawn dashed.</summary>
+    /// <summary>True when <paramref name="e"/>, in the band above <paramref name="row"/>, is part of a WIP or stash
+    /// tether and should be drawn dashed.</summary>
     public bool IsTether(int row, GraphEdge e)
     {
         foreach (var t in Tethers)
             if (row > t.WipRow && row <= t.HeadRow && e.Color == t.Lane)
+                return true;
+        foreach (var t in StashTethers)
+            if (row > t.StashRow && row <= t.BaseRow && e.Color == t.Lane)
                 return true;
         return false;
     }
@@ -216,39 +246,47 @@ internal sealed class GraphSnapshot
 
     /// <summary>
     /// Lays out <paramref name="log"/> (one page, topological order) under a WIP row per dirty worktree, ordered by
-    /// where its HEAD sits. The primary branch's chain gets lane 0, starting from its worktree's WIP row when that
-    /// worktree is dirty.
+    /// where its HEAD sits, then a row per stash made on a commit in the page, ordered the same way. The primary
+    /// branch's chain gets lane 0, starting from its worktree's WIP row when that worktree is dirty.
     /// </summary>
     public static GraphSnapshot Build(string root, GraphScope scope, GraphLogQuery query, IReadOnlyList<GraphCommit> log,
         IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryBranch,
-        IReadOnlyDictionary<string, int>? hints, int pageSize, ScopeContext? context = null)
+        IReadOnlyDictionary<string, int>? hints, int pageSize, ScopeContext? context = null,
+        IReadOnlyList<GraphStash>? stashes = null)
     {
+        stashes ??= [];
         var logRow = new Dictionary<string, int>(log.Count, StringComparer.Ordinal);
         for (int i = 0; i < log.Count; i++)
             logRow[log[i].Hash] = i;
 
-        var wips = worktrees
+        var pseudo = worktrees
             .Where(w => w.Changes > 0 && w.Head is not null)
             .OrderBy(w => logRow.TryGetValue(w.Head!, out var r) ? r : int.MaxValue)
             .Select(w => new GraphCommit(w.WipHash, [w.Head!], "", "", 0, $"{w.Changes} uncommitted"))
             .ToList();
+        // A stash whose commit isn't in the page has nowhere to hang its line; the rail still lists it.
+        pseudo.AddRange(stashes
+            .Where(st => logRow.ContainsKey(st.Base))
+            .OrderBy(st => logRow[st.Base])
+            .Select(st => new GraphCommit(st.RowHash, [st.Base], "", "", st.UnixTime, st.Message)));
+        refs = stashes.Count == 0 ? refs : [.. refs, .. stashes.Select(st => st.AsRef())];
 
         string? primaryTip = null;
         if (primaryBranch is not null)
             primaryTip = worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
                 ?? refs.FirstOrDefault(r => r.Name == primaryBranch && r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)?.Target;
 
-        var commits = new GraphCommit[wips.Count + log.Count];
-        wips.CopyTo(commits);
+        var commits = new GraphCommit[pseudo.Count + log.Count];
+        pseudo.CopyTo(commits);
         for (int i = 0; i < log.Count; i++)
-            commits[wips.Count + i] = log[i];
+            commits[pseudo.Count + i] = log[i];
         var rowOf = new Dictionary<string, int>(commits.Length, StringComparer.Ordinal);
         for (int i = 0; i < commits.Length; i++)
             rowOf[commits[i].Hash] = i;
 
         var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip, hints));
         lanes.Add(commits);
-        return new GraphSnapshot(root, scope, query, commits, log.Count, log.Count >= pageSize, refs, worktrees,
+        return new GraphSnapshot(root, scope, query, commits, log.Count, log.Count >= pageSize, refs, worktrees, stashes,
             primaryTip, lanes, rowOf, context ?? ScopeContext.None);
     }
 
@@ -273,6 +311,6 @@ internal sealed class GraphSnapshot
         }
         _lanes.Add(page);
         return new GraphSnapshot(Root, Scope, Query, commits, RealCommitCount + page.Count, page.Count >= pageSize,
-            Refs, Worktrees, _primaryTip, _lanes, rowOf, Context);
+            Refs, Worktrees, Stashes, _primaryTip, _lanes, rowOf, Context);
     }
 }

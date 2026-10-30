@@ -53,14 +53,38 @@ internal static class GraphLogReader
         return args;
     }
 
-    /// <summary>Every local branch, remote branch, tag and the stash, or empty on failure.</summary>
+    /// <summary>Every local branch, remote branch and tag, or empty on failure. Stashes come from <see cref="LoadStashes"/>:
+    /// <c>refs/stash</c> is only the newest entry.</summary>
     public static IReadOnlyList<GraphRef> LoadRefs(string cwd)
     {
         if (!GitRepoService.IsRepo(cwd))
             return [];
         var r = GitRunner.Run(cwd, RefTimeoutMs, "--no-optional-locks", "for-each-ref", RefFormat,
-            "refs/heads", "refs/remotes", "refs/tags", "refs/stash");
+            "refs/heads", "refs/remotes", "refs/tags");
         return r.Exit == 0 ? ParseRefs(r.Stdout) : [];
+    }
+
+    /// <summary>Every stash entry, newest first, or empty on failure (or when there are none).</summary>
+    public static IReadOnlyList<GraphStash> LoadStashes(string cwd)
+    {
+        if (!GitRepoService.IsRepo(cwd))
+            return [];
+        var r = GitRunner.Run(cwd, RefTimeoutMs, "--no-optional-locks", "stash", "list", "--format=%H%x1f%P%x1f%gd%x1f%ct%x1f%gs");
+        return r.Exit == 0 ? ParseStashes(r.Stdout) : [];
+    }
+
+    /// <summary>Parses <see cref="LoadStashes"/>' records (hash, parents, selector, time, message). Pure; tested.</summary>
+    internal static IReadOnlyList<GraphStash> ParseStashes(string output)
+    {
+        var stashes = new List<GraphStash>();
+        foreach (var line in output.Split('\n'))
+        {
+            var f = line.TrimEnd('\r').Split(Us);
+            if (f.Length < 5 || f[0].Length < 7 || f[1].Length == 0 || !long.TryParse(f[3], out var time))
+                continue;
+            stashes.Add(new GraphStash(f[0], f[1].Split(' ')[0], f[2], f[4], time));
+        }
+        return stashes;
     }
 
     /// <summary>Parses NUL-separated <see cref="LogFormat"/> records. A malformed record is skipped.</summary>
@@ -114,7 +138,6 @@ internal static class GraphLogReader
                     => new(full["refs/remotes/".Length..], full, GraphRefKind.RemoteBranch, target),
                 _ when full.StartsWith("refs/tags/", StringComparison.Ordinal)
                     => new(full["refs/tags/".Length..], full, GraphRefKind.Tag, target),
-                "refs/stash" => new("stash", full, GraphRefKind.Stash, target),
                 _ => null,
             };
             if (r is not null)

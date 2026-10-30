@@ -75,7 +75,8 @@ internal static class GraphCheckout
     /// first, then one no other worktree holds), else a remote branch to track, else the bare commit.</summary>
     public static CheckoutPlan ForCommit(GraphSnapshot snap, string hash)
     {
-        if (hash.StartsWith(GraphWorktree.WipPrefix, StringComparison.Ordinal)) return CheckoutPlan.Nothing;
+        if (hash.StartsWith(GraphWorktree.WipPrefix, StringComparison.Ordinal) || hash.StartsWith(GraphStash.Prefix, StringComparison.Ordinal))
+            return CheckoutPlan.Nothing;
         var refs = snap.RefsAt(hash);
         var locals = refs.Where(x => x.Kind == GraphRefKind.LocalBranch).ToList();
         if (locals.Count > 0)
