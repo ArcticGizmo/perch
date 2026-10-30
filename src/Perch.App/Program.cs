@@ -59,6 +59,14 @@ internal static class Program
             return Rendering.RoostBench.Run(args.Length > 1 && int.TryParse(args[1], out var t) ? t : 60);
         }
 
+        // `perch bench-graph [repo] [count]` times the git graph's read and layout on a real repository.
+        if (args.Length > 0 && args[0] == "bench-graph")
+        {
+            AttachParentConsole();
+            return Rendering.GraphBench.Run(args.Length > 1 ? args[1] : ".",
+                args.Length > 2 && int.TryParse(args[2], out var n) ? n : 100_000);
+        }
+
         // `perch configdirs` prints the discovered config-dir set (primary + declared + convention),
         // deduped by real path — an internal diagnostic for config-dir discovery (Layer 1). Read-only.
         if (args.Length > 0 && string.Equals(args[0], "configdirs", StringComparison.OrdinalIgnoreCase))

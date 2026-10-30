@@ -69,7 +69,7 @@ Perch.App
 
 - **CP4: `GraphCanvas`.** Owner-drawn, row-virtualised: lanes, nodes (merge, worktree-HEAD ring, WIP dashed node), ref pills, subject, author/when columns, selection, hover, keyboard (↑ ↓ PgUp PgDn Home End). `HeadlessRenderer` entry with a synthetic repo. Lane colours via `Palette` (temporary fixed set; real roles in CP6).
 - **CP5: replace the node list.** `GitTreeWindow`'s left pane becomes the canvas; scope segment; selecting a row drives the existing files + `DiffView` + WIP composer. "This branch" reproduces today's view. Retire `NodeRow`/the node `ListBox`.
-- **CP6: navigation + theming.** Rail (worktrees, local, remotes, stashes, tags) with click-to-jump and flash; hover a worktree/branch to highlight its lane; Ctrl+G go-to ref/hash; "Load older" paging. Lane hues become theme roles (`Theme`, `Themes.Midnight`/`Daylight`, `ThemeCodec.Roles`, `CvdSim`, `FixedColors.Semantic*`, `Palette`, `PresetContrastTests`, the designer's `GlyphRoles`), with the window's light toggle respected.
+- **CP6: navigation + theming.** Rail (worktrees, local, remotes, stashes, tags) with click-to-jump and flash; hover a worktree/branch to highlight its lane; Ctrl+G go-to ref/hash; "Load older" paging. Lane hues get a contrast test. They live in the Tree window's own palette (`GraphCanvas.Colors`, built on `AuroraPalette` like `TreePalette`), **not** in app theme roles: the Tree is a reading window that deliberately keeps its own light/dark, independent of the app theme (see `AuroraPalette`).
 
 ### M3: Worktrees live
 
@@ -107,13 +107,17 @@ Perch.App
 |---|---|
 | CP1 | ✅ built, tests green |
 | CP2 | ✅ built, tests green |
-| CP3 | next |
+| CP3 | ✅ built, tests green; big-repo bench numbers owed |
+| CP4 | next |
 
 ## As built
 
 - **CP1** (`Perch.Core/Data/GitGraph/GraphModels.cs`, `GraphLogReader.cs`). `GraphCommit` is a class (shared by reference across 100k rows); parent hash strings are interned to the parent's own `Hash` while parsing. `LoadLog(cwd, maxCount, skip)` walks `--branches --remotes --tags HEAD` in `--topo-order`; paging is `--skip`, which re-walks from the tips each page, so CP3's bench decides whether a streaming read replaces it. `LoadRefs` drops `origin/HEAD` and peels annotated tags. Other worktrees' detached HEADs aren't in the walk yet (CP3). Tests: `GitGraphTests` (parsers), `GitGraphIntegrationTests` (real throwaway repo: topo order, tag peeling, paging).
 - **CP2** (`LaneAllocator.cs`). Incremental and resumable; rows store their node lane plus the edges in the band above. Primary chain pinned to lane 0 by following first parents from `PrimaryTip` as commits arrive. Hints: `HintsFrom(previous)` gives each commit's lane; a new tip looks up to 64 first-parent steps down the current page for a hinted commit; unhinted lanes open after the highest hinted lane. Paging gives identical rows without hints; with hints the lookahead only sees the current page. A 100k-commit synthetic history lays out inside the test run's time (whole graph suite < 1 s); the real budget is measured in CP3.
+- **CP3** (`GraphSnapshot.cs`, `GraphLoader.cs`, `Perch.App/Rendering/GraphBench.cs`). Each dirty worktree becomes a **WIP pseudo-commit** (`wip:<path>`, parent = its HEAD) fed to the allocator ahead of the log, so its tether owns a lane down to its HEAD and can't overlap another branch's line; `GraphSnapshot.IsTether(row, edge)` tells the painter which segments to dash. The primary branch's chain starts from its worktree's WIP row when that's dirty. Snapshots are immutable for the UI; `Append` hands the allocator to a new snapshot (once). Scopes: **All** = `--branches --remotes --tags HEAD` + detached worktree heads; **Worktrees** = each worktree's `refs/heads/<branch>` (or detached hash) + `--branches=<trunk>` patterns; **Branch** = `HEAD` + best base ref `--not <merge-base>^@` (just `HEAD` on a trunk). Opening runs refs, every worktree's `git status`, and the log **in parallel** (the query names branches, not hashes, so nothing waits): on this repo open went 490 → 323 ms and a refresh 323 → 148 ms. Process start (~100 ms each here) dominates, not parse/layout. `perch bench-graph [repo] [count]` reports open, refresh (and how many commits changed lane), full history (git / parse / layout / memory) and `--skip` paging depth cost.
 
 ## Owed live checks
 
 (Things only a real desktop or the user's big repos can confirm.)
+
+- [ ] **CP3:** `perch bench-graph` on each of the user's big repos (see `docs/git-graph-testing.md`). Decides whether `--skip` paging is replaced by a streaming read, and whether the open budget holds.

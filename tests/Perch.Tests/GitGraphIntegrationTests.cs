@@ -76,6 +76,33 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal(all.Skip(2).Take(2).Select(c => c.Hash), page2.Select(c => c.Hash));
     }
 
+    [Fact]
+    public void Loader_FindsWorktreesAndTethersADirtyOne()
+    {
+        if (!_ready) return;
+        var wt = _repo + "-feature";
+        Assert.Equal(0, Run("worktree", "add", wt, "feature").exit);
+        File.WriteAllText(Path.Combine(wt, "dirty.txt"), "wip\n");
+
+        var s = GraphLoader.Load(_repo, GraphScope.All)!;
+
+        Assert.Equal(2, s.Worktrees.Count);
+        Assert.True(s.Worktrees.Single(w => w.Branch == "main").IsCurrent);
+        var feature = s.Worktrees.Single(w => w.Branch == "feature");
+        Assert.Equal(1, feature.Changes);
+        Assert.Equal(feature.WipHash, s.Commits[0].Hash);
+        var t = Assert.Single(s.Tethers);
+        Assert.Equal(s.RowOf(feature.Head!), t.HeadRow);
+        Assert.Equal("f1", s.Commits[t.HeadRow].Subject);
+        Assert.Equal(0, s.Rows[s.RowOf(s.Worktrees.Single(w => w.Branch == "main").Head!)].Lane);
+
+        // Opened from the feature worktree, "This branch" walks feature and its base back to where they split. Main
+        // has merged feature, so the merge-base is f1 itself and the root is out of scope.
+        var branch = GraphLoader.Load(wt, GraphScope.Branch)!;
+        Assert.True(branch.Worktrees.Single(w => w.Branch == "feature").IsCurrent);
+        Assert.Equal(["f1", "m1", "merge feature"], branch.Commits.Where(c => !c.IsWorkInProgress).Select(c => c.Subject).Order());
+    }
+
     private bool Commit(string file, string message)
     {
         File.WriteAllText(Path.Combine(_repo, file), message + "\n");
@@ -104,12 +131,16 @@ public sealed class GitGraphIntegrationTests : IDisposable
 
     public void Dispose()
     {
-        try
+        foreach (var dir in new[] { _repo, _repo + "-feature" })
         {
-            foreach (var f in Directory.EnumerateFiles(_repo, "*", SearchOption.AllDirectories))
-                File.SetAttributes(f, FileAttributes.Normal);
-            Directory.Delete(_repo, recursive: true);
+            try
+            {
+                if (!Directory.Exists(dir)) continue;
+                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(f, FileAttributes.Normal);
+                Directory.Delete(dir, recursive: true);
+            }
+            catch { /* best-effort temp cleanup */ }
         }
-        catch { /* best-effort temp cleanup */ }
     }
 }

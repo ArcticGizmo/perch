@@ -20,22 +20,36 @@ internal static class GraphLogReader
     private const int RefTimeoutMs = 6_000;
 
     /// <summary>
-    /// Up to <paramref name="maxCount"/> commits reachable from every branch, remote branch, tag and HEAD, in
-    /// topological order (children before parents), skipping the first <paramref name="skip"/>.
+    /// Up to <paramref name="maxCount"/> commits of <paramref name="query"/> (default: every branch, remote branch,
+    /// tag and HEAD) in topological order (children before parents), skipping the first <paramref name="skip"/>.
     /// </summary>
-    public static IReadOnlyList<GraphCommit> LoadLog(string cwd, int maxCount, int skip = 0)
+    public static IReadOnlyList<GraphCommit> LoadLog(string cwd, int maxCount, int skip = 0, GraphLogQuery? query = null) =>
+        ReadLog(cwd, maxCount, skip, query) is { } raw ? ParseLog(raw) : [];
+
+    /// <summary>The raw output behind <see cref="LoadLog"/>, or null on failure. Split out so the bench can time git
+    /// and the parse separately.</summary>
+    internal static string? ReadLog(string cwd, int maxCount, int skip = 0, GraphLogQuery? query = null)
     {
         if (maxCount <= 0 || !GitRepoService.IsRepo(cwd))
-            return [];
-        var args = new List<string>
-        {
-            "--no-optional-locks", "log", "--topo-order", "-z", LogFormat,
-            "--branches", "--remotes", "--tags", "HEAD", $"--max-count={maxCount}",
-        };
+            return null;
+        var args = new List<string> { "--no-optional-locks", "log", "--topo-order", "-z", LogFormat, $"--max-count={maxCount}" };
         if (skip > 0)
             args.Add($"--skip={skip}");
+        args.AddRange(GraphLogArgs(query ?? GraphLogQuery.Everything));
         var r = GitRunner.Run(cwd, LogTimeoutMs, [.. args]);
-        return r.Exit == 0 ? ParseLog(r.Stdout) : [];
+        return r.Exit == 0 ? r.Stdout : null;
+    }
+
+    /// <summary>The revision arguments for a query: its tips, then <c>--not</c> and the exclusions. Pure; tested.</summary>
+    internal static List<string> GraphLogArgs(GraphLogQuery q)
+    {
+        var args = new List<string>(q.Tips);
+        if (q.Exclude.Count > 0)
+        {
+            args.Add("--not");
+            args.AddRange(q.Exclude);
+        }
+        return args;
     }
 
     /// <summary>Every local branch, remote branch, tag and the stash, or empty on failure.</summary>

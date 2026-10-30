@@ -248,6 +248,78 @@ public class GitGraphTests
             Assert.Equal(0, a.Rows[index[c.Hash]].Lane);
     }
 
+    // ---- snapshot -------------------------------------------------------------------------------------
+
+    private static readonly GraphRef[] Refs =
+    [
+        new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2"),
+        new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "f1"),
+        new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m2"),
+    ];
+
+    private static GraphSnapshot Snap(IReadOnlyList<GraphCommit> log, IReadOnlyList<GraphWorktree> wts, int pageSize = 100) =>
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, log, Refs, wts, "main", null, pageSize);
+
+    [Fact]
+    public void Snapshot_PutsAWipRowPerDirtyWorktreeOnTopWithItsOwnTether()
+    {
+        var main = new GraphWorktree("C:/r", "main", "m2", Changes: 3, IsCurrent: true);
+        var feat = new GraphWorktree("C:/r--feat", "feat", "f1", Changes: 1, IsCurrent: false);
+        var clean = new GraphWorktree("C:/r--old", null, "m1", Changes: 0, IsCurrent: false);
+        var s = Snap([C("m2", "m1"), C("f1", "m1"), C("m1")], [feat, main, clean]);
+
+        Assert.Equal([main.WipHash, feat.WipHash, "m2", "f1", "m1"], s.Commits.Select(c => c.Hash));
+        Assert.True(s.Commits[0].IsWorkInProgress);
+        Assert.Equal(3, s.RealCommitCount);
+        // The primary branch's WIP heads lane 0, and the chain carries on through main.
+        Assert.Equal([0, 1, 0, 1, 0], s.Rows.Select(r => r.Lane));
+        Assert.Equal([new GraphTether(0, 2, 0, main), new GraphTether(1, 3, 1, feat)], s.Tethers);
+
+        Assert.True(s.IsTether(1, E(0, 0, 0)));
+        Assert.True(s.IsTether(2, E(0, 0, 0)));
+        Assert.False(s.IsTether(3, E(0, 0, 0)));     // below main's HEAD: an ordinary line again
+        Assert.True(s.IsTether(3, E(1, 1, 1)));
+        Assert.False(s.IsTether(4, E(1, 0, 1)));
+
+        Assert.Equal([clean], s.WorktreesAt("m1"));
+        Assert.Equal(["main", "origin/main"], s.RefsAt("m2").Select(r => r.Name));
+        Assert.Equal(2, s.RowOf("m2"));
+        Assert.Equal(-1, s.RowOf("nope"));
+    }
+
+    [Fact]
+    public void Snapshot_AppendResolvesATetherToAnUnloadedHead()
+    {
+        var detached = new GraphWorktree("C:/r--x", null, "m1", Changes: 2, IsCurrent: false);
+        var s = Snap([C("m2", "m1")], [detached], pageSize: 1);
+
+        Assert.True(s.HasMore);
+        Assert.Equal(int.MaxValue, s.Tethers[0].HeadRow);
+        Assert.True(s.IsTether(1, s.Rows[1].Up.Single(e => e.Color == s.Tethers[0].Lane)));
+
+        var more = s.Append([C("m1")], pageSize: 1);
+        Assert.Equal(2, more.Tethers[0].HeadRow);
+        Assert.Equal(2, more.RealCommitCount);
+        Assert.Equal(s.Rows, more.Rows.Take(2));
+        Assert.Throws<InvalidOperationException>(() => s.Append([C("m0")], 1));
+    }
+
+    [Fact]
+    public void PrimaryBranch_PrefersLocalTrunkThenRemote()
+    {
+        Assert.Equal("main", GraphLoader.PrimaryBranch(Refs));
+        Assert.Equal("upstream/master", GraphLoader.PrimaryBranch(
+            [new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "a"), new("upstream/master", "refs/remotes/upstream/master", GraphRefKind.RemoteBranch, "b")]));
+        Assert.Null(GraphLoader.PrimaryBranch([]));
+    }
+
+    [Fact]
+    public void LogArgs_PutsExclusionsAfterNot()
+    {
+        Assert.Equal(["HEAD", "main", "--not", "abc^@"], GraphLogReader.GraphLogArgs(new(["HEAD", "main"], ["abc^@"])));
+        Assert.Equal(["--branches", "--remotes", "--tags", "HEAD"], GraphLogReader.GraphLogArgs(GraphLogQuery.Everything));
+    }
+
     // A deterministic history in topological order: a trunk with short-lived branches that fork off, sometimes
     // merge back, and sometimes are left dangling, plus occasional merges of the trunk into a branch.
     private static List<GraphCommit> Synthetic(int count, int seed)
