@@ -1989,7 +1989,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         }
         // Trailing "…" overflow: activate features whose glyph isn't showing yet (remote control, external
         // notifications, git history). The app builds the menu from live session state.
-        _composerToolbar.Children.Add(ToolbarButton("⋯", "More — remote control, notifications, git history…",
+        _composerToolbar.Children.Add(ToolbarButton("⋯", "More — remote control, notifications, git graph…",
             anchor => ComposerOverflowRequested?.Invoke(anchor)));
         _composerToolbar.IsVisible = true;
     }

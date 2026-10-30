@@ -77,6 +77,26 @@ public class GitGraphTests
         Assert.Contains(refs, r => r is { Name: "stash", Kind: GraphRefKind.Stash });
     }
 
+    [Fact]
+    public void ParseRefs_ReadsEachLocalBranchsUpstreamAndHowFarApartTheyAre()
+    {
+        var output = string.Join('\n',
+            $"1111111{Us}{Us}refs/heads/main{Us}origin/main{Us}",
+            $"2222222{Us}{Us}refs/heads/ahead{Us}origin/ahead{Us}ahead 2",
+            $"3333333{Us}{Us}refs/heads/both{Us}origin/both{Us}ahead 1, behind 4",
+            $"4444444{Us}{Us}refs/heads/gone{Us}origin/gone{Us}gone",
+            $"5555555{Us}{Us}refs/heads/local{Us}{Us}",
+            "");
+        var refs = GraphLogReader.ParseRefs(output).ToDictionary(r => r.Name);
+
+        Assert.True(refs["main"].InSync);
+        Assert.Equal(("origin/ahead", 2, 0), (refs["ahead"].Upstream, refs["ahead"].Ahead, refs["ahead"].Behind));
+        Assert.Equal((1, 4, false), (refs["both"].Ahead, refs["both"].Behind, refs["both"].InSync));
+        Assert.True(refs["gone"].UpstreamGone);
+        Assert.False(refs["gone"].InSync);
+        Assert.Null(refs["local"].Upstream);
+    }
+
     // ---- lane allocator -------------------------------------------------------------------------------
 
     [Fact]
@@ -333,6 +353,12 @@ public class GitGraphTests
         Assert.Equal(-1, s.Find("  ", 0));
         Assert.Equal(0, s.LaneOf("aaaa1111"));
         Assert.Equal(-1, s.LaneOf("nope"));
+
+        Assert.Equal([0, 1], s.FindAll("FEED"));        // message, any case
+        Assert.Equal([1], s.FindAll("fea"));            // a branch shown on the row
+        Assert.Equal([2], s.FindAll("cccc"));           // hash prefix
+        Assert.Equal([0, 1, 2], s.FindAll("jon"));      // author
+        Assert.Empty(s.FindAll(" "));
     }
 
     // ---- checkout planning -------------------------------------------------------------------------------

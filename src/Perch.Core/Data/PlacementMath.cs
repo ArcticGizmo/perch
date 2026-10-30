@@ -112,6 +112,28 @@ public static class PlacementMath
         return best;
     }
 
+    /// <summary>
+    /// Where a big window should open on a monitor whose work area also holds the overlay: the wider of the strips left
+    /// and right of the overlay (so the window never opens underneath it), or the whole work area when the overlay is
+    /// elsewhere or neither strip is at least <paramref name="minW"/> wide. The window is then <paramref name="wantW"/> ×
+    /// <paramref name="wantH"/> shrunk to fit, centred in that space, with a <paramref name="margin"/> kept clear. All
+    /// physical pixels.
+    /// </summary>
+    public static (int X, int Y, int W, int H) BesideOverlay(
+        (int X, int Y, int W, int H) work, (int X, int Y, int W, int H)? overlay, int wantW, int wantH, int minW, int margin)
+    {
+        var space = work;
+        if (overlay is { } o && o.X < work.X + work.W && o.X + o.W > work.X && o.Y < work.Y + work.H && o.Y + o.H > work.Y)
+        {
+            int left = o.X - work.X, right = work.X + work.W - (o.X + o.W);
+            if (Math.Max(left, right) >= minW + 2 * margin)
+                space = left >= right ? (work.X, work.Y, left, work.H) : (o.X + o.W, work.Y, right, work.H);
+        }
+        int w = Math.Max(1, Math.Min(wantW, space.W - 2 * margin));
+        int h = Math.Max(1, Math.Min(wantH, space.H - 2 * margin));
+        return (space.X + (space.W - w) / 2, space.Y + (space.H - h) / 2, w, h);
+    }
+
     /// <summary>Keeps the window fully inside the work area; on overflow it pins to the top-left edge.</summary>
     public static (int X, int Y) Clamp(
         int x, int y, int waX, int waY, int waW, int waH, int physW, int physH)

@@ -384,6 +384,22 @@ public sealed class GitGraphIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void DeleteBranch_RefusesUnmergedWorkUnlessForcedAndCanBeRecreated()
+    {
+        if (!_ready || !AddSide()) return;
+        var side = Hash("side");
+
+        var refused = GitOps.DeleteBranch(_repo, "side", force: false);
+        Assert.True(GitOps.IsUnmerged(refused), refused.Message);
+        Assert.True(GitOps.DeleteBranch(_repo, "side", force: true).Ok);
+        Assert.NotEqual(0, Run("rev-parse", "--verify", "--quiet", "refs/heads/side").exit);
+
+        Assert.True(GitOps.CreateBranch(_repo, "side", side, checkout: false).Ok);   // what Undo does
+        Assert.Equal(side, Hash("side"));
+        Assert.True(GitOps.DeleteBranch(_repo, "feature", force: false).Ok);       // merged: no question
+    }
+
+    [Fact]
     public void WorktreeRemove_RefusesChangesUnlessForced()
     {
         if (!_ready) return;

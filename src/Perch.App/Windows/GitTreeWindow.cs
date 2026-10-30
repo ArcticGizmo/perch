@@ -75,6 +75,7 @@ internal sealed partial class GitTreeWindow : Window
     private readonly Border _gotoBar;
     private readonly TextBox _gotoBox;
     private readonly TextBlock _gotoLabel;
+    private readonly Button _findOlderBtn;
     private readonly ListBox _filesList;      // commit-node files (read-only)
     private readonly ListBox _unstagedList;   // WIP: unstaged changes ("Changes")
     private readonly ListBox _stagedList;     // WIP: staged changes ("Staged · pending commit")
@@ -184,7 +185,7 @@ internal sealed partial class GitTreeWindow : Window
         _light = settings.GitTreeLight;
         _scope = settings.GitTreeScope;
         _pal = _light ? TreePalette.Light() : TreePalette.Dark();
-        Title = "Tree";
+        Title = "Git graph";
         Width = 1560;
         Height = 1020;
         MinWidth = 820;
@@ -323,22 +324,32 @@ internal sealed partial class GitTreeWindow : Window
         _rail.VisibilityToggled += ToggleHidden;
         _rail.VisibilityMenuRequested += ShowVisibilityMenu;
         _graph.Canvas.RefMenuRequested += ShowRefMenu;
+        _graph.Canvas.RowMenuRequested += ShowRowMenu;
+        _rail.RefMenuRequested += ShowRefMenu;
         _railSeparator = new Border { Width = 1 };
 
-        // Ctrl+G: go to a branch, tag, hash or message text; Enter again walks the matches.
-        _gotoBox = new TextBox { PlaceholderText = "Go to branch, tag, hash or message", MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
+        // Ctrl+F (Ctrl+G) over the graph: find commits by message, author, hash, branch or tag. Matches are washed in
+        // the graph; Enter / Shift+Enter walk them; with none in what's loaded, older history can be searched too.
+        _gotoBox = new TextBox { PlaceholderText = "Find commits: message, author, hash, branch or tag", MinWidth = 260, VerticalAlignment = VerticalAlignment.Center };
+        _gotoBox.TextChanged += (_, _) => RunFind();
         _gotoBox.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter) { GoTo(); e.Handled = true; }
+            if (e.Key == Key.Enter) { StepFind(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1); e.Handled = true; }
             else if (e.Key == Key.Escape) { CloseGoTo(); e.Handled = true; }
         };
         _gotoLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0), [DockPanel.DockProperty] = Dock.Right };
         var gotoClose = new Button { Content = "✕", VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
         gotoClose.Click += (_, _) => CloseGoTo();
+        var gotoNext = new Button { Content = "›", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 8, 0), [DockPanel.DockProperty] = Dock.Right };
+        gotoNext.Click += (_, _) => StepFind(1);
+        var gotoPrev = new Button { Content = "‹", VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
+        gotoPrev.Click += (_, _) => StepFind(-1);
+        _findOlderBtn = new Button { Content = "Search older history", IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0), [DockPanel.DockProperty] = Dock.Right };
+        _findOlderBtn.Click += (_, _) => SearchOlder();
         _gotoBar = new Border
         {
             Padding = new Thickness(10, 6), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { gotoClose, _gotoLabel, _gotoBox } },
+            Child = new DockPanel { LastChildFill = true, Children = { gotoClose, gotoNext, gotoPrev, _findOlderBtn, _gotoLabel, _gotoBox } },
         };
 
         var graphBody = new Grid { ColumnDefinitions = new ColumnDefinitions("210,Auto,*") };
@@ -347,6 +358,8 @@ internal sealed partial class GitTreeWindow : Window
         graphBody.Children.Add(WithColumn(_graph, 2));
         BuildCheckoutUi();
         BuildDragUi();
+        _busyOverlay.SetValue(Grid.ColumnSpanProperty, 3);
+        graphBody.Children.Add(_busyOverlay);
         graphBody.Children.Add(WithColumn(_toast, 2));
         _dragLayer.SetValue(Grid.ColumnSpanProperty, 3);
         graphBody.Children.Add(_dragLayer);
@@ -430,8 +443,40 @@ internal sealed partial class GitTreeWindow : Window
         OpensDiff(_stagedList);
 
         _filesLabel = PaneLabel("Files");
+        _filesLabel.SetValue(DockPanel.DockProperty, Dock.Left);
+        // Collapse the files pane to a thin strip to give the graph its width; the strip's chevron brings it back.
+        var collapseFiles = new Button
+        {
+            Content = "›", FontSize = 15, Padding = new Thickness(8, 0), Margin = new Thickness(0, 4, 6, 0),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand), [DockPanel.DockProperty] = Dock.Right,
+        };
+        ToolTip.SetTip(collapseFiles, "Hide the files pane");
+        collapseFiles.Click += (_, _) => SetFilesCollapsed(true);
+        var filesHeader = new DockPanel { LastChildFill = false, [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel } };
+        var expandFiles = new Button
+        {
+            Content = "‹", FontSize = 15, Padding = new Thickness(6, 2), Margin = new Thickness(0, 8, 0, 0),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        ToolTip.SetTip(expandFiles, "Show the files pane");
+        expandFiles.Click += (_, _) => SetFilesCollapsed(false);
+        _filesStrip = new StackPanel
+        {
+            IsVisible = false,
+            Children =
+            {
+                expandFiles,
+                new LayoutTransformControl
+                {
+                    LayoutTransform = new RotateTransform(90), Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Center,
+                    Child = new TextBlock { Text = "Files", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Palette.MutedBrush },
+                },
+            },
+        };
         var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
-        var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, filesBody } };
+        var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, filesBody } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView { Padding = new Thickness(0, 0, 0, 64) }; // clear space for the floating bar
@@ -530,6 +575,7 @@ internal sealed partial class GitTreeWindow : Window
 
         // ---- two resizable panes: graph (or the open diff) | files, as rounded cards on a padded "page", with the
         // GridSplitter as a wide, transparent breathing gutter (the page shows through it). ----
+        _filesColumn = new ColumnDefinition(new GridLength(380, GridUnitType.Pixel)) { MinWidth = 220 };
         var body = new Grid
         {
             Margin = new Thickness(14, 12, 14, 14),
@@ -537,16 +583,41 @@ internal sealed partial class GitTreeWindow : Window
             {
                 new(new GridLength(1, GridUnitType.Star)) { MinWidth = 560 },
                 new(GridLength.Auto),
-                new(new GridLength(380, GridUnitType.Pixel)) { MinWidth = 220 },
+                _filesColumn,
             },
         };
+        _filesSplitter = Splitter();
         body.Children.Add(WithColumn(Card(mainArea), 0));
-        body.Children.Add(WithColumn(Splitter(), 1));
-        body.Children.Add(WithColumn(Card(filesPane), 2));
+        body.Children.Add(WithColumn(_filesSplitter, 1));
+        body.Children.Add(WithColumn(Card(new Grid { Children = { filesPane, _filesStrip } }), 2));
+        _filesPane = filesPane;
+        SetFilesCollapsed(settings.GitTreeFilesCollapsed, persist: false);
 
         Content = new DockPanel { Children = { _headerBorder, body } };
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
+    }
+
+    // ---- the files pane's collapse ----
+
+    private readonly ColumnDefinition _filesColumn;
+    private readonly GridSplitter _filesSplitter;
+    private readonly StackPanel _filesStrip;
+    private readonly DockPanel _filesPane;
+    private double _filesWidth = 380;
+
+    private void SetFilesCollapsed(bool collapsed, bool persist = true)
+    {
+        if (collapsed && _filesColumn.ActualWidth > 0 && _filesPane.IsVisible)
+            _filesWidth = _filesColumn.ActualWidth;   // reopen at the width it had
+        _filesColumn.MinWidth = collapsed ? 30 : 220;
+        _filesColumn.Width = new GridLength(collapsed ? 30 : _filesWidth, GridUnitType.Pixel);
+        _filesPane.IsVisible = !collapsed;
+        _filesStrip.IsVisible = collapsed;
+        _filesSplitter.IsEnabled = !collapsed;
+        if (!persist) return;
+        _settings.GitTreeFilesCollapsed = collapsed;
+        _settings.Save();
     }
 
     // ---- the diff over the graph ----
@@ -694,16 +765,15 @@ internal sealed partial class GitTreeWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        // Ctrl+F finds in whatever is showing: the open diff, else the graph's commits. Ctrl+G is always the commits.
+        if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _diffOverlay.IsVisible)
         {
             OpenFind();
             e.Handled = true;
         }
-        else if (e.Key == Key.G && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        else if (e.Key is Key.F or Key.G && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
-            _gotoBar.IsVisible = true;
-            _gotoBox.Focus();
-            _gotoBox.SelectAll();
+            OpenCommitFind();
             e.Handled = true;
         }
         else if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -731,18 +801,13 @@ internal sealed partial class GitTreeWindow : Window
         if (!string.IsNullOrEmpty(_findBox.Text)) _diff.SetSearch(_findBox.Text!);
     }
 
-    private void GoTo()
-    {
-        if (_snap is null) return;
-        int row = _snap.Find(_gotoBox.Text ?? "", _graph.Canvas.SelectedRow);
-        _gotoLabel.Text = row < 0 ? (string.IsNullOrWhiteSpace(_gotoBox.Text) ? "" : "No match in the loaded graph") : "";
-        if (row >= 0) _graph.Canvas.Flash(row);
-    }
-
     private void CloseGoTo()
     {
         _gotoBar.IsVisible = false;
         _gotoLabel.Text = "";
+        _findRows = [];
+        _findOlderBtn.IsVisible = false;
+        _graph.Canvas.SetMatches(new HashSet<int>());
         _graph.Canvas.Focus();
     }
 
@@ -874,6 +939,8 @@ internal sealed partial class GitTreeWindow : Window
         _suppressSelect = false;
         _rail.SetSnapshot(snap);
         ApplySessions();
+        RefreshFind();
+        OnGraphLoaded();
     }
 
     /// <summary>The live sessions from the latest scan; each one is shown on the worktree it's working in.</summary>
@@ -961,6 +1028,7 @@ internal sealed partial class GitTreeWindow : Window
                 _graph.Canvas.SetSnapshot(_snap, keepPlace: true);
                 _suppressSelect = false;
                 _rail.SetSnapshot(_snap);   // more refs now have a lane
+                RefreshFind();
             });
         });
     }
@@ -1089,15 +1157,13 @@ internal sealed partial class GitTreeWindow : Window
         ShowNode(node);
     }
 
-    // Double-click / Enter on a row (a double-click on a pill arrives as RefActivated instead). Another worktree's WIP
-    // row opens that worktree in this window; a commit checks out its branch, or the commit itself.
+    // Double-click / Enter on a row (a double-click on a pill arrives as RefActivated and checks it out). Another
+    // worktree's WIP row opens that worktree in this window. A commit row is left for a commit detail view; checking
+    // out or branching from a commit is on its right-click menu.
     private void OnGraphActivated(int row)
     {
-        if (_snap is null || row < 0 || row >= _snap.Commits.Count) return;
-        if (_snap.WipAt(row) is { IsCurrent: false } wt)
+        if (_snap?.WipAt(row) is { IsCurrent: false } wt)
             Retarget(wt.Path, wt.Name, null, isActive: false);
-        else
-            BeginCheckout(GraphCheckout.ForCommit(_snap, _snap.Commits[row].Hash), _graph.Canvas);
     }
 
     // Clears the files and diff panes, with a hint where the file list would be.
@@ -1687,6 +1753,7 @@ internal sealed partial class GitTreeWindow : Window
         _busyPoll?.Stop();
         _toastTimer?.Stop();
         _dragScroll?.Stop();
+        _busyFallback?.Stop();
         _debounce?.Dispose();
         _debounce = null;
         base.OnClosed(e);
@@ -1765,6 +1832,7 @@ internal sealed partial class GitTreeWindow : Window
                 {
                     ApplyStatus(status, cwd);
                     UpdateInProgress(snap?.Context.InProgress ?? GitInProgress.None);
+                    OnGraphLoaded();
                 }
 
                 // Repaint a still-shown WIP file only when its content actually changed (skipped when a

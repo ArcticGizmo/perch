@@ -64,6 +64,19 @@ Use a throwaway clone or a branch you don't mind moving, with at least one extra
 4. **Resizable columns.** Hover the edge between the pills and the lanes, or between the lanes and the commit messages: the cursor becomes ↔ and a line shows. Drag to resize. Double-click an edge to put it back. The widths are remembered next time.
 5. Light/dark recolours the diff bar.
 
+## Feedback round 2
+
+1. **Opens where there's room.** Open the graph from the overlay row's right-click → **Git graph…** (now the first item of that group, above Work items; the window is titled "Git graph"). It opens on the overlay's monitor, in the space beside the overlay, never underneath it (docked or floating), and shrinks to fit that space. Only this Perch's own overlay is known; a second Perch's floating overlay isn't (a docked one is, since it reserves the screen edge).
+2. **Remote marks.** A local branch's pill (and its rail row) shows: nothing = local only, no remote branch; **●** = same commit as its upstream; **↑2 ↓1** = ahead/behind its upstream; **⊘** = its upstream is configured but gone. Hover for it in words ("2 commits ahead of origin/x", "Local only: no remote branch", …).
+3. **Find commits.** With the graph showing, **Ctrl+F** opens "Find commits" (Ctrl+G too). As you type, matching rows (message, author, hash prefix, branch or tag name) are washed amber and the first is selected; "3 / 14" counts them, Enter / Shift+Enter or ‹ › walk them. Nothing in what's loaded → "No match in the newest 2,000 commits" and **Search older history**, which loads older pages until something matches. With a diff open, Ctrl+F still finds in the diff.
+4. **Right-click, not double-click.** Right-click a commit row: Check out <its branches>, Check out abc1234 (detached), Create a branch at…, Create a worktree at…, Copy commit hash / message. Double-clicking a commit row now does nothing (a commit detail view is planned there); double-clicking a branch pill still checks it out.
+5. **Columns.** A header row (Branch / tag · Graph · Commit message · Author · When) sits above the rows, with a ‖ grip on each draggable edge.
+6. **Busy cover.** Checking out (double-click a pill, or any drop / Undo) greys the graph with a "Checking out X…" card until the refreshed graph is on screen.
+7. **Delete a local branch.** Right-click a local branch (pill or rail) → **Delete <branch>…**. A merged branch just goes; one with unmerged commits asks first. The toast's Undo brings it back at the same commit (its upstream setting isn't restored). Not offered for a branch a worktree has checked out.
+8. **Create a worktree from a menu.** Right-click a branch → **Create a worktree for <branch>** (a free branch goes straight in; one held elsewhere asks for a new branch name); right-click a tag or commit → **Create a worktree at…** (asks for a name).
+9. **WIP rows.** No pill on a WIP row any more. This worktree's row says "N uncommitted changes"; another worktree's says "N uncommitted changes in <its folder>".
+10. **Collapse the files pane.** The **›** at the top right of Files collapses it to a thin strip; the strip's **‹** brings it back at its old width. Remembered.
+
 ## Feedback round 1: hiding branches
 
 1. **Hide one.** Hover a branch in the rail's Local or Remotes list: an eye appears at the right. Click it: the branch leaves the graph (its pill, and any commits only it reaches), and its rail row stays, dimmed and italic with the eye struck through. The header shows "N · 1 hidden". Click the struck eye to bring it back. Or right-click a pill in the graph → **Hide <branch> from the graph** (the toast offers Undo). Branches a worktree has checked out, and the main line (`main` / `origin/main`), can't be hidden; they get no eye, and the pill menu says why.

@@ -458,6 +458,10 @@ internal sealed class AppSettings
     public double GitTreeRefsWidth { get; set; }
     public double GitTreeLanesWidth { get; set; }
 
+    // Whether the git Tree window's files pane is collapsed to a strip (more room for the graph). Set from the pane's
+    // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
+    public bool GitTreeFilesCollapsed { get; set; }
+
     // Branches hidden from the git Tree graph and the remote branches it has seen, per repo, keyed by the repo's
     // shared git dir (see GitGraph.GraphRepoPrefs); and whether new remote branches that aren't the user's are hidden
     // as they arrive. Both set from the Tree window's rail, not Settings controls (see SettingsRegistryTests.NotSettings).

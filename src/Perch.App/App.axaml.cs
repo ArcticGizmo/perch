@@ -1978,6 +1978,7 @@ public partial class App : Application
     private GitTreeWindow NewTreeWindow()
     {
         var w = new GitTreeWindow(_appSettings ?? AppSettings.Load());
+        PlaceBesideOverlay(w);
         w.SetSessions(_lastSessions);
         w.StartSessionRequested += path =>
         {
@@ -1987,6 +1988,26 @@ public partial class App : Application
             session.StartNew(path);
         };
         return w;
+    }
+
+    // Opens a big window on the overlay's monitor in the space beside the overlay (never underneath it, docked or
+    // floating), shrunk to fit that space. The work area is read live from the OS: Avalonia's cached one goes stale
+    // across the docked column's own edge reservation (see UpdateBasketballAnchor).
+    private void PlaceBesideOverlay(Window w)
+    {
+        if (_overlay is null || (_overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary) is not { } screen) return;
+        double scale = screen.Scaling > 0 ? screen.Scaling : 1;
+        var overlay = new PixelRect(_overlay.Position, PixelSize.FromSize(_overlay.Bounds.Size, scale));
+        var wa = screen.WorkingArea;
+        if (PlatformServices.WindowChrome.GetMonitorGeometryAt(overlay.X + overlay.Width / 2, overlay.Y + overlay.Height / 2) is { } live)
+            wa = new PixelRect(live.WorkX, live.WorkY, live.WorkWidth, live.WorkHeight);
+        var r = PlacementMath.BesideOverlay((wa.X, wa.Y, wa.Width, wa.Height),
+            _overlay.IsVisible ? (overlay.X, overlay.Y, overlay.Width, overlay.Height) : null,
+            (int)(w.Width * scale), (int)(w.Height * scale), (int)(w.MinWidth * scale), (int)(16 * scale));
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Position = new PixelPoint(r.X, r.Y);
+        w.Width = r.W / scale;
+        w.Height = r.H / scale;
     }
 
     private void OnOpenMarkdown(ClaudeSession session)
@@ -2729,14 +2750,14 @@ public partial class App : Application
         }
 
         // Git history for this session's working directory (reuses the one Tree window).
-        var git = new MenuItem { Header = "View git history" };
+        var git = new MenuItem { Header = "Git graph" };
         git.Click += (_, _) => OpenGitHistoryForSession(w);
         menu.Items.Add(git);
 
         menu.ShowAt(anchor);
     }
 
-    // Opens/focuses the git Tree window on a session window's working directory (the "View git history"
+    // Opens/focuses the git Tree window on a session window's working directory (the "Git graph"
     // overflow entry). Mirrors ViewSessionFileDiff without a specific file to land on.
     private void OpenGitHistoryForSession(SessionWindow w)
     {

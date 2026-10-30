@@ -256,12 +256,14 @@ internal sealed partial class GitTreeWindow
         var root = snap.Root;
         var path = newPath ?? o.NewPath;
         ShowToast($"{o.Label}…", o.Command, null, busy: true);
+        SetGraphBusy($"{o.Label}…");
         System.Threading.Tasks.Task.Run(() => GitOps.RunDrop(root, o, dirty, newBranch, newPath)).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
                 if (!IsVisible) return;
+                ClearBusyOnNextLoad();
                 var (r, undo) = t.Result;
                 if (r.Ok && undo is not null)
                 {
@@ -292,12 +294,14 @@ internal sealed partial class GitTreeWindow
     private void RunDropUndo(Func<GitOpResult> undo)
     {
         ShowToast("Undoing…", "", null, busy: true);
+        SetGraphBusy("Undoing…");
         System.Threading.Tasks.Task.Run(undo).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
                 if (!IsVisible) return;
+                ClearBusyOnNextLoad();
                 var r = t.Result;
                 if (r.Ok) ShowToast("Undone", r.Command, null);
                 else ShowToast(r.Message, r.Command, null, error: true);

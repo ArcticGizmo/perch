@@ -70,14 +70,26 @@ internal sealed class GraphCanvas : Control
     private global::Avalonia.Threading.DispatcherTimer? _flashTimer;
     private double _offset;
     private bool _moreRequested;
-    private readonly double _rowH;
+    private readonly double _rowH, _headerH;
 
     // Built once per palette.
     private IPen[] _lane = [], _laneDash = [], _laneFaded = [], _ring = [], _ringBold = [], _pillBorder = [], _pillDash = [];
     private IBrush[] _laneFill = [], _laneFillFaded = [], _laneWash = [];
     private IBrush _bg = Brushes.Transparent, _hoverBg = Brushes.Transparent, _selBg = Brushes.Transparent,
         _text = Brushes.White, _title = Brushes.White, _muted = Brushes.Gray;
-    private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray), _dropPen = new ImmutablePen(Brushes.White);
+    private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray), _dropPen = new ImmutablePen(Brushes.White),
+        _gripPen = new ImmutablePen(Brushes.Gray);
+    private IBrush _matchBg = Brushes.Transparent;
+
+    // Rows that match the find bar, washed so they stand out while scrolling.
+    private IReadOnlySet<int> _matches = new HashSet<int>();
+
+    /// <summary>Washes the rows that match a search (an empty set clears it).</summary>
+    public void SetMatches(IReadOnlySet<int> rows)
+    {
+        _matches = rows;
+        InvalidateVisual();
+    }
 
     // Where the pills were painted, for hit-testing (drag sources and double-click targets in later checkpoints).
     private readonly List<(Rect Rect, int Row, GraphRef Ref)> _pillHits = new();
@@ -88,6 +100,7 @@ internal sealed class GraphCanvas : Control
         ClipToBounds = true;
         // Row height from the font's line height, never a fixed pixel count.
         _rowH = Math.Ceiling(OverlayDraw.Text("Ag", FontSize, Brushes.White).Height + 13);
+        _headerH = Math.Ceiling(OverlayDraw.Text("Ag", SmallSize, Brushes.White, FontWeight.SemiBold).Height + 12);
         SetColors(_c);
     }
 
@@ -103,6 +116,9 @@ internal sealed class GraphCanvas : Control
     /// <summary>A ref pill was right-clicked: the host shows its menu at the pointer.</summary>
     public event Action<GraphRef>? RefMenuRequested;
 
+    /// <summary>A row was right-clicked away from its pills (and selected): the host shows the commit's menu.</summary>
+    public event Action<int>? RowMenuRequested;
+
     /// <summary>A branch pill or a commit row was pressed and dragged past the threshold; the host runs the drag from
     /// here (the pointer stays captured by the canvas until release).</summary>
     public event Action<DragSource, IPointer>? DragRequested;
@@ -117,7 +133,7 @@ internal sealed class GraphCanvas : Control
     public int SelectedRow => _sel;
     public double RowHeight => _rowH;
     public double Extent => (_snap?.Rows.Length ?? 0) * _rowH + (_snap?.HasMore == true ? _rowH : 0);
-    public double Viewport => Bounds.Height;
+    public double Viewport => Math.Max(0, Bounds.Height - _headerH);
 
     public double Offset
     {
@@ -156,6 +172,8 @@ internal sealed class GraphCanvas : Control
         _nodeEdge = new ImmutablePen(B(c.Background), 2);
         _sep = new ImmutablePen(B(c.Separator), 1);
         _dropPen = new ImmutablePen(B(c.Title, 0.85), 1.8);
+        _gripPen = new ImmutablePen(B(c.Muted, 0.75), 1.2);
+        _matchBg = B(c.Lanes[5], c.Light ? 0.14 : 0.2);
         InvalidateVisual();
     }
 
@@ -270,6 +288,7 @@ internal sealed class GraphCanvas : Control
     public bool AutoScroll(double y)
     {
         const double edge = 28;
+        y -= _headerH;
         double step = y < edge ? -(edge - Math.Max(y, 0)) : y > Viewport - edge ? y - (Viewport - edge) : 0;
         if (step == 0) return false;
         double before = _offset;
@@ -291,7 +310,8 @@ internal sealed class GraphCanvas : Control
     public int RowAt(double y)
     {
         if (_snap is null) return -1;
-        int r = (int)Math.Floor((y + _offset) / _rowH);
+        if (y < _headerH) return -1;
+        int r = (int)Math.Floor((y - _headerH + _offset) / _rowH);
         return r >= 0 && r < _snap.Rows.Length ? r : -1;
     }
 
@@ -313,7 +333,8 @@ internal sealed class GraphCanvas : Control
     private int EdgeAt(double x) =>
         Math.Abs(x - _refsW) <= EdgeGrip ? 1 : Math.Abs(x - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
     private double LaneX(int lane) => _refsW + GraphPad + lane * LaneW;
-    private double RowMid(int row) => row * _rowH - _offset + _rowH / 2;
+    private double RowTop(int row) => _headerH + row * _rowH - _offset;
+    private double RowMid(int row) => RowTop(row) + _rowH / 2;
 
     // ---- paint ----
 
@@ -331,7 +352,7 @@ internal sealed class GraphCanvas : Control
 
         var s = _snap;
         int first = Math.Max(0, (int)Math.Floor(_offset / _rowH));
-        int last = Math.Min(s.Rows.Length - 1, (int)Math.Ceiling((_offset + size.Height) / _rowH));
+        int last = Math.Min(s.Rows.Length - 1, (int)Math.Ceiling((_offset + Viewport) / _rowH));
         double graphW = GraphWidth;
         double subjX = _refsW + graphW + Gap;
         double whenX = size.Width - WhenW - Gap;
@@ -339,9 +360,12 @@ internal sealed class GraphCanvas : Control
         double authorX = whenX - (size.Width < NarrowW ? 0 : AuthorW);
         double subjW = Math.Max(40, authorX - Gap - subjX);
 
+        // Rows scroll under the fixed column header.
+        var rowsClip = ctx.PushClip(new Rect(0, _headerH, size.Width, Math.Max(0, size.Height - _headerH)));
         for (int r = first; r <= last; r++)
         {
-            var band = new Rect(0, r * _rowH - _offset, size.Width, _rowH);
+            var band = new Rect(0, RowTop(r), size.Width, _rowH);
+            if (_matches.Contains(r)) ctx.FillRectangle(_matchBg, band);
             if (r == _sel) ctx.FillRectangle(_selBg, band);
             else if (r == _hover) ctx.FillRectangle(_hoverBg, band);
             if (r == _flashRow)
@@ -366,16 +390,10 @@ internal sealed class GraphCanvas : Control
         for (int r = first; r <= last; r++)
             PaintRow(ctx, s, r, subjX, subjW, authorX, whenX);
 
-        if ((_edgeDrag?.Edge ?? _edgeHover) is var edge and > 0)
-        {
-            double ex = edge == 1 ? _refsW : _refsW + graphW;
-            ctx.DrawLine(_dropPen, new Point(ex, 0), new Point(ex, size.Height));
-        }
-
         if (_drop is not null)
             for (int r = first; r <= last; r++)
                 if (IsDropRow(s, r))
-                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(new Rect(2, r * _rowH - _offset + 1.5, size.Width - 4, _rowH - 3), 6));
+                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(new Rect(2, RowTop(r) + 1.5, size.Width - 4, _rowH - 3), 6));
 
         if (s.HasMore && last == s.Rows.Length - 1)
         {
@@ -386,6 +404,39 @@ internal sealed class GraphCanvas : Control
                 _moreRequested = true;
                 Dispatcher.Post(() => LoadMoreRequested?.Invoke());
             }
+        }
+
+        rowsClip.Dispose();
+        PaintHeader(ctx, size, graphW, subjX, authorX, whenX);
+        if ((_edgeDrag?.Edge ?? _edgeHover) is var edge and > 0)
+        {
+            double ex = edge == 1 ? _refsW : _refsW + graphW;
+            ctx.DrawLine(_dropPen, new Point(ex, 0), new Point(ex, size.Height));
+        }
+    }
+
+    // The fixed column header: what each column is, with a grip on each edge that can be dragged, so it's visible
+    // that (and where) the columns resize.
+    private void PaintHeader(DrawingContext ctx, Size size, double graphW, double subjX, double authorX, double whenX)
+    {
+        ctx.FillRectangle(_hoverBg, new Rect(0, 0, size.Width, _headerH));
+        ctx.DrawLine(_sep, new Point(0, _headerH - 0.5), new Point(size.Width, _headerH - 0.5));
+        void Label(string text, double x, double width)
+        {
+            if (width < 28) return;
+            var ft = OverlayDraw.Text(Fit(text, SmallSize, width), SmallSize, _muted, FontWeight.SemiBold);
+            OverlayDraw.TextLeftMid(ctx, ft, x, _headerH / 2);
+        }
+        Label("Branch / tag", 10, _refsW - 18);
+        Label("Graph", _refsW + 8, graphW - 14);
+        Label("Commit message", subjX, authorX - Gap - subjX);
+        if (authorX < whenX) Label("Author", authorX, AuthorW - Gap);
+        var when = OverlayDraw.Text("When", SmallSize, _muted, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, when, whenX + WhenW - when.Width, _headerH / 2);
+        foreach (var x in (ReadOnlySpan<double>)[_refsW, _refsW + graphW])
+        {
+            ctx.DrawLine(_gripPen, new Point(x - 1.5, 6), new Point(x - 1.5, _headerH - 6));
+            ctx.DrawLine(_gripPen, new Point(x + 1.5, 6), new Point(x + 1.5, _headerH - 6));
         }
     }
 
@@ -402,9 +453,10 @@ internal sealed class GraphCanvas : Control
             var wt = s.Tethers.FirstOrDefault(t => t.WipRow == r).Worktree;
             if (inGraph)
                 ctx.DrawEllipse(_bg, _laneDash[lane], new Point(x, y), WipR, WipR);
-            if (wt is not null)
-                WorktreePill(ctx, wt, lane, y);
-            var label = OverlayDraw.Text(Fit($"{wt?.Changes ?? 0} uncommitted change{(wt?.Changes == 1 ? "" : "s")}", FontSize, subjW), FontSize, _muted);
+            // No pill: a pill here read as a branch. Another worktree's changes say whose they are in the text.
+            string changes = $"{wt?.Changes ?? 0} uncommitted change{(wt?.Changes == 1 ? "" : "s")}";
+            if (wt is { IsCurrent: false }) changes += $" in {wt.Name}";
+            var label = OverlayDraw.Text(Fit(changes, FontSize, subjW), FontSize, _muted);
             OverlayDraw.TextLeftMid(ctx, label, subjX, y);
             if (wt is not null && _sessions.TryGetValue(wt.Path, out var sess))
                 SessionPill(ctx, sess, subjX + label.Width + 12, subjX + subjW, y);
@@ -463,11 +515,15 @@ internal sealed class GraphCanvas : Control
                 if (rf.Kind == GraphRefKind.RemoteBranch && UpstreamOfLocal(refs, rf))
                     continue;
                 total++;
-                bool synced = local && HasUpstreamHere(refs, rf);
                 bool here = local && rf.Name == current;
                 bool checkedOut = local && IsCheckedOut(s, rf.Name);
                 var ink = here ? _bg : local ? _laneFill[lane] : _muted;
-                double lead = checkedOut ? 13 : 0, trail = synced ? 10 : 0;
+                // The remote mark: nothing for a local-only branch, a dot when it matches its upstream, ↑/↓ counts
+                // when they've moved apart, a struck circle when the upstream is gone.
+                var track = local && rf.Upstream is not null && !rf.UpstreamGone && !rf.InSync
+                    ? OverlayDraw.Text(TrackText(rf), SmallSize - 1, ink, FontWeight.SemiBold) : null;
+                double lead = checkedOut ? 13 : 0;
+                double trail = !local || rf.Upstream is null ? 0 : track is not null ? track.Width + 9 : 11;
                 // The first pill (this worktree's branch when it's here) always gets one, cut to the room there is;
                 // later ones are capped and leave space for the "+N".
                 double room = right - left - 14 - lead - trail;
@@ -486,8 +542,16 @@ internal sealed class GraphCanvas : Control
                 if (checkedOut)
                     FolderGlyph(ctx, ink, rect.X + 7, y);
                 ctx.DrawText(ft, new Point(rect.X + 7 + lead, y - ft.Height / 2));
-                if (synced)
-                    ctx.DrawEllipse(null, OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.2), new Point(rect.Right - 9, y), 2.4, 2.4);
+                if (track is not null)
+                    ctx.DrawText(track, new Point(rect.Right - 6 - track.Width, y - track.Height / 2));
+                else if (local && rf.InSync)
+                    ctx.DrawEllipse(ink, null, new Point(rect.Right - 9, y), 2.6, 2.6);
+                else if (local && rf.UpstreamGone)
+                {
+                    var pen = OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.1);
+                    ctx.DrawEllipse(null, pen, new Point(rect.Right - 9, y), 3, 3);
+                    ctx.DrawLine(pen, new Point(rect.Right - 11.2, y + 2.2), new Point(rect.Right - 6.8, y - 2.2));
+                }
                 _pillHits.Add((rect, r, rf));
                 if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
                     ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
@@ -513,18 +577,45 @@ internal sealed class GraphCanvas : Control
         return false;
     }
 
+    // A remote branch at the same commit as a local that tracks it (or, untracked, shares its name) adds nothing a
+    // pill's dot doesn't say, so it gets no pill of its own.
     private static bool UpstreamOfLocal(IReadOnlyList<GraphRef> refs, GraphRef remote)
     {
         foreach (var l in refs)
-            if (l.Kind == GraphRefKind.LocalBranch && remote.Name.EndsWith("/" + l.Name, StringComparison.Ordinal)) return true;
+            if (l.Kind == GraphRefKind.LocalBranch
+                && (l.Upstream == remote.Name || (l.Upstream is null && remote.Name.EndsWith("/" + l.Name, StringComparison.Ordinal))))
+                return true;
         return false;
     }
 
-    private static bool HasUpstreamHere(IReadOnlyList<GraphRef> refs, GraphRef local)
+    internal static string TrackText(GraphRef r) => (r.Ahead, r.Behind) switch
     {
-        foreach (var o in refs)
-            if (o.Kind == GraphRefKind.RemoteBranch && o.Name.EndsWith("/" + local.Name, StringComparison.Ordinal)) return true;
-        return false;
+        (> 0, > 0) => $"↑{r.Ahead} ↓{r.Behind}",
+        (> 0, _) => $"↑{r.Ahead}",
+        _ => $"↓{r.Behind}",
+    };
+
+    /// <summary>What a pill's marks mean, in words: its tooltip.</summary>
+    internal static string Describe(GraphRef r, GraphSnapshot? s)
+    {
+        string where = s?.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt ? $"\nChecked out in {wt.Name}" : "";
+        return r.Kind switch
+        {
+            GraphRefKind.RemoteBranch => $"{r.Name}\nRemote branch",
+            GraphRefKind.Tag => $"{r.Name}\nTag",
+            GraphRefKind.Stash => "Stash",
+            _ when r.Upstream is null => $"{r.Name}\nLocal only: no remote branch{where}",
+            _ when r.UpstreamGone => $"{r.Name}\nIts remote branch {r.Upstream} is gone{where}",
+            _ when r.InSync => $"{r.Name}\nSame commit as {r.Upstream} (●){where}",
+            _ => $"{r.Name}\n{Apart(r)} {r.Upstream}{where}",
+        };
+
+        static string Apart(GraphRef r) => (r.Ahead, r.Behind) switch
+        {
+            (> 0, > 0) => $"{r.Ahead} ahead of and {r.Behind} behind",
+            (> 0, _) => $"{r.Ahead} commit{(r.Ahead == 1 ? "" : "s")} ahead of",
+            _ => $"{r.Behind} commit{(r.Behind == 1 ? "" : "s")} behind",
+        };
     }
 
     private static bool IsCheckedOut(GraphSnapshot s, string branch)
@@ -541,16 +632,6 @@ internal sealed class GraphCanvas : Control
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, cy - 3, 9, 6.5), 1.2));
         ctx.DrawLine(pen, new Point(x + 0.5, cy - 3), new Point(x + 0.5, cy - 4.4));
         ctx.DrawLine(pen, new Point(x + 0.5, cy - 4.4), new Point(x + 3.6, cy - 4.4));
-    }
-
-    private void WorktreePill(DrawingContext ctx, GraphWorktree wt, int lane, double y)
-    {
-        var ft = OverlayDraw.Text(OverlayDraw.ElideMiddle(wt.Name, PillSize, Math.Max(0, _refsW - 42), FontWeight.SemiBold), PillSize, _laneFill[lane], FontWeight.SemiBold);
-        double w = ft.Width + 27, h = ft.Height + 4;
-        var rect = new Rect(_refsW - 6 - w, y - h / 2, w, h);
-        OverlayDraw.Panel(ctx, rect, null, _pillDash[lane], 5);
-        FolderGlyph(ctx, _laneFill[lane], rect.X + 7, y);
-        ctx.DrawText(ft, new Point(rect.X + 20, y - ft.Height / 2));
     }
 
     // "● Running · <session name>" in the session's status colour, on a faint wash of it, clipped to the space left.
@@ -628,9 +709,16 @@ internal sealed class GraphCanvas : Control
     {
         base.OnPointerPressed(e);
         var props = e.GetCurrentPoint(this).Properties;
-        if (props.IsRightButtonPressed && RefAt(e.GetPosition(this)) is { } menuRef)
+        if (props.IsRightButtonPressed)
         {
-            RefMenuRequested?.Invoke(menuRef);
+            var at = e.GetPosition(this);
+            if (RefAt(at) is { } menuRef)
+                RefMenuRequested?.Invoke(menuRef);
+            else if (RowAt(at.Y) is var menuRow and >= 0)
+            {
+                Select(menuRow, scrollIntoView: false);
+                RowMenuRequested?.Invoke(menuRow);
+            }
             e.Handled = true;
             return;
         }
@@ -747,7 +835,7 @@ internal sealed class GraphCanvas : Control
         var r = at is { } p && _edgeDrag is null ? RefAt(p) : null;
         if (r == _tipRef) return;
         _tipRef = r;
-        ToolTip.SetTip(this, r?.Name);
+        ToolTip.SetTip(this, r is null ? null : Describe(r, _snap));
         ToolTip.SetIsOpen(this, r is not null);
     }
 

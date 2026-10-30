@@ -13,7 +13,8 @@ internal static class GraphLogReader
     // Subjects are one line, so a record can't contain the separator or a NUL. %at (epoch seconds) is cheaper to
     // format and parse than an ISO date, and %h is avoided because abbreviating means a lookup per commit.
     private const string LogFormat = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s";
-    private const string RefFormat = "--format=%(objectname)%1f%(*objectname)%1f%(refname)";
+    private const string RefFormat =
+        "--format=%(objectname)%1f%(*objectname)%1f%(refname)%1f%(upstream:short)%1f%(upstream:track,nobracket)";
 
     // A deep topo-order walk of a big repo is the slowest read Perch makes.
     private const int LogTimeoutMs = 30_000;
@@ -107,7 +108,8 @@ internal static class GraphLogReader
             GraphRef? r = full switch
             {
                 _ when full.StartsWith("refs/heads/", StringComparison.Ordinal)
-                    => new(full["refs/heads/".Length..], full, GraphRefKind.LocalBranch, target),
+                    => WithTracking(new(full["refs/heads/".Length..], full, GraphRefKind.LocalBranch, target),
+                        f.Length > 3 ? f[3] : "", f.Length > 4 ? f[4] : ""),
                 _ when full.StartsWith("refs/remotes/", StringComparison.Ordinal) && !full.EndsWith("/HEAD", StringComparison.Ordinal)
                     => new(full["refs/remotes/".Length..], full, GraphRefKind.RemoteBranch, target),
                 _ when full.StartsWith("refs/tags/", StringComparison.Ordinal)
@@ -119,5 +121,23 @@ internal static class GraphLogReader
                 refs.Add(r);
         }
         return refs;
+    }
+
+    // A local branch's upstream from %(upstream:short) and %(upstream:track,nobracket): "" (in sync), "ahead 2",
+    // "behind 1", "ahead 2, behind 1" or "gone".
+    private static GraphRef WithTracking(GraphRef r, string upstream, string track)
+    {
+        if (upstream.Length == 0) return r;
+        int ahead = 0, behind = 0;
+        foreach (var part in track.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var words = part.Split(' ');
+            if (words.Length == 2 && int.TryParse(words[1], out var n))
+            {
+                if (words[0] == "ahead") ahead = n;
+                else if (words[0] == "behind") behind = n;
+            }
+        }
+        return r with { Upstream = upstream, Ahead = ahead, Behind = behind, UpstreamGone = track.Trim() == "gone" };
     }
 }

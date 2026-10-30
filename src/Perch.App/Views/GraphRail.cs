@@ -66,6 +66,9 @@ internal sealed class GraphRail : UserControl
     /// <summary>A worktree card was right-clicked: the host shows its menu at the pointer.</summary>
     public event Action<GraphWorktree, Control>? WorktreeMenuRequested;
 
+    /// <summary>A branch or tag row was right-clicked: the host shows its menu at the pointer.</summary>
+    public event Action<GraphRef, Control>? RefMenuRequested;
+
     /// <summary>A branch row's eye was clicked: hide it from the graph (true) or show it again.</summary>
     public event Action<GraphRef, bool>? VisibilityToggled;
 
@@ -345,6 +348,14 @@ internal sealed class GraphRail : UserControl
             eye.PointerPressed += (_, e) => { VisibilityToggled?.Invoke(r, !hidden); e.Handled = true; };
             dock.Children.Add(eye);
         }
+        // The same remote mark the pill carries: ● in step with its upstream, ↑/↓ apart, ⊘ upstream gone.
+        if (r.Kind == GraphRefKind.LocalBranch && r.Upstream is not null)
+            dock.Children.Add(new TextBlock
+            {
+                Text = r.UpstreamGone ? "⊘" : r.InSync ? "●" : GraphCanvas.TrackText(r),
+                FontSize = r.InSync ? 8 : 10.5, Foreground = Ink(_c.Muted), Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
+            });
         dock.Children.Add(new TextBlock
         {
             Text = label, FontSize = 12, Foreground = Ink(lane >= 0 && !hidden ? _c.Text : _c.Muted, hidden ? 0.7 : 1),
@@ -356,7 +367,8 @@ internal sealed class GraphRail : UserControl
             Padding = new Thickness(6 + indent, 3, 6, 3), CornerRadius = new CornerRadius(5), Background = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = dock, Tag = new RailItem(null, r),
         };
-        ToolTip.SetTip(row, hidden ? $"{r.Name} · hidden from the graph" : lane >= 0 ? r.Name : $"{r.Name} · not in the loaded graph");
+        ToolTip.SetTip(row, GraphCanvas.Describe(r, s)
+                            + (hidden ? "\nHidden from the graph" : lane >= 0 ? "" : "\nNot in the loaded graph"));
         if (eye is not null && !hidden)
         {
             row.PointerEntered += (_, _) => eye.Opacity = 1;
@@ -371,6 +383,8 @@ internal sealed class GraphRail : UserControl
         };
         if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
             Draggable(row, () => DragSource.Of(r));
+        if (r.Kind != GraphRefKind.Stash)
+            row.ContextRequested += (_, e) => { RefMenuRequested?.Invoke(r, row); e.Handled = true; };
         Hover(row, lane);
         return row;
     }

@@ -313,6 +313,14 @@ internal static class GitOps
         return r.Exit == 0 ? r.Stdout.Trim() : null;
     }
 
+    /// <summary><c>git branch -d</c> (or <c>-D</c> with <paramref name="force"/>): a local branch only. Without force git
+    /// refuses one with commits merged nowhere, which <see cref="IsUnmerged"/> spots so the caller can ask first.</summary>
+    public static GitOpResult DeleteBranch(string repo, string branch, bool force) =>
+        Refuse(branch) ?? Run(repo, "branch", force ? "-D" : "-d", branch);
+
+    /// <summary>The refusal <c>git branch -d</c> gives for a branch whose commits aren't merged anywhere.</summary>
+    public static bool IsUnmerged(GitOpResult r) => !r.Ok && r.Message.Contains("not fully merged", StringComparison.OrdinalIgnoreCase);
+
     /// <summary><c>git worktree remove</c>. Without <paramref name="force"/> git refuses a worktree with changes, which
     /// is the point: the caller asks the user before forcing.</summary>
     public static GitOpResult WorktreeRemove(string repo, string path, bool force) =>

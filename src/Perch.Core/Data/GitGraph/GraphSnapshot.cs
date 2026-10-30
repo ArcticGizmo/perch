@@ -169,6 +169,30 @@ internal sealed class GraphSnapshot
         return -1;
     }
 
+    /// <summary>
+    /// Every loaded row matching <paramref name="query"/> (ignoring case), top to bottom: its message or author contains
+    /// it, its hash starts with it (4+ hex characters), or a branch or tag shown on it has it in its name. Empty for a
+    /// blank query. The find bar walks these and washes them.
+    /// </summary>
+    public List<int> FindAll(string query)
+    {
+        var rows = new List<int>();
+        query = query.Trim();
+        if (query.Length == 0) return rows;
+        bool hex = query.Length >= 4 && query.All(Uri.IsHexDigit);
+        for (int i = 0; i < Commits.Count; i++)
+        {
+            var c = Commits[i];
+            if (c.IsWorkInProgress) continue;
+            if (c.Subject.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || c.AuthorName.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (hex && c.Hash.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                || RefsAt(c.Hash).Any(r => r.Name.Contains(query, StringComparison.OrdinalIgnoreCase)))
+                rows.Add(i);
+        }
+        return rows;
+    }
+
     /// <summary>The worktree whose WIP row is <paramref name="row"/>, or null for a commit row.</summary>
     public GraphWorktree? WipAt(int row)
     {

@@ -51,7 +51,21 @@ public enum GraphRefKind
 /// <c>origin/main</c>, <c>v0.6.1</c>); <see cref="Target"/> is the commit it points at, with annotated tags already
 /// peeled to their commit.
 /// </summary>
-public sealed record GraphRef(string Name, string FullName, GraphRefKind Kind, string Target);
+public sealed record GraphRef(string Name, string FullName, GraphRefKind Kind, string Target)
+{
+    /// <summary>A local branch's upstream (<c>origin/main</c>), or null when it tracks nothing.</summary>
+    public string? Upstream { get; init; }
+
+    /// <summary>Commits this branch has that its upstream doesn't, and the other way round.</summary>
+    public int Ahead { get; init; }
+    public int Behind { get; init; }
+
+    /// <summary>The upstream is configured but no longer exists (deleted on the remote and pruned).</summary>
+    public bool UpstreamGone { get; init; }
+
+    /// <summary>Tracks an upstream that exists and is at the same commit.</summary>
+    public bool InSync => Upstream is not null && !UpstreamGone && Ahead == 0 && Behind == 0;
+}
 
 /// <summary>
 /// One line segment in the band between two rows: from lane <see cref="From"/> at the upper row's centre to lane

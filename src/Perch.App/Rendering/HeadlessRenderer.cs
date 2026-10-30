@@ -704,6 +704,21 @@ internal static class HeadlessRenderer
             }
             tw.PreviewDiff(open: false);
 
+            // The commit search with matches washed, then the busy cover with the files pane collapsed.
+            void Snap(string name)
+            {
+                for (var until = DateTime.UtcNow.AddSeconds(1); DateTime.UtcNow < until; Thread.Sleep(50))
+                    Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+            }
+            tw.PreviewFind("git graph");
+            Snap("git_tree_find_1x.png");
+            tw.PreviewFind(null);
+            tw.PreviewBusyCollapsed(true);
+            Snap("git_tree_busy_collapsed_1x.png");
+            tw.PreviewBusyCollapsed(false);
+
             // A remote branch hidden: dimmed in the rail with its eye struck through, gone from the graph.
             tw.PreviewHideFirstRemote();
             for (var until = DateTime.UtcNow.AddSeconds(4); DateTime.UtcNow < until; Thread.Sleep(50))

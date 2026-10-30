@@ -69,18 +69,6 @@ internal sealed partial class GitTreeWindow
         if (hide) ShowToast($"Hid {r.Name} from the graph", "", () => SetHidden([r], false));
     }
 
-    // Right-click on a pill: check it out, or hide it.
-    private void ShowRefMenu(GraphRef r)
-    {
-        if (_snap is not { } snap) return;
-        var items = new List<Control>();
-        if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch or GraphRefKind.Tag)
-            items.Add(Item($"Check out {r.Name}", () => BeginCheckout(GraphCheckout.ForRef(snap, r), _graph.Canvas)));
-        if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
-            items.Add(WhyNotHide(r) is { Length: > 0 } why ? Note($"Can't hide: {why}") : Item($"Hide {r.Name} from the graph", () => ToggleHidden(r, true)));
-        if (items.Count > 0) ShowMenu(_graph.Canvas, atPointer: true, items.ToArray());
-    }
-
     /// <summary>For the headless render (settings persistence is off there): hides the first remote branch.</summary>
     internal void PreviewHideFirstRemote()
     {

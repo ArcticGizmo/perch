@@ -30,6 +30,7 @@ internal sealed partial class GitTreeWindow
 
     private void BuildCheckoutUi()
     {
+        BuildBusyCover();
         _toastMsg = new TextBlock { FontSize = 12.5, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
         _toastCmd = new TextBlock { FontFamily = Mono, FontSize = 11.5, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
         _toastUndo = new Button { Content = "Undo", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
@@ -76,8 +77,60 @@ internal sealed partial class GitTreeWindow
         };
     }
 
+    // ---- busy cover ----
+
+    private Border _busyOverlay = null!, _busyCard = null!;
+    private TextBlock _busyText = null!;
+    private bool _clearBusyOnLoad;
+    private DispatcherTimer? _busyFallback;
+
+    private void BuildBusyCover()
+    {
+        _busyText = new TextBlock { FontSize = 13, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0) };
+        _busyCard = new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(28, 18), CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 18, OffsetY = 3, Color = Color.FromArgb(90, 0, 0, 0) }),
+            Child = new StackPanel { Children = { new ProgressBar { IsIndeterminate = true, Width = 220 }, _busyText } },
+        };
+        _busyOverlay = new Border { IsVisible = false, Child = _busyCard };
+    }
+
+    // Greys the graph out while git changes what it shows, so the old picture can't be mistaken for the new one or
+    // acted on. It lifts when the refreshed graph is on screen (ShowSnapshot), or after 20 s whatever happens.
+    private void SetGraphBusy(string text)
+    {
+        _busyText.Text = text;
+        _busyOverlay.IsVisible = true;
+        _clearBusyOnLoad = false;
+        _busyFallback ??= new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background, (_, _) => ClearGraphBusy());
+        _busyFallback.Stop();
+        _busyFallback.Start();
+    }
+
+    // The git work is done: lift the cover with the next graph load.
+    private void ClearBusyOnNextLoad() => _clearBusyOnLoad = _busyOverlay.IsVisible;
+
+    private void ClearGraphBusy()
+    {
+        _busyFallback?.Stop();
+        _clearBusyOnLoad = false;
+        _busyOverlay.IsVisible = false;
+    }
+
+    private void OnGraphLoaded()
+    {
+        if (_clearBusyOnLoad) ClearGraphBusy();
+    }
+
     private void ApplyCheckoutPalette()
     {
+        if (_pal.PaneBg is ISolidColorBrush pane)
+            _busyOverlay.Background = new SolidColorBrush(pane.Color, 0.85);
+        _busyCard.Background = _pal.WindowBg;
+        _busyCard.BorderBrush = _pal.Border;
+        _busyText.Foreground = _pal.Title;
         _toast.Background = _pal.WindowBg;
         _toast.BorderBrush = _toastError ? _pal.Red : _pal.Border;
         _toastMsg.Foreground = _toastError ? _pal.Red : _pal.Title;
@@ -162,12 +215,14 @@ internal sealed partial class GitTreeWindow
         string dest = Dest(plan, newBranch);
         int changes = _lastStatus?.Changes.Count ?? 0;
         ShowToast($"Checking out {dest}…", "", null, busy: true);
+        SetGraphBusy($"Checking out {dest}…");
         System.Threading.Tasks.Task.Run(() => GitOps.Checkout(cwd, plan.Action, plan.Target, dirty, newBranch)).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
                 if (!IsVisible) return;
+                ClearBusyOnNextLoad();
                 var (r, undo) = t.Result;
                 if (r.Ok && undo is not null)
                 {
@@ -185,7 +240,7 @@ internal sealed partial class GitTreeWindow
                 {
                     ShowToast(r.Message, r.Command, null, error: true);
                 }
-                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false);
+                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false); else ClearGraphBusy();
             });
         });
     }
@@ -194,16 +249,18 @@ internal sealed partial class GitTreeWindow
     {
         string back = undo.Before.Branch ?? Short(undo.Before.Hash);
         ShowToast($"Going back to {back}…", "", null, busy: true);
+        SetGraphBusy($"Going back to {back}…");
         System.Threading.Tasks.Task.Run(() => GitOps.Undo(cwd, undo)).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
                 if (!IsVisible) return;
+                ClearBusyOnNextLoad();
                 var r = t.Result;
                 if (r.Ok) ShowToast($"Back on {back}{(undo.Stash is null ? "" : ", stash restored")}", r.Command, null);
                 else ShowToast(r.Message, r.Command, null, error: true);
-                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false);
+                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false); else ClearGraphBusy();
             });
         });
     }
