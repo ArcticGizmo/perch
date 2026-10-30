@@ -44,7 +44,18 @@ internal sealed class GraphCanvas : Control
 
     private const double FontSize = 12.5, SmallSize = 11.5, PillSize = 11.5;
     private const double LaneW = 16, GraphPad = 12, MinGraphW = 44, MaxGraphW = 280;
-    private const double RefsW = 188, AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760;
+    private const double DefaultRefsW = 188, MinRefsW = 70, MaxRefsW = 480, MaxLanesW = 900;
+    private const double AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760, MaxPillText = 160;
+
+    // The pill column's width and, once the user has dragged it, the lane column's (null = sized to the graph).
+    private double _refsW = DefaultRefsW;
+    private double? _lanesW;
+
+    // Column-edge resizing: which edge the pointer is over (0 = none, 1 = pills|lanes, 2 = lanes|subject), and the
+    // edge being dragged with the width it started from.
+    private int _edgeHover;
+    private (int Edge, double StartX, double StartW)? _edgeDrag;
+    private const double EdgeGrip = 4;
     private const double NodeR = 4.5, MergeR = 3.6, RingR = 8, WipR = 5.5;
     private const int CurveSteps = 8;
 
@@ -281,8 +292,24 @@ internal sealed class GraphCanvas : Control
         return r >= 0 && r < _snap.Rows.Length ? r : -1;
     }
 
-    private double GraphWidth => _snap is null ? MinGraphW : Math.Clamp(GraphPad * 2 + _snap.Width * LaneW, MinGraphW, MaxGraphW);
-    private double LaneX(int lane) => RefsW + GraphPad + lane * LaneW;
+    private double GraphWidth => _lanesW
+        ?? (_snap is null ? MinGraphW : Math.Clamp(GraphPad * 2 + _snap.Width * LaneW, MinGraphW, MaxGraphW));
+
+    /// <summary>The user dragged a column edge; the host persists the widths (0 = lanes sized to the graph).</summary>
+    public event Action<double, double>? ColumnsResized;
+
+    /// <summary>Restores dragged column widths (0 keeps the default pill width / lanes sized to the graph).</summary>
+    public void SetColumnWidths(double refs, double lanes)
+    {
+        _refsW = refs > 0 ? Math.Clamp(refs, MinRefsW, MaxRefsW) : DefaultRefsW;
+        _lanesW = lanes > 0 ? Math.Clamp(lanes, MinGraphW, MaxLanesW) : null;
+        InvalidateVisual();
+    }
+
+    // Which column edge is under x: the pills|lanes edge, or the lanes|subject edge.
+    private int EdgeAt(double x) =>
+        Math.Abs(x - _refsW) <= EdgeGrip ? 1 : Math.Abs(x - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
+    private double LaneX(int lane) => _refsW + GraphPad + lane * LaneW;
     private double RowMid(int row) => row * _rowH - _offset + _rowH / 2;
 
     // ---- paint ----
@@ -303,7 +330,7 @@ internal sealed class GraphCanvas : Control
         int first = Math.Max(0, (int)Math.Floor(_offset / _rowH));
         int last = Math.Min(s.Rows.Length - 1, (int)Math.Ceiling((_offset + size.Height) / _rowH));
         double graphW = GraphWidth;
-        double subjX = RefsW + graphW + Gap;
+        double subjX = _refsW + graphW + Gap;
         double whenX = size.Width - WhenW - Gap;
         // In a narrow pane the subject matters more than the author, so the author column goes first.
         double authorX = whenX - (size.Width < NarrowW ? 0 : AuthorW);
@@ -322,7 +349,7 @@ internal sealed class GraphCanvas : Control
             }
         }
 
-        using (ctx.PushClip(new Rect(RefsW, 0, graphW, size.Height)))
+        using (ctx.PushClip(new Rect(_refsW, 0, graphW, size.Height)))
         {
             // The band above each visible row, plus the one below the last (its upper end may be on screen).
             for (int r = first; r <= Math.Min(last + 1, s.Rows.Length - 1); r++)
@@ -335,6 +362,12 @@ internal sealed class GraphCanvas : Control
 
         for (int r = first; r <= last; r++)
             PaintRow(ctx, s, r, subjX, subjW, authorX, whenX);
+
+        if ((_edgeDrag?.Edge ?? _edgeHover) is var edge and > 0)
+        {
+            double ex = edge == 1 ? _refsW : _refsW + graphW;
+            ctx.DrawLine(_dropPen, new Point(ex, 0), new Point(ex, size.Height));
+        }
 
         if (_drop is not null)
             for (int r = first; r <= last; r++)
@@ -359,7 +392,7 @@ internal sealed class GraphCanvas : Control
         var row = s.Rows[r];
         int lane = row.Lane % _lane.Length;
         double y = RowMid(r), x = LaneX(row.Lane);
-        bool inGraph = x < RefsW + GraphWidth - 2;
+        bool inGraph = x < _refsW + GraphWidth - 2;
 
         if (c.IsWorkInProgress)
         {
@@ -411,7 +444,7 @@ internal sealed class GraphCanvas : Control
     private void Pills(DrawingContext ctx, GraphSnapshot s, int r, IReadOnlyList<GraphRef> refs,
         IReadOnlyList<GraphWorktree> worktrees, int lane, double nodeX, double y)
     {
-        double right = RefsW - 6;
+        double right = _refsW - 6;
         double left = 8;
         int shown = 0, total = 0;
         string? current = null;
@@ -431,11 +464,15 @@ internal sealed class GraphCanvas : Control
                 bool here = local && rf.Name == current;
                 bool checkedOut = local && IsCheckedOut(s, rf.Name);
                 var ink = here ? _bg : local ? _laneFill[lane] : _muted;
-                var ft = OverlayDraw.Text(Fit(rf.Name, PillSize, 140), PillSize, ink, FontWeight.SemiBold);
                 double lead = checkedOut ? 13 : 0, trail = synced ? 10 : 0;
-                double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
-                if (right - w < left)
+                // The first pill (this worktree's branch when it's here) always gets one, cut to the room there is;
+                // later ones are capped and leave space for the "+N".
+                double room = right - left - 14 - lead - trail;
+                double cap = shown == 0 ? room : Math.Min(MaxPillText, room - 24);
+                if (cap < 28)
                     continue;
+                var ft = OverlayDraw.Text(OverlayDraw.ElideMiddle(rf.Name, PillSize, cap, FontWeight.SemiBold), PillSize, ink, FontWeight.SemiBold);
+                double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
                 var rect = new Rect(right - w, y - h / 2, w, h);
                 if (here)
                     OverlayDraw.Panel(ctx, rect, _laneFill[lane], null, 5);
@@ -452,7 +489,7 @@ internal sealed class GraphCanvas : Control
                 if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
                     ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
                 if (shown == 0)
-                    ctx.DrawLine(_pillBorder[lane], new Point(RefsW - 6, y), new Point(nodeX - RingR - 1, y));
+                    ctx.DrawLine(_pillBorder[lane], new Point(_refsW - 6, y), new Point(nodeX - RingR - 1, y));
                 right = rect.X - 4;
                 shown++;
             }
@@ -505,9 +542,9 @@ internal sealed class GraphCanvas : Control
 
     private void WorktreePill(DrawingContext ctx, GraphWorktree wt, int lane, double y)
     {
-        var ft = OverlayDraw.Text(Fit(wt.Name, PillSize, RefsW - 34), PillSize, _laneFill[lane], FontWeight.SemiBold);
+        var ft = OverlayDraw.Text(OverlayDraw.ElideMiddle(wt.Name, PillSize, Math.Max(0, _refsW - 42), FontWeight.SemiBold), PillSize, _laneFill[lane], FontWeight.SemiBold);
         double w = ft.Width + 27, h = ft.Height + 4;
-        var rect = new Rect(RefsW - 6 - w, y - h / 2, w, h);
+        var rect = new Rect(_refsW - 6 - w, y - h / 2, w, h);
         OverlayDraw.Panel(ctx, rect, null, _pillDash[lane], 5);
         FolderGlyph(ctx, _laneFill[lane], rect.X + 7, y);
         ctx.DrawText(ft, new Point(rect.X + 20, y - ft.Height / 2));
@@ -590,6 +627,23 @@ internal sealed class GraphCanvas : Control
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         Focus();
         var pos = e.GetPosition(this);
+        if (EdgeAt(pos.X) is var edge and > 0)
+        {
+            // Double-clicking an edge puts the column back to its default.
+            if (e.ClickCount == 2)
+            {
+                if (edge == 1) _refsW = DefaultRefsW; else _lanesW = null;
+                ColumnsResized?.Invoke(_refsW == DefaultRefsW ? 0 : _refsW, _lanesW ?? 0);
+                InvalidateVisual();
+            }
+            else
+            {
+                _edgeDrag = (edge, pos.X, edge == 1 ? _refsW : GraphWidth);
+                e.Pointer.Capture(this);
+            }
+            e.Handled = true;
+            return;
+        }
         int r = RowAt(pos.Y);
         if (r < 0) return;
         Select(r, scrollIntoView: false);
@@ -611,6 +665,11 @@ internal sealed class GraphCanvas : Control
     {
         base.OnPointerReleased(e);
         _press = null;
+        if (_edgeDrag is not null)
+        {
+            _edgeDrag = null;
+            ColumnsResized?.Invoke(_refsW == DefaultRefsW ? 0 : _refsW, _lanesW ?? 0);
+        }
     }
 
     // Past the threshold, a press on a branch pill drags that branch and a press elsewhere on a commit row drags the
@@ -627,6 +686,23 @@ internal sealed class GraphCanvas : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
+        var at = e.GetPosition(this);
+        if (_edgeDrag is { } drag)
+        {
+            double w = drag.StartW + at.X - drag.StartX;
+            if (drag.Edge == 1) _refsW = Math.Clamp(w, MinRefsW, MaxRefsW);
+            else _lanesW = Math.Clamp(w, MinGraphW, MaxLanesW);
+            InvalidateVisual();
+            return;
+        }
+        int edge = _press is null ? EdgeAt(at.X) : 0;
+        if (edge != _edgeHover)
+        {
+            _edgeHover = edge;
+            Cursor = edge > 0 ? new Cursor(StandardCursorType.SizeWestEast) : Cursor.Default;
+            InvalidateVisual();
+        }
+        UpdatePillTip(at);
         if (_press is { } press && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             var d = e.GetPosition(this) - press.At;
@@ -647,9 +723,22 @@ internal sealed class GraphCanvas : Control
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
-        if (_hover < 0) return;
+        UpdatePillTip(null);
+        if (_hover < 0 && _edgeHover == 0) return;
         _hover = -1;
+        _edgeHover = 0;
         InvalidateVisual();
+    }
+
+    // A pill's full name as a tooltip, since long names are cut in the middle.
+    private GraphRef? _tipRef;
+    private void UpdatePillTip(Point? at)
+    {
+        var r = at is { } p && _edgeDrag is null ? RefAt(p) : null;
+        if (r == _tipRef) return;
+        _tipRef = r;
+        ToolTip.SetTip(this, r?.Name);
+        ToolTip.SetIsOpen(this, r is not null);
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)

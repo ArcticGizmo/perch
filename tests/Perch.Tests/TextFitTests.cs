@@ -47,6 +47,15 @@ public sealed class TextFitTests
         Assert.Equal("café…", TextFit.Truncate(text, 5, Graphemes));
     }
 
+    [Theory]
+    [InlineData("main", 10, "main")]                                                  // fits: unchanged
+    [InlineData("dependabot/npm_and_yarn/site/site-1e18", 20, "dependabot/…ite-1e18")] // first segment + the end
+    [InlineData("dependabot/npm_and_yarn/site/site-1e18", 14, "…ite/site-1e18")]       // too little room after it: just the end
+    [InlineData("feature", 4, "…ure")]                                                 // no segments: the end
+    [InlineData("feature", 0, "")]
+    public void Branch_names_lose_their_middle(string text, double width, string expected) =>
+        Assert.Equal(expected, TextFit.ElideMiddle(text, width, Graphemes));
+
     [Fact]
     public void Measures_only_logarithmically_many_prefixes()
     {

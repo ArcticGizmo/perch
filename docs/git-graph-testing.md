@@ -56,6 +56,14 @@ Use a throwaway clone or a branch you don't mind moving, with at least one extra
 9. **Already there.** Double-click the branch this worktree is on: toast "<worktree> is already on <branch>." Nothing runs.
 10. **Light/dark** recolours the toast and the branch bar.
 
+## Feedback round 1: diff over the graph, steady header, resizable columns
+
+1. **Diff over the graph.** The window is now graph (left) | files (right). Click a commit: its files fill the right pane, and the graph stays visible. Click a file (or select it and press Enter): its diff covers the graph, with a bar on top ("abc1234 · path", or "Working tree / Staged · path") and **✕** top right. ✕ or Esc goes back to the graph. While the diff is open, clicking other files switches the diff. The + / − stage buttons on file rows don't open it. "View diff" from a session opens straight onto that file's diff. *Before:* a third pane on the right always showed the diff, squeezing the graph.
+2. **Steady header.** The All / Worktrees / This branch switch (and the "since ⑂ base" picker) now sit in the graph card's own title row, in a fixed place. The window header shows the branch, status and path, and trims instead of pushing anything (the path keeps its folder name). *Before:* the switch moved left and right as the branch name and status changed length.
+3. **Branch pills.** The branch this worktree has checked out always gets its pill, even when the name is long. Long names lose their middle (`dependabot/…site-1e1827e218`) and hovering a pill shows the full name. *Before:* a long checked-out branch's pill vanished into "+1", and names were cut at the end.
+4. **Resizable columns.** Hover the edge between the pills and the lanes, or between the lanes and the commit messages: the cursor becomes ↔ and a line shows. Drag to resize. Double-click an edge to put it back. The widths are remembered next time.
+5. Light/dark recolours the diff bar.
+
 ## CP12–CP14: drag to merge, rebase, cherry-pick and make worktrees
 
 Use a throwaway clone. Set it up with: two local branches that have diverged (`a` and `b`, each with a commit the other lacks), a branch `behind` that is an ancestor of `main` (`git branch behind main~2`), and one extra worktree (`git worktree add ..\<repo>--try b`). *Before (all of these):* nothing in the graph or rail could be dragged.

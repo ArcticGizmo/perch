@@ -692,6 +692,18 @@ internal static class HeadlessRenderer
                 liveFrame.Save(fs);
             }
 
+            // The selected node's first file, opened over the graph as a file click would.
+            tw.PreviewDiff(open: true);
+            for (var until = DateTime.UtcNow.AddSeconds(2); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } diffFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_diff_open_1x.png"));
+                diffFrame.Save(fs);
+            }
+            tw.PreviewDiff(open: false);
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.

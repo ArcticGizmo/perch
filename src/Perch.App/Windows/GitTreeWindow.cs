@@ -12,6 +12,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Data;
@@ -58,7 +59,10 @@ internal sealed partial class GitTreeWindow : Window
     private readonly Button _scopeAllBtn, _scopeWorktreesBtn, _scopeBranchBtn;
     private readonly Button _stageLinesBtn;
     private readonly Border _headerBorder;
-    private readonly TextBlock _graphLabel;
+    private readonly TextBlock _pathText;
+    private readonly Border _diffOverlay;     // the diff, shown over the graph while a file is open
+    private readonly Border _diffTopBar;
+    private readonly TextBlock _diffTitle;
     private readonly TextBlock _filesLabel;
     private readonly TextBlock _unstagedLabel;
     private readonly TextBlock _stagedLabel;
@@ -255,11 +259,24 @@ internal sealed partial class GitTreeWindow : Window
         _scopeWorktreesBtn = ScopeButton("Worktrees", GraphScope.Worktrees, "The main branch and whatever each worktree has checked out");
         _scopeBranchBtn = ScopeButton("This branch", GraphScope.Branch, "This worktree's branch back to where it left its base");
         var scopeSegment = Segment(_scopeAllBtn, _scopeWorktreesBtn, _scopeBranchBtn);
-        scopeSegment.Margin = new Thickness(14, 0, 0, 0);
         scopeSegment.SetValue(DockPanel.DockProperty, Dock.Left);
 
-        var headerText = new StackPanel { Orientation = Orientation.Vertical, Children = { _titleText, _subText } };
-        headerText.SetValue(DockPanel.DockProperty, Dock.Left);
+        // The header's text fills what the buttons leave and trims, so nothing beside it moves as the branch name or
+        // status changes length. The path keeps its folder name (leading ellipsis); the branch/status part keeps its start.
+        _subText.TextTrimming = TextTrimming.CharacterEllipsis;
+        _subText.MaxWidth = 520;
+        _subText.SetValue(DockPanel.DockProperty, Dock.Left);
+        _pathText = new TextBlock
+        {
+            Foreground = Palette.MutedBrush, FontSize = 12, Margin = new Thickness(0, 2, 0, 0),
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        };
+        _titleText.TextTrimming = TextTrimming.CharacterEllipsis;
+        var headerText = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Children = { _titleText, new DockPanel { LastChildFill = true, Children = { _subText, _pathText } } },
+        };
         _headerBorder = new Border
         {
             Padding = new Thickness(14, 10),
@@ -267,22 +284,34 @@ internal sealed partial class GitTreeWindow : Window
             [DockPanel.DockProperty] = Dock.Top,
             Child = new DockPanel
             {
-                // _themeBtn is first so it sits at the far right of the header; the title, then the scope
-                // segment and base picker, read left to right.
-                LastChildFill = false,
-                Children = { _themeBtn, _prChip, refreshBtn, _stageLinesBtn, headerText, scopeSegment, _baseBtn },
+                // The buttons dock right first; the title block fills the rest.
+                LastChildFill = true,
+                Children = { _themeBtn, _prChip, refreshBtn, headerText },
             },
         };
 
         // ---- pane 1: the graph ----
         _graph = new GraphPane();
         _graph.Canvas.SetColors(GraphCanvas.Colors.For(_light));
+        _graph.Canvas.SetColumnWidths(settings.GitTreeRefsWidth, settings.GitTreeLanesWidth);
+        _graph.Canvas.ColumnsResized += (refs, lanes) =>
+        {
+            _settings.GitTreeRefsWidth = refs;
+            _settings.GitTreeLanesWidth = lanes;
+            _settings.Save();
+        };
         _graph.Canvas.SelectionChanged += OnGraphSelected;
         _graph.Canvas.RowActivated += OnGraphActivated;
         _graph.Canvas.RefActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _graph.Canvas); };
         _graph.Canvas.LoadMoreRequested += LoadMore;
         _graph.Canvas.DragRequested += BeginDrag;
-        _graphLabel = PaneLabel(ScopeLabel(_scope));
+        // The graph card's own title row: what it shows (and, for "This branch", since when), in a fixed place.
+        _baseBtn.SetValue(DockPanel.DockProperty, Dock.Left);
+        var graphHeader = new DockPanel
+        {
+            LastChildFill = false, Margin = new Thickness(10, 8, 10, 6), [DockPanel.DockProperty] = Dock.Top,
+            Children = { scopeSegment, _baseBtn },
+        };
 
         _rail = new GraphRail();
         _rail.JumpRequested += hash => { if (_snap?.RowOf(hash) is int r and >= 0) _graph.Canvas.Flash(r); };
@@ -318,7 +347,7 @@ internal sealed partial class GitTreeWindow : Window
         graphBody.Children.Add(WithColumn(_toast, 2));
         _dragLayer.SetValue(Grid.ColumnSpanProperty, 3);
         graphBody.Children.Add(_dragLayer);
-        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, _branchBar, _progressBar, graphBody } };
+        var graphPane = new DockPanel { LastChildFill = true, Children = { graphHeader, _gotoBar, _branchBar, _progressBar, graphBody } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -393,6 +422,10 @@ internal sealed partial class GitTreeWindow : Window
 
         _commitAreaHost = new Grid { Children = { _filesList, _filesEmpty } };
 
+        OpensDiff(_filesList);
+        OpensDiff(_unstagedList);
+        OpensDiff(_stagedList);
+
         _filesLabel = PaneLabel("Files");
         var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
         var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, filesBody } };
@@ -465,32 +498,111 @@ internal sealed partial class GitTreeWindow : Window
             IsHitTestVisible = false,
         };
         var diffArea = new Grid { Children = { _diffScroll, _diffPlaceholder, _floatingBar } };
-        var diffPane = new DockPanel { LastChildFill = true, Children = { _findBar, diffArea } };
 
-        // ---- three resizable panes: graph | files | diff, as rounded cards on a padded "page", with the
-        // GridSplitters as wide, transparent breathing gutters (the page shows through them). ----
+        // The diff opens over the graph (GitKraken's layout), so it gets the window's width to read in: a file click
+        // opens it, ✕ or Esc goes back to the graph.
+        _diffTitle = new TextBlock
+        {
+            FontFamily = Mono, FontSize = 12.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        };
+        var diffClose = new Button
+        {
+            Content = "✕", FontSize = 14, Padding = new Thickness(10, 3), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0), Cursor = new Cursor(StandardCursorType.Hand), [DockPanel.DockProperty] = Dock.Right,
+        };
+        diffClose.Click += (_, _) => CloseDiff();
+        ToolTip.SetTip(diffClose, "Back to the graph (Esc)");
+        _diffTopBar = new Border
+        {
+            Padding = new Thickness(12, 6), BorderThickness = new Thickness(0, 0, 0, 1), [DockPanel.DockProperty] = Dock.Top,
+            Child = new DockPanel { LastChildFill = true, Children = { diffClose, _stageLinesBtn, _diffTitle } },
+        };
+        _diffOverlay = new Border
+        {
+            IsVisible = false,
+            Child = new DockPanel { LastChildFill = true, Children = { _diffTopBar, _findBar, diffArea } },
+        };
+        var mainArea = new Grid { Children = { graphPane, _diffOverlay } };
+
+        // ---- two resizable panes: graph (or the open diff) | files, as rounded cards on a padded "page", with the
+        // GridSplitter as a wide, transparent breathing gutter (the page shows through it). ----
         var body = new Grid
         {
             Margin = new Thickness(14, 12, 14, 14),
             ColumnDefinitions = new ColumnDefinitions
             {
-                // The graph carries ref pills, lanes, subjects and authors, so it takes the larger share.
-                new(new GridLength(1.7, GridUnitType.Star)) { MinWidth = 640 },
+                new(new GridLength(1, GridUnitType.Star)) { MinWidth = 560 },
                 new(GridLength.Auto),
-                new(new GridLength(280, GridUnitType.Pixel)) { MinWidth = 180 },
-                new(GridLength.Auto),
-                new(new GridLength(1, GridUnitType.Star)) { MinWidth = 240 },
+                new(new GridLength(380, GridUnitType.Pixel)) { MinWidth = 220 },
             },
         };
-        body.Children.Add(WithColumn(Card(graphPane), 0));
+        body.Children.Add(WithColumn(Card(mainArea), 0));
         body.Children.Add(WithColumn(Splitter(), 1));
         body.Children.Add(WithColumn(Card(filesPane), 2));
-        body.Children.Add(WithColumn(Splitter(), 3));
-        body.Children.Add(WithColumn(Card(diffPane), 4));
 
         Content = new DockPanel { Children = { _headerBorder, body } };
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
+    }
+
+    // ---- the diff over the graph ----
+
+    // A click or Enter on a file row opens its diff; selecting a commit only fills the file list, so browsing the
+    // graph never covers it. The row's own stage/unstage button doesn't count as opening.
+    private void OpensDiff(ListBox list)
+    {
+        list.Tapped += (_, e) =>
+        {
+            for (var v = e.Source as Visual; v is not null && v != list; v = v.GetVisualParent())
+                if (v is Button) return;
+            OpenDiff();
+        };
+        list.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            OpenDiff();
+            e.Handled = true;
+        };
+    }
+
+    private void OpenDiff()
+    {
+        if (CurrentFilePath() is null) return;
+        _openDiffWhenShown = false;
+        UpdateDiffTitle();
+        _diffOverlay.IsVisible = true;
+    }
+
+    /// <summary>For the headless render: opens or closes the diff over the graph, as a file click / ✕ would.</summary>
+    internal void PreviewDiff(bool open) { if (open) OpenDiff(); else CloseDiff(); }
+
+    // Set when a file was asked for before its node's file list had loaded; the first file shown opens the diff.
+    private bool _openDiffWhenShown;
+
+    // A file became the shown one (by a click or a reload): keep the open diff's title current, and open it if one
+    // was asked for.
+    private void OnFileShown()
+    {
+        if (_openDiffWhenShown) OpenDiff();
+        else if (_diffOverlay.IsVisible) UpdateDiffTitle();
+    }
+
+    private void CloseDiff()
+    {
+        if (!_diffOverlay.IsVisible) return;
+        _diffOverlay.IsVisible = false;
+        if (_findBar.IsVisible) CloseFind();
+        _graph.Canvas.Focus();
+    }
+
+    // "abc1234 · path" for a commit's file; "Working tree · path" or "Staged · path" for this worktree's changes.
+    private void UpdateDiffTitle()
+    {
+        var path = CurrentFilePath() ?? "";
+        _diffTitle.Text = _selectedNode is { IsWip: true }
+            ? $"{(_shownWip?.Staged == true ? "Staged" : "Working tree")}  ·  {path}"
+            : $"{(_selectedCommitHash.Length > 7 ? _selectedCommitHash[..7] : _selectedCommitHash)}  ·  {path}";
     }
 
     // A vertical drag handle between two panes — a wide, transparent breathing gutter so the page shows
@@ -599,6 +711,7 @@ internal sealed partial class GitTreeWindow : Window
         {
             if (CancelDrag()) { }
             else if (_findBar.IsVisible) CloseFind();
+            else if (_diffOverlay.IsVisible) CloseDiff();
             else if (_branchBar.IsVisible) CloseBranchBar();
             else if (_gotoBar.IsVisible) CloseGoTo();
             else Close();
@@ -670,6 +783,7 @@ internal sealed partial class GitTreeWindow : Window
         // absolute path to the repo-relative, forward-slash form git status reports, so the tip node's file
         // reselection (below) matches it. Consumed once by the next RefreshStatus.
         _pendingFocusFile = ToRepoRelative(cwd, focusPath);
+        if (_pendingFocusFile is null) CloseDiff();
         _titleText.Text = title;
         if (pr is { } p)
         {
@@ -723,11 +837,14 @@ internal sealed partial class GitTreeWindow : Window
                     // A one-shot focus request (Retarget's focusPath) takes precedence over the default when
                     // we're not preserving a prior selection: land the home node on that file.
                     _pendingFilePath = keepFile ?? _pendingFocusFile;   // ShowNode reselects this file after load
+                    bool openFocused = keepFile is null && _pendingFocusFile is not null;
                     _pendingFocusFile = null;
                     _pendingWipStaged = keepStaged;                     // …on the same side (staged/unstaged)
                     int row = keepNode is not null ? RowOfNodeKey(keepNode) : -1;
                     SelectRow(row >= 0 ? row : snap?.HomeRow() ?? -1);
                     UpdateEmptyStates();
+                    // "View diff" from a session asked for this file: show it straight away.
+                    if (openFocused) { _openDiffWhenShown = true; OpenDiff(); }
                 });
             });
     }
@@ -846,17 +963,9 @@ internal sealed partial class GitTreeWindow : Window
         _scope = scope;
         _settings.GitTreeScope = scope;
         _settings.Save();
-        _graphLabel.Text = ScopeLabel(scope);
         UpdateScopeButtons();
         RefreshStatus(preserveSelection: true);
     }
-
-    private static string ScopeLabel(GraphScope scope) => scope switch
-    {
-        GraphScope.Worktrees => "Graph · worktrees",
-        GraphScope.Branch => "Graph · this branch",
-        _ => "Graph · all branches",
-    };
 
     private Button ScopeButton(string label, GraphScope scope, string tip)
     {
@@ -986,6 +1095,7 @@ internal sealed partial class GitTreeWindow : Window
     // Clears the files and diff panes, with a hint where the file list would be.
     private void ShowNothing(string hint)
     {
+        CloseDiff();
         _selectedNode = null;
         ++_gen;
         _wipPanel.IsVisible = false;
@@ -1155,6 +1265,7 @@ internal sealed partial class GitTreeWindow : Window
         _shownWip = (fc.Path, staged);
         _shownCommit = null;
         LoadWipContent(cwd, fc.Path, staged);
+        OnFileShown();
     }
 
     // Loads the shown working-tree file per the current content mode (off-thread), then paints it.
@@ -1227,6 +1338,7 @@ internal sealed partial class GitTreeWindow : Window
         _shownWip = null;
         _shownCommit = (_selectedCommitHash, gf);
         LoadCommitContent(cwd, _selectedCommitHash, gf);
+        OnFileShown();
     }
 
     // Loads the shown commit file per the current content mode. Diff is already in hand (no git); Previous/
@@ -1660,20 +1772,16 @@ internal sealed partial class GitTreeWindow : Window
     {
         if (status is not { } s)
         {
-            _subText.Text = cwd;
+            _subText.Text = "";
+            _pathText.Text = cwd;
             _baseBtn.Content = "since ⑂ …";
             return;
         }
         string branch = s.Branch ?? "(detached)";
         string ab = (s.Ahead, s.Behind) switch { (0, 0) => "", var (a, b) => $"  ·  ↑{a} ↓{b}" };
         string dirty = s.IsClean ? "clean" : $"{s.Changes.Count} change{(s.Changes.Count == 1 ? "" : "s")}";
-        string scope = _scope switch
-        {
-            GraphScope.Branch => _effectiveBase is { } b2 ? $"since {b2}" : "recent",
-            GraphScope.Worktrees => $"{_snap?.Worktrees.Count ?? 1} worktree{(_snap?.Worktrees.Count == 1 ? "" : "s")}",
-            _ => "all branches",
-        };
-        _subText.Text = $"{branch}{ab}  ·  {scope}  ·  {dirty}  ·  {cwd}";
+        _subText.Text = $"{branch}{ab}  ·  {dirty}  ·  ";
+        _pathText.Text = cwd;
         _baseBtn.Content = _effectiveBase is { } b3 ? $"since ⑂ {b3}" : "recent (all)";
     }
 
@@ -1927,12 +2035,16 @@ internal sealed partial class GitTreeWindow : Window
         // The find bar (top of the diff card) and composer (bottom of the files card) read as recessed
         // toolbar strips in the page tone within their cards.
         _findBar.Background = _pal.WindowBg;
+        _diffOverlay.Background = _pal.PaneBg;
+        _diffTopBar.Background = _pal.WindowBg;
+        _diffTopBar.BorderBrush = _pal.Separator;
+        _diffTitle.Foreground = _pal.Title;
         _composer.Background = _pal.WindowBg;
         _composer.BorderBrush = _pal.Separator;
 
         _titleText.Foreground = _pal.Title;
         _subText.Foreground = _pal.Muted;
-        _graphLabel.Foreground = _pal.Muted;
+        _pathText.Foreground = _pal.Muted;
         _filesLabel.Foreground = _pal.Muted;
         _unstagedLabel.Foreground = _pal.Muted;
         _stagedLabel.Foreground = _pal.Muted;

@@ -452,6 +452,12 @@ internal sealed class AppSettings
     // key shows every branch.
     public GitGraph.GraphScope GitTreeScope { get; set; } = GitGraph.GraphScope.All;
 
+    // The git Tree graph's ref-pill column width and lane column width, in DIPs, set by dragging the column edges in
+    // the graph and persisted — not a Settings control (see SettingsRegistryTests.NotSettings). 0 (or a missing key)
+    // means the default pill width and lanes sized to the graph.
+    public double GitTreeRefsWidth { get; set; }
+    public double GitTreeLanesWidth { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty
