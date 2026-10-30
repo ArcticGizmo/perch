@@ -414,6 +414,105 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal(0, Run("rev-parse", "--verify", "--quiet", "refs/heads/feature").exit);   // the branch stays
     }
 
+    [Fact]
+    public void DiscardFileEntirely_PutsStagedUnstagedAddedAndRenamedFilesBack()
+    {
+        if (!_ready) return;
+        var git = new Perch.Data.GitRepoService();
+        string Text(string f) => File.ReadAllText(Path.Combine(_repo, f)).Trim();
+
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "staged\n");
+        Run("add", "a.txt");
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "staged and more\n");
+        Assert.True(git.DiscardFileEntirely(_repo, "a.txt", null).Ok);
+        Assert.Equal("root", Text("a.txt"));
+
+        File.WriteAllText(Path.Combine(_repo, "new.txt"), "new\n");
+        Run("add", "new.txt");
+        Assert.True(git.DiscardFileEntirely(_repo, "new.txt", null).Ok);
+        Assert.False(File.Exists(Path.Combine(_repo, "new.txt")));
+
+        Run("mv", "m.txt", "n.txt");
+        Assert.True(git.DiscardFileEntirely(_repo, "n.txt", "m.txt").Ok);
+        Assert.Equal("m1", Text("m.txt"));
+        Assert.False(File.Exists(Path.Combine(_repo, "n.txt")));
+
+        Assert.Equal("", Run("status", "--porcelain").stdout.Trim());
+    }
+
+    [Fact]
+    public void DeleteFile_StagesATrackedDeletionAndRemovesUntrackedFolders()
+    {
+        if (!_ready) return;
+        var git = new Perch.Data.GitRepoService();
+
+        Assert.True(git.DeleteFile(_repo, "a.txt", untracked: false).Ok);
+        Assert.False(File.Exists(Path.Combine(_repo, "a.txt")));
+        Assert.Equal("D\ta.txt", Run("diff", "--cached", "--name-status").stdout.Trim());
+
+        Directory.CreateDirectory(Path.Combine(_repo, "scratch"));
+        File.WriteAllText(Path.Combine(_repo, "scratch", "x.txt"), "x\n");
+        Assert.True(git.DeleteFile(_repo, "scratch/", untracked: true).Ok);
+        Assert.False(Directory.Exists(Path.Combine(_repo, "scratch")));
+
+        Assert.False(git.DeleteFile(_repo, "../outside.txt", untracked: true).Ok);
+    }
+
+    [Fact]
+    public void StashThenPopTop_RoundTrips()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "wip\n");
+        File.WriteAllText(Path.Combine(_repo, "u.txt"), "untracked\n");
+
+        Assert.True(GitOps.StashPush(_repo, "WIP on main").Ok);
+        Assert.Equal("", Run("status", "--porcelain").stdout.Trim());
+        Assert.True(GitOps.StashPopTop(_repo).Ok);
+        Assert.Equal("wip", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());
+        Assert.True(File.Exists(Path.Combine(_repo, "u.txt")));
+        Assert.Equal("", Run("stash", "list").stdout.Trim());
+    }
+
+    [Fact]
+    public void PushPublishesANewBranch_AndPullFastForwardsWithUndo()
+    {
+        if (!_ready) return;
+        string origin = _repo + "-origin.git", other = _repo + "-other";
+        Assert.Equal(0, Run("clone", "--bare", _repo, origin).exit);
+        Run("remote", "add", "origin", origin);
+        Run("fetch", "origin");
+        Assert.Equal(0, Run("branch", "-u", "origin/main", "main").exit);
+
+        // Another clone moves main on the remote.
+        Assert.Equal(0, Run("clone", origin, other).exit);
+        Assert.Equal(0, RunIn(other, "-c", "user.email=o@example.com", "-c", "user.name=Other", "-c", "commit.gpgsign=false",
+            "commit", "--allow-empty", "-m", "upstream work").exit);
+        Assert.Equal(0, RunIn(other, "push", "origin", "main").exit);
+
+        var before = Hash("main");
+        var (pulled, undo) = GitOps.Pull(_repo, PullMode.FastForwardOnly);
+        Assert.True(pulled.Ok, pulled.Message);
+        Assert.Equal(RunIn(origin, "rev-parse", "main").stdout.Trim(), Hash("main"));
+        Assert.NotNull(undo);
+        Assert.True(undo!().Ok);
+        Assert.Equal(before, Hash("main"));
+
+        Assert.True(GitOps.Pull(_repo, PullMode.FetchAll).Result.Ok);
+
+        Assert.Equal(0, Run("switch", "-c", "pub").exit);
+        Assert.True(Commit("p.txt", "pub work"));
+        var pushed = GitOps.Push(_repo);
+        Assert.True(pushed.Ok, pushed.Message);
+        Assert.Equal("git push -u origin pub", pushed.Command);
+        Assert.Equal(Hash("pub"), RunIn(origin, "rev-parse", "pub").stdout.Trim());
+        Assert.Equal("origin/pub", Run("rev-parse", "--abbrev-ref", "pub@{upstream}").stdout.Trim());
+
+        Assert.True(Commit("p2.txt", "more"));
+        var again = GitOps.Push(_repo);
+        Assert.True(again.Ok, again.Message);
+        Assert.Equal("git push", again.Command);
+    }
+
     [Theory]
     [InlineData("hint: Waiting for your editor\nfatal: 'feature' is already used by worktree at 'C:/x'", "'feature' is already used by worktree at 'C:/x'")]
     [InlineData("error: Your local changes would be overwritten\n", "Your local changes would be overwritten")]
@@ -427,11 +526,13 @@ public sealed class GitGraphIntegrationTests : IDisposable
         return Run("add", file).exit == 0 && Run("commit", "-m", message).exit == 0;
     }
 
-    private (int exit, string stdout) Run(params string[] args)
+    private (int exit, string stdout) Run(params string[] args) => RunIn(_repo, args);
+
+    private static (int exit, string stdout) RunIn(string dir, params string[] args)
     {
         var psi = new ProcessStartInfo("git")
         {
-            WorkingDirectory = _repo, RedirectStandardOutput = true, RedirectStandardError = true,
+            WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
@@ -449,7 +550,7 @@ public sealed class GitGraphIntegrationTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var dir in new[] { _repo, _repo + "-feature" })
+        foreach (var dir in new[] { _repo, _repo + "-feature", _repo + "-origin.git", _repo + "-other" })
         {
             try
             {

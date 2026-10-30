@@ -311,7 +311,7 @@ internal sealed partial class GitTreeWindow : Window
         var graphHeader = new DockPanel
         {
             LastChildFill = false, Margin = new Thickness(10, 8, 10, 6), [DockPanel.DockProperty] = Dock.Top,
-            Children = { scopeSegment, _baseBtn },
+            Children = { BuildActionBar(), scopeSegment, _baseBtn },
         };
 
         _rail = new GraphRail();
@@ -940,6 +940,7 @@ internal sealed partial class GitTreeWindow : Window
         _rail.SetSnapshot(snap);
         ApplySessions();
         RefreshFind();
+        UpdateActionBar();
         OnGraphLoaded();
     }
 
@@ -2159,6 +2160,7 @@ internal sealed partial class GitTreeWindow : Window
         UpdateModeButtons();
         UpdateContentButtons();
         UpdateScopeButtons();
+        foreach (var b in _actionButtons) StyleSeg(b, active: false);
         _diff.SetLight(_light);
     }
 
@@ -2290,11 +2292,14 @@ internal sealed partial class GitTreeWindow : Window
             Foreground = WipFileColor(fc, staged),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        return new DockPanel
+        var row = new DockPanel
         {
             LastChildFill = true, Margin = new Thickness(10, 5, 8, 5),
+            Background = Brushes.Transparent,   // the whole row answers a right-click, not just the text
             Children = { btn, text },
         };
+        row.ContextRequested += (_, e) => { ShowFileMenu(fc, staged, row); e.Handled = true; };
+        return row;
     }
 
     private FuncDataTemplate<GitDiffFile> CommitFileTemplate() => new((gf, _) =>

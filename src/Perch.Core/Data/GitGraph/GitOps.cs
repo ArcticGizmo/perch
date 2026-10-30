@@ -36,6 +36,19 @@ public enum DirtyChoice
     Carry,
 }
 
+/// <summary>What the graph's Pull button does: GitKraken's four choices.</summary>
+public enum PullMode
+{
+    /// <summary>Fetch every remote and prune; no branch moves.</summary>
+    FetchAll,
+
+    /// <summary><c>pull --ff-only</c>: refuses when the branch has diverged.</summary>
+    FastForwardOnly,
+
+    Merge,
+    Rebase,
+}
+
 /// <summary>How to undo a checkout: where HEAD was, the stash entry it made (popped back on Undo), and whether the
 /// changes were carried across.</summary>
 public sealed record CheckoutUndo(GitHeadState Before, string? Stash, bool Carried);
@@ -89,6 +102,54 @@ internal static class GitOps
         return index < 0
             ? new GitOpResult(false, "That stash is no longer there.", "git stash pop")
             : Run(worktree, "stash", "pop", $"stash@{{{index}}}");
+    }
+
+    /// <summary>Pops the newest stash entry. A pop that conflicts leaves the entry in the list, as git does.</summary>
+    public static GitOpResult StashPopTop(string worktree) => Run(worktree, "stash", "pop");
+
+    /// <summary>
+    /// Pushes this worktree's branch. One with an upstream pushes there; one without is published to
+    /// <c>origin</c> (else the only remote) and set to track it. Never forces.
+    /// </summary>
+    public static GitOpResult Push(string worktree)
+    {
+        if (Head(worktree) is not { Branch: { } branch })
+            return new GitOpResult(false, "HEAD is detached, so there's no branch to push.", "git push");
+        var upstream = GitRunner.Run(worktree, 6000, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}");
+        if (upstream.Exit == 0) return RunNetwork(worktree, "push");
+        if (PushRemote(worktree) is not { } remote)
+            return new GitOpResult(false, "This repo has no remote to push to.", "git push");
+        return Refuse(branch) ?? RunNetwork(worktree, "push", "-u", remote, branch);
+    }
+
+    // Where a branch with no upstream is published: origin when there is one, else the only remote.
+    private static string? PushRemote(string worktree)
+    {
+        var r = GitRunner.Run(worktree, 6000, "remote");
+        if (r.Exit != 0) return null;
+        var remotes = r.Stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return remotes.Contains("origin") ? "origin" : remotes.Length == 1 ? remotes[0] : null;
+    }
+
+    /// <summary>
+    /// Fetches, or pulls into this worktree's branch as <paramref name="mode"/> says. When the branch moved, the undo
+    /// puts it back where it was (<c>reset --keep</c>, which refuses rather than lose local changes); a fetch has none.
+    /// </summary>
+    public static (GitOpResult Result, Func<GitOpResult>? Undo) Pull(string worktree, PullMode mode)
+    {
+        if (mode == PullMode.FetchAll) return (RunNetwork(worktree, "fetch", "--all", "--prune"), null);
+        var before = Head(worktree);
+        var r = mode switch
+        {
+            PullMode.Merge => RunNetwork(worktree, "pull", "--no-rebase", "--no-edit"),
+            PullMode.Rebase => RunNetwork(worktree, "pull", "--rebase"),
+            _ => RunNetwork(worktree, "pull", "--ff-only"),
+        };
+        if (!r.Ok || before is not { Branch: { } branch } || Head(worktree) is not { } after || after.Hash == before.Hash)
+            return (r, null);
+        return (r, () => Head(worktree)?.Branch != branch
+            ? new GitOpResult(false, $"{branch} isn't checked out here any more, so the pull can't be undone.", "")
+            : Run(worktree, "reset", "--keep", before.Hash));
     }
 
     public static GitOpResult Merge(string worktree, string rev) => Refuse(rev) ?? Run(worktree, "merge", "--no-edit", rev);
@@ -368,7 +429,13 @@ internal static class GitOps
             ? new GitOpResult(false, $"'{bad}' looks like an option, not a branch or commit.", "")
             : null;
 
-    private static GitOpResult Run(string worktree, params string[] args)
+    // A fetch, pull or push. Its stdin is redirected and closed, so a credential prompt that would read the terminal a
+    // tray started from fails at once instead of hanging; a credential manager's own window still works.
+    private static GitOpResult RunNetwork(string worktree, params string[] args) => Run(worktree, "", args);
+
+    private static GitOpResult Run(string worktree, params string[] args) => Run(worktree, null, args);
+
+    private static GitOpResult Run(string worktree, string? stdin, string[] args)
     {
         var command = "git " + string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
         try
@@ -379,11 +446,11 @@ internal static class GitOps
                 return new GitOpResult(false, "Another git operation in this repo is still running.", command);
             try
             {
-                var r = GitRunner.Run(worktree, TimeoutMs, GitRunner.Trust.UserAction, null, args);
+                var r = GitRunner.Run(worktree, TimeoutMs, GitRunner.Trust.UserAction, stdin, args);
                 if (r.Exit != 0 && IsLockHeld(r.Stderr))
                 {
                     Thread.Sleep(700);
-                    r = GitRunner.Run(worktree, TimeoutMs, GitRunner.Trust.UserAction, null, args);
+                    r = GitRunner.Run(worktree, TimeoutMs, GitRunner.Trust.UserAction, stdin, args);
                 }
                 if (r.Exit == 0)
                     return new GitOpResult(true, FirstLine(r.Stdout, ""), command);

@@ -203,12 +203,12 @@ internal sealed partial class GitTreeWindow
             {
                 Children =
                 {
-                    new TextBlock { Text = blocked ? $"{o.Label} · commit or stash this worktree's changes first" : o.Label },
+                    MenuText(blocked ? $"{o.Label} · commit or stash this worktree's changes first" : o.Label),
                     // A long command keeps its tail (the path's folder name and the branch), per the path convention.
                     new TextBlock
                     {
                         Text = o.Command, FontFamily = Mono, FontSize = 11, Opacity = 0.7, Margin = new Thickness(0, 1, 0, 0),
-                        MaxWidth = 460, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+                        MaxWidth = MenuTextWidth, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
                     },
                 },
             };

@@ -462,6 +462,10 @@ internal sealed class AppSettings
     // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
     public bool GitTreeFilesCollapsed { get; set; }
 
+    // What the git graph's Pull button does on a plain click: the last choice made from its menu. Not a Settings
+    // control (see SettingsRegistryTests.NotSettings).
+    public GitGraph.PullMode GitTreePullMode { get; set; } = GitGraph.PullMode.FastForwardOnly;
+
     // Branches hidden from the git Tree graph and the remote branches it has seen, per repo, keyed by the repo's
     // shared git dir (see GitGraph.GraphRepoPrefs); and whether new remote branches that aren't the user's are hidden
     // as they arrive. Both set from the Tree window's rail, not Settings controls (see SettingsRegistryTests.NotSettings).

@@ -86,7 +86,11 @@ internal sealed partial class GitTreeWindow
 
     private void BuildBusyCover()
     {
-        _busyText = new TextBlock { FontSize = 13, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0) };
+        _busyText = new TextBlock
+        {
+            FontSize = 13, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0),
+            MaxWidth = 460, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+        };
         _busyCard = new Border
         {
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
@@ -353,13 +357,19 @@ internal sealed partial class GitTreeWindow
 
     private static MenuItem Item(string header, Action act)
     {
-        var m = new MenuItem { Header = header };
+        var m = new MenuItem { Header = MenuText(header) };
         m.Click += (_, _) => act();
         return m;
     }
 
     // A line that explains rather than acts: what the choices below are about.
-    private static MenuItem Note(string text) => new() { Header = text, IsEnabled = false, FontStyle = FontStyle.Italic };
+    private static MenuItem Note(string text) => new() { Header = MenuText(text), IsEnabled = false, FontStyle = FontStyle.Italic };
+
+    // Fluent caps a menu flyout at 456 px and a menu item's header neither wraps nor trims, so a sentence naming a long
+    // branch ran out past the menu's edge. Wrapped within what's left after the item's padding, every word stays readable.
+    internal const double MenuTextWidth = 400;
+
+    private static TextBlock MenuText(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, MaxWidth = MenuTextWidth };
 
     // Where a plan lands, as the menus and toasts say it: the branch, "x (tracking origin/x)", the tag, or a short hash.
     private static string Dest(CheckoutPlan plan, string? newBranch)
