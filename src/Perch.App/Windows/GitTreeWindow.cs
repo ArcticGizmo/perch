@@ -66,6 +66,11 @@ internal sealed class GitTreeWindow : Window
     private readonly Button _unstageAllBtn;
     private readonly TextBlock _composerLabel;
     private readonly GraphPane _graph;
+    private readonly GraphRail _rail;
+    private readonly Border _railSeparator;
+    private readonly Border _gotoBar;
+    private readonly TextBox _gotoBox;
+    private readonly TextBlock _gotoLabel;
     private readonly ListBox _filesList;      // commit-node files (read-only)
     private readonly ListBox _unstagedList;   // WIP: unstaged changes ("Changes")
     private readonly ListBox _stagedList;     // WIP: staged changes ("Staged · pending commit")
@@ -270,7 +275,34 @@ internal sealed class GitTreeWindow : Window
         _graph.Canvas.RowActivated += OnGraphActivated;
         _graph.Canvas.LoadMoreRequested += LoadMore;
         _graphLabel = PaneLabel(ScopeLabel(_scope));
-        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _graph } };
+
+        _rail = new GraphRail();
+        _rail.JumpRequested += hash => { if (_snap?.RowOf(hash) is int r and >= 0) _graph.Canvas.Flash(r); };
+        _rail.LaneHovered += lane => _graph.Canvas.HighlightLane(lane);
+        _rail.WorktreeActivated += wt => { if (!wt.IsCurrent) Retarget(wt.Path, wt.Name, null, isActive: false); };
+        _railSeparator = new Border { Width = 1 };
+
+        // Ctrl+G: go to a branch, tag, hash or message text; Enter again walks the matches.
+        _gotoBox = new TextBox { PlaceholderText = "Go to branch, tag, hash or message", MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
+        _gotoBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { GoTo(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { CloseGoTo(); e.Handled = true; }
+        };
+        _gotoLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0), [DockPanel.DockProperty] = Dock.Right };
+        var gotoClose = new Button { Content = "✕", VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
+        gotoClose.Click += (_, _) => CloseGoTo();
+        _gotoBar = new Border
+        {
+            Padding = new Thickness(10, 6), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
+            Child = new DockPanel { LastChildFill = true, Children = { gotoClose, _gotoLabel, _gotoBox } },
+        };
+
+        var graphBody = new Grid { ColumnDefinitions = new ColumnDefinitions("210,Auto,*") };
+        graphBody.Children.Add(WithColumn(_rail, 0));
+        graphBody.Children.Add(WithColumn(_railSeparator, 1));
+        graphBody.Children.Add(WithColumn(_graph, 2));
+        var graphPane = new DockPanel { LastChildFill = true, Children = { _graphLabel, _gotoBar, graphBody } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -427,7 +459,7 @@ internal sealed class GitTreeWindow : Window
             ColumnDefinitions = new ColumnDefinitions
             {
                 // The graph carries ref pills, lanes, subjects and authors, so it takes the larger share.
-                new(new GridLength(1.4, GridUnitType.Star)) { MinWidth = 420 },
+                new(new GridLength(1.7, GridUnitType.Star)) { MinWidth = 640 },
                 new(GridLength.Auto),
                 new(new GridLength(280, GridUnitType.Pixel)) { MinWidth = 180 },
                 new(GridLength.Auto),
@@ -536,6 +568,13 @@ internal sealed class GitTreeWindow : Window
             OpenFind();
             e.Handled = true;
         }
+        else if (e.Key == Key.G && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            _gotoBar.IsVisible = true;
+            _gotoBox.Focus();
+            _gotoBox.SelectAll();
+            e.Handled = true;
+        }
         else if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             if (_diff.TryCopySelection()) e.Handled = true;
@@ -543,6 +582,7 @@ internal sealed class GitTreeWindow : Window
         else if (e.Key == Key.Escape)
         {
             if (_findBar.IsVisible) CloseFind();
+            else if (_gotoBar.IsVisible) CloseGoTo();
             else Close();
         }
     }
@@ -555,6 +595,21 @@ internal sealed class GitTreeWindow : Window
         _findBox.Focus();
         _findBox.SelectAll();
         if (!string.IsNullOrEmpty(_findBox.Text)) _diff.SetSearch(_findBox.Text!);
+    }
+
+    private void GoTo()
+    {
+        if (_snap is null) return;
+        int row = _snap.Find(_gotoBox.Text ?? "", _graph.Canvas.SelectedRow);
+        _gotoLabel.Text = row < 0 ? (string.IsNullOrWhiteSpace(_gotoBox.Text) ? "" : "No match in the loaded graph") : "";
+        if (row >= 0) _graph.Canvas.Flash(row);
+    }
+
+    private void CloseGoTo()
+    {
+        _gotoBar.IsVisible = false;
+        _gotoLabel.Text = "";
+        _graph.Canvas.Focus();
     }
 
     private void CloseFind()
@@ -670,6 +725,7 @@ internal sealed class GitTreeWindow : Window
         _suppressSelect = true;
         _graph.Canvas.SetSnapshot(snap, keepPlace);
         _suppressSelect = false;
+        _rail.SetSnapshot(snap);
     }
 
     // Selects a graph row and shows its node, even when the canvas already had it selected (a reload).
@@ -704,6 +760,7 @@ internal sealed class GitTreeWindow : Window
                 _suppressSelect = true;
                 _graph.Canvas.SetSnapshot(_snap, keepPlace: true);
                 _suppressSelect = false;
+                _rail.SetSnapshot(_snap);   // more refs now have a lane
             });
         });
     }
@@ -1777,7 +1834,12 @@ internal sealed class GitTreeWindow : Window
         _findLabel.Foreground = _pal.Muted;
         _diffPlaceholder.Foreground = _pal.Muted;
         _filesEmpty.Foreground = _pal.Muted;
-        _graph.Canvas.SetColors(GraphCanvas.Colors.For(_light));
+        var graphColors = GraphCanvas.Colors.For(_light);
+        _graph.Canvas.SetColors(graphColors);
+        _rail.SetColors(graphColors);
+        _railSeparator.Background = _pal.Separator;
+        _gotoBar.Background = _pal.WindowBg;
+        _gotoLabel.Foreground = _pal.Muted;
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;

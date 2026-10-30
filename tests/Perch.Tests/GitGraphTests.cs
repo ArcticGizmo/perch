@@ -316,6 +316,26 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void Find_RefThenHashThenTextCyclingFromTheCurrentRow()
+    {
+        GraphCommit Named(string hash, string subject, params string[] parents) => new(hash, parents, "Jon", "j@x", 0, subject);
+        var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything,
+            [Named("aaaa1111", "Fix the feed", "cccc3333"), Named("bbbb2222", "Feed images", "cccc3333"), Named("cccc3333", "Root")],
+            [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "aaaa1111"), new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "bbbb2222")],
+            [], "main", null, 100);
+
+        Assert.Equal(1, s.Find("FEAT", -1));          // ref name, any case
+        Assert.Equal(2, s.Find("cccc", -1));          // hash prefix
+        Assert.Equal(0, s.Find("feed", -1));          // subject text…
+        Assert.Equal(1, s.Find("feed", 0));           // …then the next match
+        Assert.Equal(0, s.Find("feed", 1));           // …wrapping round
+        Assert.Equal(-1, s.Find("nothing", 0));
+        Assert.Equal(-1, s.Find("  ", 0));
+        Assert.Equal(0, s.LaneOf("aaaa1111"));
+        Assert.Equal(-1, s.LaneOf("nope"));
+    }
+
+    [Fact]
     public void PrimaryBranch_PrefersLocalTrunkThenRemote()
     {
         Assert.Equal("main", GraphLoader.PrimaryBranch(Refs));

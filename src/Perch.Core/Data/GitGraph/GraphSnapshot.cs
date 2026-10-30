@@ -108,6 +108,37 @@ internal sealed class GraphSnapshot
         return r >= 0 ? r : Rows.Length > 0 ? 0 : -1;
     }
 
+    /// <summary>The lane of the row <paramref name="hash"/> sits on, or -1 when it isn't loaded.</summary>
+    public int LaneOf(string hash) => RowOf(hash) is var r and >= 0 ? Rows[r].Lane : -1;
+
+    /// <summary>
+    /// The row "go to" lands on for <paramref name="query"/>: a ref named exactly that (ignoring case), else a
+    /// commit whose hash starts with it (4+ characters), else the next row after <paramref name="afterRow"/> whose
+    /// subject or author contains it, wrapping round, so pressing Enter again walks the matches. -1 for none.
+    /// </summary>
+    public int Find(string query, int afterRow)
+    {
+        query = query.Trim();
+        if (query.Length == 0 || Commits.Count == 0)
+            return -1;
+        foreach (var r in Refs)
+            if (string.Equals(r.Name, query, StringComparison.OrdinalIgnoreCase) && RowOf(r.Target) is var row and >= 0)
+                return row;
+        if (query.Length >= 4 && query.All(Uri.IsHexDigit))
+            for (int i = 0; i < Commits.Count; i++)
+                if (Commits[i].Hash.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+                    return i;
+        for (int k = 1; k <= Commits.Count; k++)
+        {
+            int i = ((afterRow < 0 ? -1 : afterRow) + k) % Commits.Count;
+            var c = Commits[i];
+            if (!c.IsWorkInProgress && (c.Subject.Contains(query, StringComparison.OrdinalIgnoreCase)
+                                        || c.AuthorName.Contains(query, StringComparison.OrdinalIgnoreCase)))
+                return i;
+        }
+        return -1;
+    }
+
     /// <summary>The worktree whose WIP row is <paramref name="row"/>, or null for a commit row.</summary>
     public GraphWorktree? WipAt(int row)
     {

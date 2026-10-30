@@ -676,6 +676,24 @@ internal static class HeadlessRenderer
         RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1.5x.png"), 144);
         RenderControl(BuildGraphCanvas(light: true), Path.Combine(outDir, "git_graph_light_1x.png"), 96);
 
+        // The real Tree window on the repo the render runs in (when it runs in one): the whole load path (graph,
+        // rail, files, diff) with its background work let finish. Live data, so it changes run to run.
+        if (GitCheckoutScanner.FindRoot(Environment.CurrentDirectory) is { } liveRepo)
+        {
+            var tw = new Windows.GitTreeWindow(new AppSettings()) { Width = 1700, Height = 860 };
+            tw.Show();
+            tw.Retarget(liveRepo, Path.GetFileName(liveRepo), null, isActive: false);
+            for (var until = DateTime.UtcNow.AddSeconds(6); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } liveFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_live_1x.png"));
+                liveFrame.Save(fs);
+            }
+            tw.Close();
+        }
+
         // Markdown viewer window: the file tree (session produced/referenced groups + the project folder
         // tree) beside the rendered preview. Unlike the owner-drawn surfaces this uses templated controls
         // (TreeView/ScrollViewer/SelectableTextBlock) that only realise inside a shown window, so it's
@@ -3679,6 +3697,19 @@ internal static class HeadlessRenderer
     // from main, one left behind), worktrees on two of them (both dirty) and a clean one on a third.
     private static Control BuildGraphCanvas(bool light, double width = 1180, double? height = null)
     {
+        var snap = SampleGraph();
+        var canvas = new Views.GraphCanvas { Width = width };
+        canvas.Height = height ?? snap.Rows.Length * canvas.RowHeight;
+        canvas.SetColors(Views.GraphCanvas.Colors.For(light));
+        canvas.SetSnapshot(snap, keepPlace: false);
+        canvas.Measure(new Size(canvas.Width, canvas.Height));
+        canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
+        canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
+        return canvas;
+    }
+
+    private static Perch.Data.GitGraph.GraphSnapshot SampleGraph()
+    {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         int age = 0;
         Perch.Data.GitGraph.GraphCommit C(string hash, string subject, params string[] parents) =>
@@ -3725,16 +3756,8 @@ internal static class HeadlessRenderer
             new Perch.Data.GitGraph.GraphWorktree(P("perch--feeds"), "feeds", "4c19a07".PadRight(40, '0'), 1, false),
             new Perch.Data.GitGraph.GraphWorktree(P("perch--git-graph"), "git-graph", "7be0d42".PadRight(40, '0'), 0, false),
         };
-        var snap = Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
+        return Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
             Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
-        var canvas = new Views.GraphCanvas { Width = width };
-        canvas.Height = height ?? snap.Rows.Length * canvas.RowHeight;
-        canvas.SetColors(Views.GraphCanvas.Colors.For(light));
-        canvas.SetSnapshot(snap, keepPlace: false);
-        canvas.Measure(new Size(canvas.Width, canvas.Height));
-        canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
-        canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
-        return canvas;
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the graph (the real
@@ -3743,7 +3766,23 @@ internal static class HeadlessRenderer
     private static Control BuildTreeSurface(bool light)
     {
         var pal = light ? GitTreeWindow.TreePalette.Light() : GitTreeWindow.TreePalette.Dark();
-        var graph = BuildGraphCanvas(light, width: 700, height: 360);
+        var rail = new Views.GraphRail { Width = 210, [DockPanel.DockProperty] = Dock.Left };
+        rail.SetColors(Views.GraphCanvas.Colors.For(light));
+        rail.SetSnapshot(SampleGraph());
+        rail.SetSessions(new Dictionary<string, Views.GraphRail.WorktreeSession>
+        {
+            [Path.Combine(@"C:\src", "perch--roost-tabs")] = new("Roost tabs: rail sort", "Running", Color.FromRgb(0x3F, 0xB9, 0x50)),
+            [Path.Combine(@"C:\src", "perch--feeds")] = new("Feeds: OPML import", "Needs you", Color.FromRgb(0xE3, 0xB3, 0x41)),
+        });
+        var graph = new DockPanel
+        {
+            Children =
+            {
+                rail,
+                new Border { Width = 1, Background = pal.Separator, [DockPanel.DockProperty] = Dock.Left },
+                BuildGraphCanvas(light, width: 690, height: 360),
+            },
+        };
 
         var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
         TextBlock FileRow(string t, IBrush c) => new()
@@ -3787,7 +3826,7 @@ internal static class HeadlessRenderer
 
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("702,16,254,16,*"),
+            ColumnDefinitions = new ColumnDefinitions("903,16,254,16,*"),
             Margin = new Thickness(14, 12, 14, 14),   // the padded "page"
         };
         void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }
@@ -3797,7 +3836,7 @@ internal static class HeadlessRenderer
         Add(Gutter(), 3);
         Add(Pane("Diff", diff), 4);
 
-        return new Border { Width = 1600, Height = 420, Background = pal.WindowBg, Child = grid };
+        return new Border { Width = 1800, Height = 420, Background = pal.WindowBg, Child = grid };
     }
 
     private static StatsReport SampleStatsReport()

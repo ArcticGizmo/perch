@@ -31,23 +31,12 @@ internal sealed class GraphCanvas : Control
         public static Colors For(bool light)
         {
             var a = AuroraPalette.For(light);
+            var lanes = GraphLanes.For(light).Select(l => Color.FromRgb(l.R, l.G, l.B)).ToArray();
             return new(a.Raised, Blend(a.Raised, a.Text, light ? 0.04 : 0.05), Blend(a.Raised, a.Accent, light ? 0.12 : 0.18),
-                a.Text, a.Title, a.Muted, a.Separator, light ? LightLanes : DarkLanes, light);
+                a.Text, a.Title, a.Muted, a.Separator, lanes, light);
         }
 
-        // Blue, violet, teal, pink, lime, amber, sky, orange: distinct from one another and from the diff's add/remove
-        // green/red, picked to clear the 3:1 non-text floor on their polarity's pane.
-        internal static readonly Color[] DarkLanes =
-        [
-            Color.FromRgb(0x60, 0xA5, 0xFA), Color.FromRgb(0xA7, 0x8B, 0xFA), Color.FromRgb(0x2D, 0xD4, 0xBF), Color.FromRgb(0xF4, 0x72, 0xB6),
-            Color.FromRgb(0xA3, 0xE6, 0x35), Color.FromRgb(0xFB, 0xBF, 0x24), Color.FromRgb(0x38, 0xBD, 0xF8), Color.FromRgb(0xFB, 0x92, 0x3C),
-        ];
-
-        internal static readonly Color[] LightLanes =
-        [
-            Color.FromRgb(0x25, 0x63, 0xEB), Color.FromRgb(0x7C, 0x3A, 0xED), Color.FromRgb(0x0F, 0x76, 0x6E), Color.FromRgb(0xDB, 0x27, 0x77),
-            Color.FromRgb(0x4D, 0x7C, 0x0F), Color.FromRgb(0xB4, 0x53, 0x09), Color.FromRgb(0x03, 0x69, 0xA1), Color.FromRgb(0xC2, 0x41, 0x0C),
-        ];
+        public IBrush LaneBrush(int lane) => OverlayDraw.Brush(Lanes[lane % Lanes.Length]);
 
         private static Color Blend(Color a, Color b, double t) => Color.FromRgb(
             (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
@@ -59,16 +48,22 @@ internal sealed class GraphCanvas : Control
     private const double NodeR = 4.5, MergeR = 3.6, RingR = 8, WipR = 5.5;
     private const int CurveSteps = 8;
 
+    private const int FlashMs = 900;
+
     private GraphSnapshot? _snap;
     private Colors _c = Colors.For(light: false);
     private int _sel = -1, _hover = -1;
+    private int _hlLane = -1;
+    private int _flashRow = -1;
+    private long _flashStart;
+    private global::Avalonia.Threading.DispatcherTimer? _flashTimer;
     private double _offset;
     private bool _moreRequested;
     private readonly double _rowH;
 
     // Built once per palette.
-    private IPen[] _lane = [], _laneDash = [], _ring = [], _ringBold = [], _pillBorder = [], _pillDash = [];
-    private IBrush[] _laneFill = [], _laneWash = [];
+    private IPen[] _lane = [], _laneDash = [], _laneFaded = [], _ring = [], _ringBold = [], _pillBorder = [], _pillDash = [];
+    private IBrush[] _laneFill = [], _laneFillFaded = [], _laneWash = [];
     private IBrush _bg = Brushes.Transparent, _hoverBg = Brushes.Transparent, _selBg = Brushes.Transparent,
         _text = Brushes.White, _title = Brushes.White, _muted = Brushes.Gray;
     private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray);
@@ -123,6 +118,8 @@ internal sealed class GraphCanvas : Control
         var dash = new ImmutableDashStyle([2.2, 2.6], 0);
         _lane = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2, null, PenLineCap.Round)).ToArray();
         _laneDash = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 1.7, dash, PenLineCap.Round)).ToArray();
+        _laneFaded = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l, 0.22), 2, null, PenLineCap.Round)).ToArray();
+        _laneFillFaded = c.Lanes.Select(l => (IBrush)B(l, 0.3)).ToArray();
         _ring = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 1.8)).ToArray();
         _ringBold = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2.6)).ToArray();
         _pillBorder = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l, 0.5), 1)).ToArray();
@@ -172,6 +169,31 @@ internal sealed class GraphCanvas : Control
         _sel = row;
         InvalidateVisual();
         SelectionChanged?.Invoke(_sel);
+    }
+
+    /// <summary>Fades every lane but <paramref name="lane"/> (−1 restores them all): hovering a worktree or branch in
+    /// the rail shows where it runs.</summary>
+    public void HighlightLane(int lane)
+    {
+        if (_hlLane == lane) return;
+        _hlLane = lane;
+        InvalidateVisual();
+    }
+
+    /// <summary>Selects <paramref name="row"/>, scrolls it into view and briefly washes it, so a jump from the rail or
+    /// go-to is easy to find. No wash when the OS asks for reduced motion.</summary>
+    public void Flash(int row)
+    {
+        Select(row);
+        if (row < 0 || PlatformServices.MotionPreference.ReduceMotion) return;
+        _flashRow = row;
+        _flashStart = Environment.TickCount64;
+        _flashTimer ??= new global::Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(40), global::Avalonia.Threading.DispatcherPriority.Render, (_, _) =>
+        {
+            if (Environment.TickCount64 - _flashStart > FlashMs) { _flashRow = -1; _flashTimer?.Stop(); }
+            InvalidateVisual();
+        });
+        _flashTimer.Start();
     }
 
     /// <summary>Scrolls so <paramref name="row"/> is in view, centring it when it was off screen.</summary>
@@ -230,6 +252,12 @@ internal sealed class GraphCanvas : Control
             var band = new Rect(0, r * _rowH - _offset, size.Width, _rowH);
             if (r == _sel) ctx.FillRectangle(_selBg, band);
             else if (r == _hover) ctx.FillRectangle(_hoverBg, band);
+            if (r == _flashRow)
+            {
+                // Quantised so the brush cache sees a handful of opacities, not one per frame.
+                double left = 1 - Math.Min(1, (Environment.TickCount64 - _flashStart) / (double)FlashMs);
+                ctx.FillRectangle(OverlayDraw.Brush(_c.Lanes[0], Math.Round(left * 10) / 25), band);
+            }
         }
 
         using (ctx.PushClip(new Rect(RefsW, 0, graphW, size.Height)))
@@ -286,7 +314,8 @@ internal sealed class GraphCanvas : Control
             if (worktrees.Count > 0)
                 ctx.DrawEllipse(null, worktrees.Any(w => w.IsCurrent) ? _ringBold[lane] : _ring[lane], new Point(x, y), RingR, RingR);
             double nr = c.IsMerge ? MergeR : NodeR;
-            ctx.DrawEllipse(_laneFill[lane], _nodeEdge, new Point(x, y), nr, nr);
+            var fill = _hlLane >= 0 && row.Lane != _hlLane ? _laneFillFaded[lane] : _laneFill[lane];
+            ctx.DrawEllipse(fill, _nodeEdge, new Point(x, y), nr, nr);
         }
 
         double tagsW = 0;
@@ -427,7 +456,8 @@ internal sealed class GraphCanvas : Control
 
     private void Edge(DrawingContext ctx, GraphEdge e, double y1, double y2, bool dashed)
     {
-        var pen = (dashed ? _laneDash : _lane)[e.Color % _lane.Length];
+        int color = e.Color % _lane.Length;
+        var pen = _hlLane >= 0 && e.Color != _hlLane ? _laneFaded[color] : (dashed ? _laneDash : _lane)[color];
         double x1 = LaneX(e.From), x2 = LaneX(e.To);
         if (x1 == x2)
         {
