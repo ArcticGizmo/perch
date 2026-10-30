@@ -357,6 +357,7 @@ public partial class App : Application
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                _treeWindow?.SetSessions(sessions);   // which session is working in which worktree
                 _roostScanned = true;
                 UpdateRoost(sessions);
                 RefreshOriginIcons(sessions);
@@ -1969,9 +1970,16 @@ public partial class App : Application
         // the Tree window guards a commit behind a confirm. Idle / finished / errored sessions don't.
         bool isActive = session.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
         _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
-            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            NewTreeWindow,
             () => _treeWindow = null,
             w => w.Retarget(session.Cwd, session.DisplayName, pr, isActive));
+    }
+
+    private GitTreeWindow NewTreeWindow()
+    {
+        var w = new GitTreeWindow(_appSettings ?? AppSettings.Load());
+        w.SetSessions(_lastSessions);
+        return w;
     }
 
     private void OnOpenMarkdown(ClaudeSession session)
@@ -2021,7 +2029,7 @@ public partial class App : Application
         if (cwd.Length == 0) cwd = System.IO.Path.GetDirectoryName(absPath) ?? "";
         string title = cwd.Length > 0 ? System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/')) : "Changes";
         _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
-            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            NewTreeWindow,
             () => _treeWindow = null,
             tw => tw.Retarget(cwd, title, null, isActive, focusPath: absPath));
     }
@@ -2731,7 +2739,7 @@ public partial class App : Application
         string title = System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/'));
         bool isActive = s?.IsRunning ?? false;
         _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
-            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            NewTreeWindow,
             () => _treeWindow = null,
             tw => tw.Retarget(cwd, title.Length > 0 ? title : "Changes", null, isActive));
     }

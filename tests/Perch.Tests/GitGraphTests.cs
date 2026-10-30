@@ -336,6 +336,23 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void WorktreeContaining_PicksTheDeepestWorktreeAboveTheFolder()
+    {
+        var main = new GraphWorktree(@"C:\src\perch", "main", "m2", 0, true);
+        var nested = new GraphWorktree(@"C:\src\perch\.claude\worktrees\x", "feat", "f1", 0, false);
+        var sibling = new GraphWorktree(@"C:\src\perch--feeds", "feeds", "m1", 0, false);
+        var s = Snap([C("m2", "m1"), C("m1")], [main, nested, sibling]);
+
+        Assert.Same(main, s.WorktreeContaining(@"C:\src\perch\src\Perch.App"));
+        Assert.Same(nested, s.WorktreeContaining(@"C:\src\perch\.claude\worktrees\x\docs"));
+        Assert.Same(sibling, s.WorktreeContaining(@"C:\src\perch--feeds"));
+        Assert.Null(s.WorktreeContaining(@"C:\src\perch-other"));
+        Assert.Null(s.WorktreeContaining(null));
+        if (OperatingSystem.IsWindows())
+            Assert.Same(main, s.WorktreeContaining(@"c:\SRC\Perch/"));
+    }
+
+    [Fact]
     public void PrimaryBranch_PrefersLocalTrunkThenRemote()
     {
         Assert.Equal("main", GraphLoader.PrimaryBranch(Refs));

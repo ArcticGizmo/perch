@@ -3702,11 +3702,18 @@ internal static class HeadlessRenderer
         canvas.Height = height ?? snap.Rows.Length * canvas.RowHeight;
         canvas.SetColors(Views.GraphCanvas.Colors.For(light));
         canvas.SetSnapshot(snap, keepPlace: false);
+        canvas.SetSessions(SampleGraphSessions());
         canvas.Measure(new Size(canvas.Width, canvas.Height));
         canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
         canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
         return canvas;
     }
+
+    private static Dictionary<string, Views.GraphRail.WorktreeSession> SampleGraphSessions() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        [Path.Combine(@"C:\src", "perch--roost-tabs")] = new("Roost tabs: rail sort", "Running", Color.FromRgb(0x3F, 0xB9, 0x50)),
+        [Path.Combine(@"C:\src", "perch--feeds")] = new("Feeds: OPML import", "Needs you", Color.FromRgb(0xE3, 0xB3, 0x41)),
+    };
 
     private static Perch.Data.GitGraph.GraphSnapshot SampleGraph()
     {
@@ -3769,11 +3776,7 @@ internal static class HeadlessRenderer
         var rail = new Views.GraphRail { Width = 210, [DockPanel.DockProperty] = Dock.Left };
         rail.SetColors(Views.GraphCanvas.Colors.For(light));
         rail.SetSnapshot(SampleGraph());
-        rail.SetSessions(new Dictionary<string, Views.GraphRail.WorktreeSession>
-        {
-            [Path.Combine(@"C:\src", "perch--roost-tabs")] = new("Roost tabs: rail sort", "Running", Color.FromRgb(0x3F, 0xB9, 0x50)),
-            [Path.Combine(@"C:\src", "perch--feeds")] = new("Feeds: OPML import", "Needs you", Color.FromRgb(0xE3, 0xB3, 0x41)),
-        });
+        rail.SetSessions(SampleGraphSessions());
         var graph = new DockPanel
         {
             Children =

@@ -101,7 +101,11 @@ internal sealed class GitTreeWindow : Window
     private string? _cwd;
     private string? _prUrl;
     private string? _branch;
-    private bool _isActive; // the session was working (Running/AwaitingInput) at last Retarget — commit guard
+    // Commit guard: a session is working (Running/AwaitingInput) in this worktree, either the one the window was
+    // opened from (_retargetActive, as of Retarget) or any live session the scan places here.
+    private bool _isActive;
+    private bool _retargetActive;
+    private IReadOnlyList<ClaudeSession> _sessions = [];
     private DiffViewMode _mode;
     private ContentMode _contentMode = ContentMode.Diff; // Diff / Previous / Current — not persisted
     private int _gen;
@@ -131,6 +135,8 @@ internal sealed class GitTreeWindow : Window
     // Auto-refresh (filesystem watcher, debounced). The debounce is a pool timer that the watcher's own thread
     // re-arms, so a burst of events costs one UI post when it settles, not one per event.
     private FileSystemWatcher? _watcher;
+    private FileSystemWatcher? _gitDirWatcher;
+    private DispatcherTimer? _busyPoll;
     private System.Threading.Timer? _debounce;
     // When we perform our own staging write, the .git/index change trips the watcher into a redundant full
     // refresh. This timestamp (Environment.TickCount64) lets the debounce swallow that self-induced fire.
@@ -644,6 +650,7 @@ internal sealed class GitTreeWindow : Window
         if (!string.Equals(cwd, _cwd, StringComparison.Ordinal))
             _baseOverride = null; // a new repo: re-decide the base automatically
         _cwd = cwd;
+        _retargetActive = isActive;
         _isActive = isActive;
         // A caller (the session UI's "View diff") can ask the tree to land on a specific file. Convert the
         // absolute path to the repo-relative, forward-slash form git status reports, so the tip node's file
@@ -726,6 +733,58 @@ internal sealed class GitTreeWindow : Window
         _graph.Canvas.SetSnapshot(snap, keepPlace);
         _suppressSelect = false;
         _rail.SetSnapshot(snap);
+        ApplySessions();
+    }
+
+    /// <summary>The live sessions from the latest scan; each one is shown on the worktree it's working in.</summary>
+    public void SetSessions(IReadOnlyList<ClaudeSession> sessions)
+    {
+        _sessions = sessions;
+        ApplySessions();
+    }
+
+    // Places each session on its worktree (the one it writes in, else its cwd), keeping the most urgent per
+    // worktree, and feeds the rail cards and WIP rows. A working session here also arms the commit guard.
+    private void ApplySessions()
+    {
+        if (_snap is null) return;
+        var best = new Dictionary<string, ClaudeSession>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in _sessions)
+            if (_snap.WorktreeContaining(s.Worktree?.Dir ?? s.Cwd) is { } wt
+                && (!best.TryGetValue(wt.Path, out var had) || Urgency(s.Status) > Urgency(had.Status)))
+                best[wt.Path] = s;
+
+        var shown = best.ToDictionary(kv => kv.Key, kv => SessionView(kv.Value), StringComparer.OrdinalIgnoreCase);
+        _rail.SetSessions(shown);
+        _graph.Canvas.SetSessions(shown);
+        bool busyHere = _snap.Current is { } cur && best.TryGetValue(cur.Path, out var here)
+                        && here.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
+        _isActive = _retargetActive || busyHere;
+        UpdateBusyPoll(best.Any(kv => kv.Value.Status == SessionStatus.Running
+                                      && !string.Equals(kv.Key, _snap.Current?.Path, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static int Urgency(SessionStatus s) => s switch
+    {
+        SessionStatus.AwaitingInput => 4,
+        SessionStatus.ApiError => 3,
+        SessionStatus.Running => 2,
+        SessionStatus.NeedsAttention => 1,
+        _ => 0,
+    };
+
+    private GraphRail.WorktreeSession SessionView(ClaudeSession s)
+    {
+        static Color Of(IBrush b) => b is ISolidColorBrush sb ? sb.Color : Colors.Gray;
+        var (label, color) = s.Status switch
+        {
+            SessionStatus.AwaitingInput => ("Needs you", Of(_pal.Orange)),
+            SessionStatus.Running => ("Running", Of(_pal.Green)),
+            SessionStatus.ApiError => ("API error", Of(_pal.Red)),
+            SessionStatus.NeedsAttention => ("Done", Of(_pal.Accent)),
+            _ => ("Idle", Of(_pal.Muted)),
+        };
+        return new GraphRail.WorktreeSession(s.DisplayName, label, color);
     }
 
     // Selects a graph row and shows its node, even when the canvas already had it selected (a reload).
@@ -1418,24 +1477,34 @@ internal sealed class GitTreeWindow : Window
 
     // ---- auto-refresh ----
 
+    // Two watchers: this worktree's files (edits, its own .git when it's the main worktree), and the repo's shared
+    // git directory, so a commit, branch move, staging or worktree add/remove in any worktree refreshes the graph.
     private void SetupWatcher(string cwd)
     {
         _watcher?.Dispose();
-        _watcher = null;
-        if (!Directory.Exists(cwd)) return;
+        _gitDirWatcher?.Dispose();
+        _watcher = Watch(cwd, RepoWatchFilter.IsRelevant);
+        _gitDirWatcher = GitCheckoutScanner.FindRoot(cwd) is { } root && GitWorktreeScanner.CommonDir(root) is { } common
+            ? Watch(common, RepoWatchFilter.IsRelevantInGitDir)
+            : null;
+    }
+
+    private FileSystemWatcher? Watch(string dir, Func<string?, bool> relevant)
+    {
+        if (!Directory.Exists(dir)) return null;
         try
         {
-            var w = new FileSystemWatcher(cwd)
+            var w = new FileSystemWatcher(dir)
             {
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
             };
-            // On the watcher's thread: drop the noise (RepoWatchFilter), re-arm the debounce for the rest.
+            // On the watcher's thread: drop the noise, re-arm the shared debounce for the rest.
             _debounce ??= new System.Threading.Timer(_ => Dispatcher.UIThread.Post(OnWatchSettled));
             var debounce = _debounce;
             void Bump(string? name)
             {
-                if (!RepoWatchFilter.IsRelevant(name)) return;
+                if (!relevant(name)) return;
                 try { debounce.Change(600, Timeout.Infinite); } catch (ObjectDisposedException) { }
             }
             w.Changed += (_, e) => Bump(e.Name);
@@ -1444,9 +1513,21 @@ internal sealed class GitTreeWindow : Window
             w.Renamed += (_, e) => { Bump(e.OldName); Bump(e.Name); };
             w.Error += (_, _) => Bump(null);   // the buffer overflowed and events were lost: refresh anyway
             w.EnableRaisingEvents = true;
-            _watcher = w;
+            return w;
         }
-        catch { /* best-effort */ }
+        catch { return null; /* best-effort */ }
+    }
+
+    // Edits in another worktree don't reach either watcher (only this worktree's files are watched), so while a
+    // session is working in one, its change count is re-read on a slow poll instead of watching every tree.
+    private void UpdateBusyPoll(bool otherBusy)
+    {
+        if (!otherBusy) { _busyPoll?.Stop(); return; }
+        _busyPoll ??= new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
+        {
+            if (IsVisible) AutoRefresh();
+        });
+        _busyPoll.Start();
     }
 
     // The watcher has been quiet for 600 ms after a relevant change (on the UI thread).
@@ -1462,6 +1543,9 @@ internal sealed class GitTreeWindow : Window
     {
         _watcher?.Dispose();
         _watcher = null;
+        _gitDirWatcher?.Dispose();
+        _gitDirWatcher = null;
+        _busyPoll?.Stop();
         _debounce?.Dispose();
         _debounce = null;
         base.OnClosed(e);
@@ -1872,6 +1956,7 @@ internal sealed class GitTreeWindow : Window
         _settings.GitTreeLight = _light;
         _settings.Save();
         ApplyPalette();
+        ApplySessions();                        // session hues come from the palette too
         UpdateComposer();                       // re-tint the composer hint
         RefreshStatus(preserveSelection: true); // rebuild node/file rows through the new palette
     }

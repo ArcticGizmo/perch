@@ -171,6 +171,15 @@ internal sealed class GraphCanvas : Control
         SelectionChanged?.Invoke(_sel);
     }
 
+    /// <summary>The session working in each worktree (by path), shown on that worktree's WIP row.</summary>
+    public void SetSessions(IReadOnlyDictionary<string, GraphRail.WorktreeSession> sessions)
+    {
+        _sessions = sessions;
+        InvalidateVisual();
+    }
+
+    private IReadOnlyDictionary<string, GraphRail.WorktreeSession> _sessions = new Dictionary<string, GraphRail.WorktreeSession>();
+
     /// <summary>Fades every lane but <paramref name="lane"/> (−1 restores them all): hovering a worktree or branch in
     /// the rail shows where it runs.</summary>
     public void HighlightLane(int lane)
@@ -303,6 +312,8 @@ internal sealed class GraphCanvas : Control
                 WorktreePill(ctx, wt, lane, y);
             var label = OverlayDraw.Text(Fit($"{wt?.Changes ?? 0} uncommitted change{(wt?.Changes == 1 ? "" : "s")}", FontSize, subjW), FontSize, _muted);
             OverlayDraw.TextLeftMid(ctx, label, subjX, y);
+            if (wt is not null && _sessions.TryGetValue(wt.Path, out var sess))
+                SessionPill(ctx, sess, subjX + label.Width + 12, subjX + subjW, y);
             var now = OverlayDraw.Text("now", SmallSize, _muted);
             OverlayDraw.TextLeftMid(ctx, now, whenX + WhenW - now.Width, y);
             return;
@@ -430,6 +441,19 @@ internal sealed class GraphCanvas : Control
         OverlayDraw.Panel(ctx, rect, null, _pillDash[lane], 5);
         FolderGlyph(ctx, _laneFill[lane], rect.X + 7, y);
         ctx.DrawText(ft, new Point(rect.X + 20, y - ft.Height / 2));
+    }
+
+    // "● Running · <session name>" in the session's status colour, on a faint wash of it, clipped to the space left.
+    private void SessionPill(DrawingContext ctx, GraphRail.WorktreeSession s, double x, double right, double y)
+    {
+        var ink = OverlayDraw.Brush(s.Color);
+        var ft = OverlayDraw.Text(Fit($"{s.State} · {s.Name}", SmallSize, right - x - 24), SmallSize, ink, FontWeight.SemiBold);
+        if (ft.Width < 20) return;
+        double w = ft.Width + 24, h = ft.Height + 4;
+        var rect = new Rect(x, y - h / 2, w, h);
+        OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(s.Color, 0.12), OverlayDraw.SolidPen(s.Color, 1), h / 2);
+        ctx.DrawEllipse(ink, null, new Point(x + 10, y), 3, 3);
+        ctx.DrawText(ft, new Point(x + 17, y - ft.Height / 2));
     }
 
     // Tags sit at the right end of the subject column, muted, each after a small tag mark; returns the width taken.

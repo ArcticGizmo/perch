@@ -108,6 +108,27 @@ internal sealed class GraphSnapshot
         return r >= 0 ? r : Rows.Length > 0 ? 0 : -1;
     }
 
+    /// <summary>
+    /// The worktree <paramref name="dir"/> is in: the one whose folder is <paramref name="dir"/> or the deepest one
+    /// above it, so a worktree nested inside another (<c>.claude/worktrees/x</c>) wins over its host. Compared as
+    /// strings, with no file access, so it's cheap enough for every session scan.
+    /// </summary>
+    public GraphWorktree? WorktreeContaining(string? dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return null;
+        var cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        static string Norm(string p) => p.Replace('\\', '/').TrimEnd('/');
+        var d = Norm(dir);
+        GraphWorktree? best = null;
+        foreach (var w in Worktrees)
+        {
+            var p = Norm(w.Path);
+            if ((d.Equals(p, cmp) || d.StartsWith(p + "/", cmp)) && (best is null || p.Length > Norm(best.Path).Length))
+                best = w;
+        }
+        return best;
+    }
+
     /// <summary>The lane of the row <paramref name="hash"/> sits on, or -1 when it isn't loaded.</summary>
     public int LaneOf(string hash) => RowOf(hash) is var r and >= 0 ? Rows[r].Lane : -1;
 
