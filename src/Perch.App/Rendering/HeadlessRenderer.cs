@@ -680,6 +680,11 @@ internal static class HeadlessRenderer
         // rail, files, diff) with its background work let finish. Live data, so it changes run to run.
         if (GitCheckoutScanner.FindRoot(Environment.CurrentDirectory) is { } liveRepo)
         {
+            // Author pictures without gh or the network: no lookups, and every noreply author (Dependabot) gets a drawn
+            // stand-in, so the picture path paints as well as the initials.
+            var fakeAvatar = FakeAvatarPng();
+            Views.AvatarImages.FetcherOverride = () => new Perch.Data.GitGraph.AvatarFetcher(
+                Path.Combine(outDir, "_avatar-cache"), graphql: _ => null, download: _ => fakeAvatar);
             var tw = new Windows.GitTreeWindow(new AppSettings()) { Width = 1700, Height = 860 };
             tw.Show();
             tw.Retarget(liveRepo, Path.GetFileName(liveRepo), null, isActive: false);
@@ -691,6 +696,7 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, "git_tree_live_1x.png"));
                 liveFrame.Save(fs);
             }
+            Console.WriteLine($"git graph avatars: {tw.PreviewAvatars}");
 
             // The selected node's first file, opened over the graph as a file click would.
             tw.PreviewDiff(open: true);
@@ -3844,6 +3850,22 @@ internal static class HeadlessRenderer
         canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
         canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
         return canvas;
+    }
+
+    // A stand-in avatar for the live render: a blue square with a pale head and shoulders, as PNG bytes.
+    private static byte[] FakeAvatarPng()
+    {
+        using var rtb = new RenderTargetBitmap(new PixelSize(64, 64));
+        using (var ctx = rtb.CreateDrawingContext())
+        {
+            ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x3B, 0x6E, 0xC8)), new Rect(0, 0, 64, 64));
+            var pale = new SolidColorBrush(Color.FromRgb(0xE8, 0xEE, 0xF8));
+            ctx.DrawEllipse(pale, null, new Point(32, 25), 11, 11);
+            ctx.DrawEllipse(pale, null, new Point(32, 62), 22, 18);
+        }
+        using var ms = new MemoryStream();
+        rtb.Save(ms);
+        return ms.ToArray();
     }
 
     private static Dictionary<string, Views.GraphRail.WorktreeSession> SampleGraphSessions() => new(StringComparer.OrdinalIgnoreCase)

@@ -57,6 +57,27 @@ internal sealed class GraphCanvas : Control
     private (int Edge, double StartX, double StartW)? _edgeDrag;
     private const double EdgeGrip = 4;
     private const double NodeR = 4.5, MergeR = 3.6, RingR = 8, WipR = 5.5;
+
+    // Author pictures on the nodes (null = plain dots). A picture needs room: lanes spread from 16 to 24 DIP.
+    private const double AvatarR = 9.5, AvatarLaneW = 24, InitialsSize = 8.5;
+    private AvatarImages? _avatars;
+    private readonly EllipseGeometry _avatarClip = new(new Rect(-AvatarR, -AvatarR, AvatarR * 2, AvatarR * 2));
+    private readonly Dictionary<string, (string Initials, int Color)> _authorMarks = new(StringComparer.OrdinalIgnoreCase);
+    private IBrush[] _authorFill = [], _authorInk = [];
+    private IPen[] _avatarRing = [];
+
+    private double LaneStep => _avatars is null ? LaneW : AvatarLaneW;
+    private double HeadRingR => _avatars is null ? RingR : AvatarR + 3.5;
+
+    /// <summary>Paints each commit's author picture (initials until one is found) instead of a dot, or plain dots for null.</summary>
+    public void SetAvatars(AvatarImages? avatars)
+    {
+        if (ReferenceEquals(_avatars, avatars)) return;
+        if (_avatars is not null) _avatars.Changed -= InvalidateVisual;
+        _avatars = avatars;
+        if (_avatars is not null) _avatars.Changed += InvalidateVisual;
+        InvalidateVisual();
+    }
     private const int CurveSteps = 8;
 
     private const int FlashMs = 900;
@@ -173,6 +194,14 @@ internal sealed class GraphCanvas : Control
         _dropPen = new ImmutablePen(B(c.Title, 0.85), 1.8);
         _gripPen = new ImmutablePen(B(c.Muted, 0.75), 1.2);
         _matchBg = B(c.Lanes[5], c.Light ? 0.14 : 0.2);
+        // An author's initials sit on a colour of the lane set, in whichever of black or white reads on it.
+        _authorFill = c.Lanes.Select(l => (IBrush)B(l)).ToArray();
+        _authorInk = c.Lanes.Select(l =>
+        {
+            var ink = global::Perch.Theming.Contrast.BestForeground(new global::Perch.Theming.Rgb(l.R, l.G, l.B));
+            return (IBrush)B(Color.FromRgb(ink.R, ink.G, ink.B));
+        }).ToArray();
+        _avatarRing = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2)).ToArray();
         InvalidateVisual();
     }
 
@@ -315,7 +344,7 @@ internal sealed class GraphCanvas : Control
     }
 
     private double GraphWidth => _lanesW
-        ?? (_snap is null ? MinGraphW : Math.Clamp(GraphPad * 2 + _snap.Width * LaneW, MinGraphW, MaxGraphW));
+        ?? (_snap is null ? MinGraphW : Math.Clamp(GraphPad * 2 + _snap.Width * LaneStep, MinGraphW, MaxGraphW));
 
     /// <summary>The user dragged a column edge; the host persists the widths (0 = lanes sized to the graph).</summary>
     public event Action<double, double>? ColumnsResized;
@@ -331,7 +360,7 @@ internal sealed class GraphCanvas : Control
     // Which column edge is under x: the pills|lanes edge, or the lanes|subject edge.
     private int EdgeAt(double x) =>
         Math.Abs(x - _refsW) <= EdgeGrip ? 1 : Math.Abs(x - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
-    private double LaneX(int lane) => _refsW + GraphPad + lane * LaneW;
+    private double LaneX(int lane) => _refsW + GraphPad + lane * LaneStep;
     private double RowTop(int row) => _headerH + row * _rowH - _offset;
     private double RowMid(int row) => RowTop(row) + _rowH / 2;
 
@@ -487,10 +516,19 @@ internal sealed class GraphCanvas : Control
         if (inGraph)
         {
             if (worktrees.Count > 0)
-                ctx.DrawEllipse(null, worktrees.Any(w => w.IsCurrent) ? _ringBold[lane] : _ring[lane], new Point(x, y), RingR, RingR);
-            double nr = c.IsMerge ? MergeR : NodeR;
-            var fill = _hlLane >= 0 && row.Lane != _hlLane ? _laneFillFaded[lane] : _laneFill[lane];
-            ctx.DrawEllipse(fill, _nodeEdge, new Point(x, y), nr, nr);
+                ctx.DrawEllipse(null, worktrees.Any(w => w.IsCurrent) ? _ringBold[lane] : _ring[lane], new Point(x, y), HeadRingR, HeadRingR);
+            bool faded = _hlLane >= 0 && row.Lane != _hlLane;
+            // A merge keeps its small dot: its author only joined two lines, and the picture would crowd them.
+            if (_avatars is not null && !c.IsMerge)
+            {
+                if (faded) { using (ctx.PushOpacity(0.35)) PaintAvatar(ctx, c, lane, x, y); }
+                else PaintAvatar(ctx, c, lane, x, y);
+            }
+            else
+            {
+                double nr = c.IsMerge ? MergeR : NodeR;
+                ctx.DrawEllipse(faded ? _laneFillFaded[lane] : _laneFill[lane], _nodeEdge, new Point(x, y), nr, nr);
+            }
         }
 
         double tagsW = 0;
@@ -511,6 +549,30 @@ internal sealed class GraphCanvas : Control
         }
         var when = OverlayDraw.Text(Age(c), SmallSize, _muted);
         OverlayDraw.TextLeftMid(ctx, when, whenX + WhenW - when.Width, y);
+    }
+
+    // The author's picture clipped to a circle ringed in the lane colour, or, until (or unless) one is found, their
+    // initials on their own colour. Initials and colour are worked out once per author, not per paint.
+    private void PaintAvatar(DrawingContext ctx, GraphCommit c, int lane, double x, double y)
+    {
+        var at = new Point(x, y);
+        if (_avatars!.Get(c.AuthorEmail) is { } image)
+        {
+            ctx.DrawEllipse(_bg, null, at, AvatarR, AvatarR);
+            using (ctx.PushTransform(Matrix.CreateTranslation(x, y)))
+            using (ctx.PushGeometryClip(_avatarClip))
+                ctx.DrawImage(image, new Rect(-AvatarR, -AvatarR, AvatarR * 2, AvatarR * 2));
+        }
+        else
+        {
+            if (!_authorMarks.TryGetValue(c.AuthorEmail, out var mark))
+                _authorMarks[c.AuthorEmail] = mark = (GraphAvatars.Initials(c.AuthorName, c.AuthorEmail),
+                    GraphAvatars.ColorIndex(c.AuthorEmail, _authorFill.Length));
+            ctx.DrawEllipse(_authorFill[mark.Color], null, at, AvatarR, AvatarR);
+            var ft = OverlayDraw.Text(mark.Initials, InitialsSize, _authorInk[mark.Color], FontWeight.SemiBold);
+            ctx.DrawText(ft, new Point(x - ft.Width / 2, y - ft.Height / 2));
+        }
+        ctx.DrawEllipse(null, _avatarRing[lane], at, AvatarR, AvatarR);
     }
 
     // Local branches (the window's own worktree's first), then remote branches that aren't just a local's upstream at
@@ -575,7 +637,7 @@ internal sealed class GraphCanvas : Control
                 if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
                     ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
                 if (shown == 0)
-                    ctx.DrawLine(_pillBorder[lane], new Point(_refsW - 6, y), new Point(nodeX - RingR - 1, y));
+                    ctx.DrawLine(_pillBorder[lane], new Point(_refsW - 6, y), new Point(nodeX - HeadRingR - 1, y));
                 right = rect.X - 4;
                 shown++;
             }

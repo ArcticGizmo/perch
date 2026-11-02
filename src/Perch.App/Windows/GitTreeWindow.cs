@@ -287,7 +287,7 @@ internal sealed partial class GitTreeWindow : Window
             {
                 // The buttons dock right first; the title block fills the rest.
                 LastChildFill = true,
-                Children = { _themeBtn, _prChip, refreshBtn, headerText },
+                Children = { _themeBtn, BuildAvatarToggle(), _prChip, refreshBtn, headerText },
             },
         };
 
@@ -604,6 +604,7 @@ internal sealed partial class GitTreeWindow : Window
 
         Content = new Grid { Children = { new DockPanel { Children = { _headerBorder, body } }, _nameDialog } };
         AddHandCursorStyles();
+        ApplyAvatars();
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
     }
@@ -1007,6 +1008,7 @@ internal sealed partial class GitTreeWindow : Window
         _graph.Canvas.SetSnapshot(snap, keepPlace);
         _suppressSelect = false;
         _rail.SetSnapshot(snap);
+        RequestAvatars(snap);
         ApplySessions();
         RefreshFind();
         UpdateActionBar();
@@ -1109,6 +1111,7 @@ internal sealed partial class GitTreeWindow : Window
                 _graph.Canvas.SetSnapshot(_snap, keepPlace: true);
                 _suppressSelect = false;
                 _rail.SetSnapshot(_snap);   // more refs now have a lane
+                RequestAvatars(_snap);
                 RefreshFind();
             });
         });

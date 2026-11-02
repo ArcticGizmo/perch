@@ -87,6 +87,7 @@ public class SettingsRegistryTests
         nameof(AppSettings.GitTreeRefsWidth),
         nameof(AppSettings.GitTreeLanesWidth),
         nameof(AppSettings.GitTreeFilesCollapsed),
+        nameof(AppSettings.GitTreeAvatars),
         nameof(AppSettings.GitTreePullMode),
         nameof(AppSettings.GitTreeRepos),
         nameof(AppSettings.GitTreeAutoHideOthers),

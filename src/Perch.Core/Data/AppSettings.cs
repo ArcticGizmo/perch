@@ -462,6 +462,11 @@ internal sealed class AppSettings
     // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
     public bool GitTreeFilesCollapsed { get; set; }
 
+    // Whether the git graph paints each commit's author picture (initials until one is found) on its node, looked up
+    // through gh and GitHub's avatar host. Set from the window's own header button — not a Settings control (see
+    // SettingsRegistryTests.NotSettings). On by default.
+    public bool GitTreeAvatars { get; set; } = true;
+
     // What the git graph's Pull button does on a plain click: the last choice made from its menu. Not a Settings
     // control (see SettingsRegistryTests.NotSettings).
     public GitGraph.PullMode GitTreePullMode { get; set; } = GitGraph.PullMode.FastForwardOnly;
