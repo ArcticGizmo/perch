@@ -178,6 +178,7 @@ The user tried CP11–CP14 and asked for four things; all four are built (427ff6
 - **WIP takes the selection** (`FollowNewWip`, both refresh paths): when this worktree's WIP row appears while its HEAD commit is selected and no diff is open.
 - **No file highlighted unless opened.** `PopulateWip` / `PopulateFiles` select only an asked-for file (a reselect after refresh, a session's "View diff"), or the first file while the diff is open; `CloseDiff` clears the lists' selection.
 - **Untracked files read `A`**, not git's `?` (it was never an encoding problem).
+- **Hand cursor** on everything clickable: window styles (`AddHandCursorStyles`) give `Button`, `RadioButton`, `ListBoxItem` and `MenuItem` the hand and their `:disabled` state the arrow; flyout menus pick them up from their placement target. Exact-type selectors (`OfType`), so a `RepeatButton` (scrollbar arrows) keeps the arrow. A local `Cursor` still wins (the toolbar's dimmed "off" buttons set Arrow). `GraphCanvas.SetCursor`: hand over a row or pill, ↔ on a column edge. `render` prints a cursor probe (`PreviewCursors`) and now scrolls its drag pills into view first (`PreviewShowPills`): a new commit had pushed them off the bottom, so the drag probe silently stopped dragging.
 
 ## Handover (2026-10-30, end of session 2)
 

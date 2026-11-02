@@ -759,7 +759,13 @@ internal static class HeadlessRenderer
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.
-            if (tw.PreviewPill(0) is { } from && tw.PreviewPill(1) is { } to)
+            tw.PreviewShowPills();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            if (tw.PreviewPill(0) is not { } from || tw.PreviewPill(1) is not { } to)
+                Console.WriteLine("git graph drag: skipped, fewer than two other branch pills on screen");
+            else
             {
                 void Settle() { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Dispatcher.UIThread.RunJobs(); }
                 void Frame(string name)
@@ -790,6 +796,9 @@ internal static class HeadlessRenderer
                     tw.MouseUp(to, global::Avalonia.Input.MouseButton.Left);
                 }
                 Settle();
+                tw.MouseMove(to);
+                Settle();
+                Console.WriteLine($"git graph cursors (pointer on a pill): {tw.PreviewCursors()}");
             }
             tw.PreviewCheckoutChrome();
             Dispatcher.UIThread.RunJobs();

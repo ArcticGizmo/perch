@@ -435,9 +435,22 @@ internal sealed partial class GitTreeWindow
     internal Point? PreviewPill(int index)
     {
         var current = _snap?.Current?.Branch;
-        var pill = _graph.Canvas.PaintedPills.Where(p => p.Ref.Kind == GraphRefKind.LocalBranch && p.Ref.Name != current)
+        var shown = new Rect(_graph.Canvas.Bounds.Size);
+        var pill = _graph.Canvas.PaintedPills.Where(p => p.Ref.Kind == GraphRefKind.LocalBranch && p.Ref.Name != current && shown.Contains(p.Rect))
             .Skip(index).Select(p => (Rect?)p.Rect).FirstOrDefault();
         return pill is { } r ? _graph.Canvas.TranslatePoint(r.Center, this) : null;
+    }
+
+    /// <summary>For the headless render: scrolls the first two branch pills <see cref="PreviewPill"/> picks fully into
+    /// view. Every commit adds a row above them, so on a growing repo they slide off the bottom and the probe's press
+    /// would land outside the canvas.</summary>
+    internal void PreviewShowPills()
+    {
+        if (_snap is not { } snap) return;
+        var current = snap.Current?.Branch;
+        var rows = snap.Refs.Where(r => r.Kind == GraphRefKind.LocalBranch && r.Name != current && !snap.IsHidden(r))
+            .Select(r => snap.RowOf(r.Target)).Where(r => r >= 0).Distinct().OrderBy(r => r).Take(2).ToList();
+        if (rows.Count > 0) _graph.Canvas.Select(rows[^1]);
     }
 
     /// <summary>For the headless render: where the rail's "+ New worktree" zone is (only while a drag is on).</summary>

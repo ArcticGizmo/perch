@@ -817,9 +817,11 @@ internal sealed class GraphCanvas : Control
         if (edge != _edgeHover)
         {
             _edgeHover = edge;
-            Cursor = edge > 0 ? new Cursor(StandardCursorType.SizeWestEast) : Cursor.Default;
             InvalidateVisual();
         }
+        SetCursor(edge > 0 ? StandardCursorType.SizeWestEast
+            : RowAt(at.Y) >= 0 || RefAt(at) is not null ? StandardCursorType.Hand
+            : StandardCursorType.Arrow);
         UpdatePillTip(at);
         if (_press is { } press && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
@@ -846,6 +848,18 @@ internal sealed class GraphCanvas : Control
         _hover = -1;
         _edgeHover = 0;
         InvalidateVisual();
+    }
+
+    // A row or pill is clickable (select, right-click, double-click a pill to check out), so it shows the hand, as the
+    // rest of the window's clickable things do; a column edge shows the resize arrows. Only swapped on a change, since
+    // this runs on every move.
+    private StandardCursorType _cursorKind = StandardCursorType.Arrow;
+    internal StandardCursorType PreviewCursorKind => _cursorKind;
+    private void SetCursor(StandardCursorType kind)
+    {
+        if (kind == _cursorKind) return;
+        _cursorKind = kind;
+        Cursor = kind == StandardCursorType.Arrow ? Cursor.Default : new Cursor(kind);
     }
 
     // A pill's full name as a tooltip, since long names are cut in the middle.

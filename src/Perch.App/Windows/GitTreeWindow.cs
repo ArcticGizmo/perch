@@ -603,8 +603,40 @@ internal sealed partial class GitTreeWindow : Window
         SetFilesCollapsed(settings.GitTreeFilesCollapsed, persist: false);
 
         Content = new Grid { Children = { new DockPanel { Children = { _headerBorder, body } }, _nameDialog } };
+        AddHandCursorStyles();
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
+    }
+
+    // Everything that does something on a click shows the hand, so a row or button reads as clickable before it's
+    // tried. Styles reach the menus too: a flyout's popup takes its styles from the control it opened on. A local
+    // Cursor (the toolbar's dimmed "off" buttons) still wins over these.
+    private readonly Cursor _hand = new(StandardCursorType.Hand);
+
+    private void AddHandCursorStyles()
+    {
+        var arrow = new Cursor(StandardCursorType.Arrow);
+        void For<T>() where T : Control
+        {
+            Styles.Add(new Style(x => x.OfType<T>()) { Setters = { new Setter(CursorProperty, _hand) } });
+            // After the hand, so a disabled one (a menu's note line, a greyed button) keeps the arrow.
+            Styles.Add(new Style(x => x.OfType<T>().Class(":disabled")) { Setters = { new Setter(CursorProperty, arrow) } });
+        }
+        For<Button>();
+        For<RadioButton>();
+        For<ListBoxItem>();
+        For<MenuItem>();
+    }
+
+    /// <summary>For the headless render: which cursors the styles and the graph gave, since a render can't show one.</summary>
+    internal string PreviewCursors()
+    {
+        var row = _filesList.ContainerFromIndex(0) ?? _unstagedList.ContainerFromIndex(0) ?? _stagedList.ContainerFromIndex(0);
+        // Every button on screen that's enabled should show a hand: ours, or one it set itself.
+        var buttons = this.GetVisualDescendants().OfType<Button>().Where(b => b.IsEffectivelyVisible && b.IsEffectivelyEnabled).ToList();
+        var without = buttons.Where(b => b.Cursor is null).Select(b => b.Content?.ToString() ?? b.GetType().Name).ToList();
+        return $"{buttons.Count - without.Count}/{buttons.Count} buttons have a cursor{(without.Count > 0 ? $" (not: {string.Join(", ", without)})" : "")}, " +
+               $"file row hand = {(row is null ? "no rows" : row.Cursor == _hand)}, graph = {_graph.Canvas.PreviewCursorKind}";
     }
 
     // ---- the files pane's collapse ----
