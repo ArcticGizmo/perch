@@ -229,7 +229,8 @@ internal sealed partial class GitTreeWindow
     {
         if (_snap?.Current is not { } here) return;
         var plan = new CheckoutPlan(CheckoutAction.Detach, "HEAD", here.Head ?? "HEAD");
-        OpenBranchBar($"New branch from {here.Branch ?? Short(here.Head ?? "HEAD")}", name => RunCheckout(plan, name, DirtyChoice.None));
+        OpenBranchDialog($"From {here.Branch ?? Short(here.Head ?? "HEAD")}, checked out in {here.Name}. Your changes stay as they are.",
+            "Create and check out", (name, _) => RunCheckout(plan, name, DirtyChoice.None));
     }
 
     // ---- stash rows ----
@@ -247,9 +248,20 @@ internal sealed partial class GitTreeWindow
                 RunHereAction("Popping the stash…", cover: true, cwd => (GitOps.StashPop(cwd, st.Hash), null), _ => $"Popped {st.Selector}",
                     conflict: StashConflict)),
             new Separator(),
+            Item($"Rename {st.Selector}…", () => RenameStash(st)),
             Item($"Drop {st.Selector}…", () => DropStash(st)),
             Item("Copy message", () => Clipboard?.SetTextAsync(st.Message)));
     }
+
+    // Keeps the stash's place in the list and git's "On <branch>:" in front; Undo puts the old message back the same way.
+    private void RenameStash(GraphStash st) =>
+        OpenNameDialog($"Rename {st.Selector}", $"Now: {st.Message}", "Rename", st.Text,
+            text => text.Length == 0 ? "Type a message." : text == st.Text ? "" : null,
+            (text, _) => RunHereAction("Renaming the stash…", cover: false, cwd =>
+            {
+                var r = GitOps.StashRename(cwd, st.Hash, st.RenamedMessage(text));
+                return (r, r.Ok ? () => GitOps.StashRename(cwd, st.Hash, st.Message) : null);
+            }, _ => $"Renamed {st.Selector} to \"{text}\"", conflict: null));
 
     private async void DropStash(GraphStash st)
     {

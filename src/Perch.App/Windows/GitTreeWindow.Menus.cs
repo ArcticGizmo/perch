@@ -67,8 +67,7 @@ internal sealed partial class GitTreeWindow
                 items.Add(Item($"Check out {b.Name}", () => BeginCheckout(GraphCheckout.ForRef(snap, b), _graph.Canvas)));
             var detach = new CheckoutPlan(CheckoutAction.Detach, c.Hash, c.Hash);
             items.Add(Item($"Check out {c.ShortHash} (detached)", () => ConfirmAndRun(detach, null, _graph.Canvas, atPointer: true)));
-            items.Add(Item($"Create a branch at {c.ShortHash}…", () =>
-                OpenBranchBar($"New branch at {c.ShortHash}", name => ConfirmAndRun(detach, name, _branchBar, atPointer: false))));
+            items.Add(Item($"Create a branch at {c.ShortHash}…", () => AskNewBranchAt(detach)));
             items.Add(Item($"Create a worktree at {c.ShortHash}…", () => NewWorktreeFrom(DragSource.Of(c))));
             items.Add(new Separator());
             items.Add(Item("Copy commit hash", () => Clipboard?.SetTextAsync(c.Hash)));

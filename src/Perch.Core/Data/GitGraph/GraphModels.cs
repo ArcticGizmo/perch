@@ -127,6 +127,27 @@ public sealed record GraphStash(string Hash, string Base, string Selector, strin
 
     /// <summary>The entry as a ref, for the rail's Stashes list and the pill on its row.</summary>
     public GraphRef AsRef() => new(Selector, Selector, GraphRefKind.Stash, RowHash);
+
+    /// <summary>The part of <see cref="Message"/> a person wrote (or git's "abc1234 subject" for an unnamed one), without
+    /// the "On main: " / "WIP on main: " git puts in front: what a rename starts from.</summary>
+    public string Text => SplitMessage(Message).Text;
+
+    /// <summary>The full message a rename to <paramref name="text"/> stores: git's "On &lt;branch&gt;: " kept in front, as
+    /// <c>git stash push -m</c> would have written it, so the list still says where the stash came from.</summary>
+    public string RenamedMessage(string text) => SplitMessage(Message).Branch is { } b ? $"On {b}: {text}" : text;
+
+    // Branch names can't hold ':', so the first ": " after "On x" / "WIP on x" ends git's prefix.
+    internal static (string? Branch, string Text) SplitMessage(string message)
+    {
+        foreach (var lead in (ReadOnlySpan<string>)["WIP on ", "On "])
+        {
+            if (!message.StartsWith(lead, StringComparison.Ordinal)) continue;
+            int colon = message.IndexOf(": ", lead.Length, StringComparison.Ordinal);
+            if (colon > lead.Length && message.IndexOf(':', lead.Length) == colon)
+                return (message[lead.Length..colon], message[(colon + 2)..]);
+        }
+        return (null, message);
+    }
 }
 
 public sealed record GraphWorktree(string Path, string? Branch, string? Head, int Changes, bool IsCurrent)

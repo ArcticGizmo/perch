@@ -11,7 +11,7 @@ internal static class GraphLoader
 {
     public const int PageSize = 2000;
 
-    // Tried in order for the primary (lane 0) branch, local before remote.
+    // Tried in order for the trunk, local before remote.
     private static readonly string[] TrunkNames = ["main", "master", "trunk", "develop"];
 
     /// <param name="timing">Called with each stage's name and duration, for <c>perch bench-graph</c>.</param>
@@ -67,7 +67,8 @@ internal static class GraphLoader
         return s.Append(page, pageSize);
     }
 
-    /// <summary>The branch pinned to lane 0: the first trunk name that exists locally, else on a remote.</summary>
+    /// <summary>The trunk: the first trunk name that exists locally, else on a remote. Lane 0 when the window has no
+    /// worktree of its own (see <see cref="GraphSnapshot.PrimaryTip"/>), and what auto-hide measures new work against.</summary>
     internal static string? PrimaryBranch(IReadOnlyList<GraphRef> refs)
     {
         foreach (var t in TrunkNames)

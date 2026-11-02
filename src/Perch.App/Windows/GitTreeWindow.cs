@@ -363,7 +363,7 @@ internal sealed partial class GitTreeWindow : Window
         graphBody.Children.Add(WithColumn(_toast, 2));
         _dragLayer.SetValue(Grid.ColumnSpanProperty, 3);
         graphBody.Children.Add(_dragLayer);
-        var graphPane = new DockPanel { LastChildFill = true, Children = { graphHeader, _gotoBar, _branchBar, _progressBar, graphBody } };
+        var graphPane = new DockPanel { LastChildFill = true, Children = { graphHeader, _gotoBar, _progressBar, graphBody } };
 
         // ---- pane 2: files in the selected node ----
         // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
@@ -602,7 +602,7 @@ internal sealed partial class GitTreeWindow : Window
         _filesPane = filesPane;
         SetFilesCollapsed(settings.GitTreeFilesCollapsed, persist: false);
 
-        Content = new DockPanel { Children = { _headerBorder, body } };
+        Content = new Grid { Children = { new DockPanel { Children = { _headerBorder, body } }, _nameDialog } };
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
     }
@@ -689,6 +689,14 @@ internal sealed partial class GitTreeWindow : Window
         if (!_diffOverlay.IsVisible) return;
         _diffOverlay.IsVisible = false;
         if (_findBar.IsVisible) CloseFind();
+        // With the diff gone no file is open, so no row stays highlighted as if it were.
+        _suppressSelect = true;
+        _filesList.SelectedIndex = -1;
+        _unstagedList.SelectedIndex = -1;
+        _stagedList.SelectedIndex = -1;
+        _suppressSelect = false;
+        _shownWip = null;
+        _shownCommit = null;
         _graph.Canvas.Focus();
     }
 
@@ -787,6 +795,12 @@ internal sealed partial class GitTreeWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        // The name dialog is modal: only Esc reaches past it, to close it.
+        if (_nameDialog.IsVisible)
+        {
+            if (e.Key == Key.Escape) { CloseNameDialog(); e.Handled = true; }
+            return;
+        }
         // Ctrl+F finds in whatever is showing: the open diff, else the graph's commits. Ctrl+G is always the commits.
         if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _diffOverlay.IsVisible)
         {
@@ -807,7 +821,6 @@ internal sealed partial class GitTreeWindow : Window
             if (CancelDrag()) { }
             else if (_findBar.IsVisible) CloseFind();
             else if (_diffOverlay.IsVisible) CloseDiff();
-            else if (_branchBar.IsVisible) CloseBranchBar();
             else if (_gotoBar.IsVisible) CloseGoTo();
             else Close();
         }
@@ -935,6 +948,8 @@ internal sealed partial class GitTreeWindow : Window
                     bool openFocused = keepFile is null && _pendingFocusFile is not null;
                     _pendingFocusFile = null;
                     _pendingWipStaged = keepStaged;                     // …on the same side (staged/unstaged)
+                    if (FollowNewWip(keepNode, previous, snap) is var follow && follow != keepNode)
+                        (keepNode, _pendingFilePath) = (follow, null);
                     int row = keepNode is not null ? RowOfNodeKey(keepNode) : -1;
                     SelectRow(row >= 0 ? row : snap?.HomeRow() ?? -1);
                     UpdateEmptyStates();
@@ -1026,6 +1041,17 @@ internal sealed partial class GitTreeWindow : Window
         _suppressSelect = false;
         _selectedNode = null;
         OnGraphSelected(row);
+    }
+
+    // Changes appearing while this worktree's HEAD commit is selected move the selection up to them: that commit was
+    // the latest work, and the changes are the work now. Left alone while a diff is open, so it isn't swapped from
+    // under the reader.
+    private string? FollowNewWip(string? keepNode, GraphSnapshot? before, GraphSnapshot? after)
+    {
+        if (keepNode is null || _diffOverlay.IsVisible || before?.Current is not { Head: { } head } was || after?.Current is not { } now)
+            return keepNode;
+        bool appeared = before.RowOf(was.WipHash) < 0 && after.RowOf(now.WipHash) >= 0;
+        return appeared && keepNode == head ? "\0wip" : keepNode;
     }
 
     // The row of a node key in the current snapshot: the WIP key is this worktree's WIP row.
@@ -1261,8 +1287,7 @@ internal sealed partial class GitTreeWindow : Window
                     if (!IsVisible || gen != _gen) return;
                     _selectedCommitDiff = t.Result;
                     var files = t.Result?.Files ?? [];
-                    int sel = wantFile is null ? (files.Count > 0 ? 0 : -1) : IndexOfDiffFile(files, wantFile);
-                    PopulateFiles(files, sel);
+                    PopulateFiles(files, wantFile is null ? -1 : IndexOfDiffFile(files, wantFile));
                 });
             });
         }
@@ -1300,7 +1325,7 @@ internal sealed partial class GitTreeWindow : Window
         if (preferUnstagedTop)
         {
             _suppressSelect = false;
-            if (unstaged.Count > 0)
+            if (unstaged.Count > 0 && _diffOverlay.IsVisible)
             {
                 _unstagedList.SelectedIndex = 0; // fires OnWipFileSelected → loads the topmost Changes diff
             }
@@ -1318,14 +1343,16 @@ internal sealed partial class GitTreeWindow : Window
         int sidx = wantPath is not null ? IndexOfPath(staged, wantPath) : -1;
 
         // Choose the row to select: the requested side first, then the other side (the file may have moved
-        // sides — e.g. its last unstaged hunk was staged), then the first row of either group.
+        // sides — e.g. its last unstaged hunk was staged), then, only while the diff is open and needs something to
+        // show, the first row of either group. A highlighted row means "this is the one you opened".
+        bool showFirst = _diffOverlay.IsVisible;
         (ListBox list, int idx, bool side) =
             !wantStaged && uidx >= 0 ? (_unstagedList, uidx, false)
           : wantStaged && sidx >= 0 ? (_stagedList, sidx, true)
           : uidx >= 0 ? (_unstagedList, uidx, false)
           : sidx >= 0 ? (_stagedList, sidx, true)
-          : unstaged.Count > 0 ? (_unstagedList, 0, false)
-          : staged.Count > 0 ? (_stagedList, 0, true)
+          : showFirst && unstaged.Count > 0 ? (_unstagedList, 0, false)
+          : showFirst && staged.Count > 0 ? (_stagedList, 0, true)
           : (_unstagedList, -1, false);
 
         if (idx < 0)
@@ -1410,17 +1437,17 @@ internal sealed partial class GitTreeWindow : Window
         return PlainSections(path, cur, "This file is empty or missing.");
     }
 
-    // Sets the commit-node files list and selects a row (default first), which fires OnCommitFileSelected to
-    // load the diff.
-    private void PopulateFiles<T>(IReadOnlyList<T> items, int? select)
+    // Sets the commit-node files list and selects the asked-for row, which fires OnCommitFileSelected to load the
+    // diff. Nothing is selected otherwise unless the diff is open (it then shows the first file), so a highlighted row
+    // is always one the user opened.
+    private void PopulateFiles<T>(IReadOnlyList<T> items, int select)
     {
         _suppressSelect = true;
         _filesList.ItemsSource = items;
         _filesList.SelectedIndex = -1;
         _suppressSelect = false;
 
-        int idx = select ?? (items.Count > 0 ? 0 : -1);
-        if (idx < 0 && items.Count > 0) idx = 0;
+        int idx = select >= 0 ? select : _diffOverlay.IsVisible && items.Count > 0 ? 0 : -1;
         _filesList.SelectedIndex = idx;
 
         UpdateEmptyStates();
@@ -1834,15 +1861,17 @@ internal sealed partial class GitTreeWindow : Window
                     string? keepNode = _selectedNode?.Key;
                     string? keepFile = CurrentFilePath();
                     bool keepStaged = _shownWip?.Staged ?? false;
+                    string? want = FollowNewWip(keepNode, _snap, snap);
+                    if (want != keepNode) keepFile = null;
                     ShowSnapshot(snap, cwd, keepPlace: true);
-                    int row = keepNode is not null ? RowOfNodeKey(keepNode) : -1;
+                    int row = want is not null ? RowOfNodeKey(want) : -1;
                     if (row < 0) row = snap?.HomeRow() ?? -1;
                     // If the same node stays selected, keep it and refresh a WIP node's groups quietly below;
                     // reselecting would reload the diff. Only drive a reselect when the node changed identity.
                     _suppressSelect = true;
                     _graph.Canvas.Select(row, scrollIntoView: false);
                     _suppressSelect = false;
-                    if (row < 0 || keepNode is null || RowOfNodeKey(keepNode) != row)
+                    if (row < 0 || keepNode is null || want != keepNode || RowOfNodeKey(keepNode) != row)
                     {
                         _pendingFilePath = keepFile;
                         _pendingWipStaged = keepStaged;
@@ -2343,10 +2372,11 @@ internal sealed partial class GitTreeWindow : Window
     }, supportsRecycling: true);
 
     // The status code + path for a WIP row, reflecting the relevant side: the staged kind in the staged
-    // group, else the unstaged kind (with '?' for untracked and '≈' for a BOM/EOL-only change).
+    // group, else the unstaged kind (with '≈' for a BOM/EOL-only change). An untracked file is 'A', not git's '??':
+    // to the person looking it's a file they added, and it keeps that letter once staged.
     private string WipFileLabel(GitFileChange fc, bool staged)
     {
-        char code = !staged && fc.Untracked ? '?'
+        char code = !staged && fc.Untracked ? 'A'
                   : !staged && _invisiblePaths.Contains(fc.Path) ? '≈'
                   : CodeOf(staged ? fc.Staged : fc.Unstaged);
         return fc.OrigPath is { } o ? $"{code}  {o} → {fc.Path}" : $"{code}  {fc.Path}";

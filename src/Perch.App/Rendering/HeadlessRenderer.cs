@@ -799,6 +799,16 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, "git_tree_checkout_1x.png"));
                 chromeFrame.Save(fs);
             }
+            // The new-branch dialog with a taken name typed, so its live check shows.
+            tw.PreviewBranchDialog("main");
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } dialogFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_branch_dialog_1x.png"));
+                dialogFrame.Save(fs);
+            }
+            tw.PreviewCloseNameDialog();
             tw.Close();
         }
 

@@ -236,7 +236,7 @@ internal sealed partial class GitTreeWindow
         }
         if (o.Kind == DropKind.NewWorktree && o.NeedsName)
         {
-            OpenBranchBar($"New worktree on a new branch from {src.Label}", name =>
+            OpenBranchDialog($"A new worktree on a new branch from {src.Label}.", "Create worktree", (name, _) =>
                 RunDrop(o, newBranch: name, newPath: GraphDrop.NewWorktreePath(_mainRoot ?? snap.Root, _layout, name)));
             return;
         }

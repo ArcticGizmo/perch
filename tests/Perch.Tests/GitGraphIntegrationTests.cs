@@ -505,6 +505,30 @@ public sealed class GitGraphIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void StashRename_KeepsItsPlaceAndTheOthersAndUndoes()
+    {
+        if (!_ready) return;
+        foreach (var name in new[] { "oldest", "middle", "newest" })
+        {
+            File.WriteAllText(Path.Combine(_repo, "a.txt"), name + "\n");
+            Assert.True(GitOps.StashPush(_repo, name).Ok);
+        }
+        var before = GraphLogReader.LoadStashes(_repo);
+        var middle = before[1];
+
+        Assert.True(GitOps.StashRename(_repo, middle.Hash, middle.RenamedMessage("renamed")).Ok);
+        var after = GraphLogReader.LoadStashes(_repo);
+        Assert.Equal(before.Select(s => s.Hash), after.Select(s => s.Hash));
+        Assert.Equal(["On main: newest", "On main: renamed", "On main: oldest"], after.Select(s => s.Message));
+
+        Assert.True(GitOps.StashRename(_repo, middle.Hash, middle.Message).Ok);      // what Undo does
+        Assert.Equal(before.Select(s => s.Message), GraphLogReader.LoadStashes(_repo).Select(s => s.Message));
+
+        Assert.False(GitOps.StashRename(_repo, new string('0', 40), "x").Ok);
+        Assert.Equal(3, GraphLogReader.LoadStashes(_repo).Count);
+    }
+
+    [Fact]
     public void PushPublishesANewBranch_AndPullFastForwardsWithUndo()
     {
         if (!_ready) return;

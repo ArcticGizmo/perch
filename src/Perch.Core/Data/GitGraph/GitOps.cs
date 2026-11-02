@@ -117,6 +117,47 @@ internal static class GitOps
             : Run(worktree, "stash", verb, $"stash@{{{index}}}");
     }
 
+    /// <summary>
+    /// Gives the stash entry <paramref name="stashHash"/> a new message, keeping its place in the list. git has no
+    /// rename, so the entries down to this one are lifted off the top (<c>drop</c>) and put back in order
+    /// (<c>store</c>), this one under the new message; no commit changes. A failure part way still puts back what was
+    /// lifted, so nothing leaves the list.
+    /// </summary>
+    public static GitOpResult StashRename(string worktree, string stashHash, string message)
+    {
+        string command = $"git stash store -m \"{message}\" {(stashHash.Length > 7 ? stashHash[..7] : stashHash)}";
+        if (Refuse(stashHash) is { } refused) return refused;
+        var list = GitRunner.Run(worktree, 6000, "stash", "list", "--format=%H%x1f%gs");
+        if (list.Exit != 0) return new GitOpResult(false, FirstLine(list.Stderr, "git stash list failed."), command);
+        var entries = list.Stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Split('\x1f', 2)).Where(f => f.Length == 2).Select(f => (Hash: f[0], Subject: f[1])).ToList();
+        int index = entries.FindIndex(e => e.Hash == stashHash);
+        if (index < 0) return new GitOpResult(false, "That stash is no longer there.", command);
+
+        var lifted = new List<(string Hash, string Subject)>();
+        GitOpResult? failure = null;
+        for (int i = 0; i <= index; i++)
+        {
+            if (StashTop(worktree) != entries[i].Hash)
+            {
+                failure = new GitOpResult(false, "The stash list changed while renaming, so it stopped. Nothing was lost.", command);
+                break;
+            }
+            var dropped = Run(worktree, "stash", "drop", "stash@{0}");
+            if (!dropped.Ok) { failure = dropped; break; }
+            lifted.Add(entries[i]);
+        }
+        // Back on bottom-up, so each lands where it was.
+        for (int i = lifted.Count - 1; i >= 0; i--)
+        {
+            var (hash, subject) = lifted[i];
+            var stored = Run(worktree, "stash", "store", "-m", failure is null && hash == stashHash ? message : subject, hash);
+            if (!stored.Ok && failure is null)
+                failure = stored with { Message = $"Couldn't put stash {hash[..7]} back ({stored.Message}); `git stash store {hash}` restores it." };
+        }
+        return failure ?? new GitOpResult(true, "", command);
+    }
+
     /// <summary>Pops the newest stash entry. A pop that conflicts leaves the entry in the list, as git does.</summary>
     public static GitOpResult StashPopTop(string worktree) => Run(worktree, "stash", "pop");
 

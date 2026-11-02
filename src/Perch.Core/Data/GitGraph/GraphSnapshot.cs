@@ -245,9 +245,24 @@ internal sealed class GraphSnapshot
     public Dictionary<string, int> Hints() => LaneAllocator.HintsFrom(Commits, Rows);
 
     /// <summary>
-    /// Lays out <paramref name="log"/> (one page, topological order) under a WIP row per dirty worktree, ordered by
-    /// where its HEAD sits, then a row per stash made on a commit in the page, ordered the same way. The primary
-    /// branch's chain gets lane 0, starting from its worktree's WIP row when that worktree is dirty.
+    /// Where lane 0 starts: the window's own worktree (its WIP row when dirty, else its HEAD), so the history being
+    /// worked on is the straight line down the left and everything else branches off it. With no current worktree it's
+    /// <paramref name="primaryBranch"/> (the trunk), again from its worktree's WIP row when that's dirty.
+    /// </summary>
+    internal static string? PrimaryTip(IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphRef> refs, string? primaryBranch)
+    {
+        if (worktrees.FirstOrDefault(w => w.IsCurrent && w.Head is not null) is { } here)
+            return here.Changes > 0 ? here.WipHash : here.Head;
+        if (primaryBranch is null)
+            return null;
+        return worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
+            ?? refs.FirstOrDefault(r => r.Name == primaryBranch && r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)?.Target;
+    }
+
+    /// <summary>
+    /// Lays out <paramref name="log"/> (one page, topological order) under a WIP row per dirty worktree, the current
+    /// one first and the rest ordered by where their HEADs sit, then a row per stash made on a commit in the page, ordered the same way. Lane 0 follows
+    /// <see cref="PrimaryTip"/>'s first-parent chain.
     /// </summary>
     public static GraphSnapshot Build(string root, GraphScope scope, GraphLogQuery query, IReadOnlyList<GraphCommit> log,
         IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryBranch,
@@ -259,9 +274,10 @@ internal sealed class GraphSnapshot
         for (int i = 0; i < log.Count; i++)
             logRow[log[i].Hash] = i;
 
+        // The window's own changes are the top row; other worktrees' follow in the order of their HEADs.
         var pseudo = worktrees
             .Where(w => w.Changes > 0 && w.Head is not null)
-            .OrderBy(w => logRow.TryGetValue(w.Head!, out var r) ? r : int.MaxValue)
+            .OrderBy(w => w.IsCurrent ? -1 : logRow.TryGetValue(w.Head!, out var r) ? r : int.MaxValue)
             .Select(w => new GraphCommit(w.WipHash, [w.Head!], "", "", 0, $"{w.Changes} uncommitted"))
             .ToList();
         // A stash whose commit isn't in the page has nowhere to hang its line; the rail still lists it.
@@ -271,10 +287,7 @@ internal sealed class GraphSnapshot
             .Select(st => new GraphCommit(st.RowHash, [st.Base], "", "", st.UnixTime, st.Message)));
         refs = stashes.Count == 0 ? refs : [.. refs, .. stashes.Select(st => st.AsRef())];
 
-        string? primaryTip = null;
-        if (primaryBranch is not null)
-            primaryTip = worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
-                ?? refs.FirstOrDefault(r => r.Name == primaryBranch && r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)?.Target;
+        string? primaryTip = PrimaryTip(worktrees, refs, primaryBranch);
 
         var commits = new GraphCommit[pseudo.Count + log.Count];
         pseudo.CopyTo(commits);

@@ -23,10 +23,13 @@ internal sealed partial class GitTreeWindow
     private DispatcherTimer? _toastTimer;
     private bool _toastError, _toastBusy;
 
-    private Border _branchBar = null!;
-    private TextBox _branchBox = null!;
-    private TextBlock _branchLabel = null!;
-    private Action<string>? _branchCreate;
+    private Border _nameDialog = null!, _nameCard = null!;
+    private TextBox _nameBox = null!;
+    private TextBlock _nameTitle = null!, _nameDetail = null!, _nameWarning = null!, _nameProblem = null!;
+    private StackPanel _nameChoices = null!;
+    private Button _nameOk = null!, _nameCancel = null!;
+    private Func<string, string?>? _nameCheck;
+    private Action<string, int>? _nameDone;
 
     private void BuildCheckoutUi()
     {
@@ -59,22 +62,125 @@ internal sealed partial class GitTreeWindow
         _toast.PointerEntered += (_, _) => _toastTimer?.Stop();
         _toast.PointerExited += (_, _) => { if (_toast.IsVisible && !_toastBusy) _toastTimer?.Start(); };
 
-        _branchLabel = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0), [DockPanel.DockProperty] = Dock.Left };
-        _branchBox = new TextBox { PlaceholderText = "Branch name", MinWidth = 200, VerticalAlignment = VerticalAlignment.Center };
-        _branchBox.KeyDown += (_, e) =>
+        BuildNameDialog();
+    }
+
+    // ---- the name dialog (a new branch, a stash's new message) ----
+
+    // Over the whole window rather than a bar in the graph card: naming something is a step of its own, and a bar at the
+    // top of the graph was easy to miss and far from whatever asked for it.
+    private void BuildNameDialog()
+    {
+        _nameTitle = new TextBlock { FontSize = 15, FontWeight = FontWeight.SemiBold };
+        _nameDetail = new TextBlock { FontSize = 12.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+        _nameBox = new TextBox { Margin = new Thickness(0, 14, 0, 0) };
+        _nameBox.TextChanged += (_, _) => CheckName();
+        _nameBox.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter) { CreateBranchFromBar(); e.Handled = true; }
-            else if (e.Key == Key.Escape) { CloseBranchBar(); e.Handled = true; }
+            if (e.Key == Key.Enter) { AcceptName(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { CloseNameDialog(); e.Handled = true; }
         };
-        var create = new Button { Content = "Create and check out", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
-        create.Click += (_, _) => CreateBranchFromBar();
-        var close = new Button { Content = "✕", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
-        close.Click += (_, _) => CloseBranchBar();
-        _branchBar = new Border
+        _nameProblem = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), IsVisible = false };
+        _nameChoices = new StackPanel { Spacing = 2, Margin = new Thickness(0, 12, 0, 0) };
+        _nameWarning = new TextBlock { FontSize = 12, FontStyle = FontStyle.Italic, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
+        _nameCancel = new Button { Content = "Cancel", Padding = new Thickness(14, 5) };
+        _nameCancel.Click += (_, _) => CloseNameDialog();
+        _nameOk = new Button { Padding = new Thickness(14, 5) };
+        _nameOk.Click += (_, _) => AcceptName();
+        _nameCard = new Border
         {
-            Padding = new Thickness(10, 6), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { close, create, _branchLabel, _branchBox } },
+            Width = 440, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(20, 18), CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 24, OffsetY = 4, Color = Color.FromArgb(110, 0, 0, 0) }),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    _nameTitle, _nameDetail, _nameBox, _nameProblem, _nameChoices, _nameWarning,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right,
+                        Margin = new Thickness(0, 18, 0, 0), Children = { _nameCancel, _nameOk },
+                    },
+                },
+            },
         };
+        _nameDialog = new Border { IsVisible = false, Background = new SolidColorBrush(Color.FromArgb(110, 0, 0, 0)), Child = _nameCard };
+        // A click on the dimmed window around the card cancels, as Esc does.
+        _nameDialog.PointerPressed += (_, e) => { if (e.Source == _nameDialog) { CloseNameDialog(); e.Handled = true; } };
+    }
+
+    /// <summary>
+    /// Asks for a name. <paramref name="problem"/> answers as it's typed (null = fine, "" = not yet, without saying why),
+    /// and the button waits for it;
+    /// <paramref name="choices"/> are radio options under the box (the first is picked), and <paramref name="done"/> gets
+    /// the trimmed name and the picked choice's index.
+    /// </summary>
+    private void OpenNameDialog(string title, string detail, string action, string initial, Func<string, string?> problem,
+        Action<string, int> done, IReadOnlyList<string>? choices = null, string? warning = null)
+    {
+        _nameTitle.Text = title;
+        _nameDetail.Text = detail;
+        _nameOk.Content = action;
+        _nameCheck = problem;
+        _nameDone = done;
+        _nameChoices.Children.Clear();
+        foreach (var (choice, i) in (choices ?? []).Select((c, i) => (c, i)))
+            _nameChoices.Children.Add(new RadioButton { Content = choice, GroupName = "nameDialogChoice", IsChecked = i == 0 });
+        _nameChoices.IsVisible = _nameChoices.Children.Count > 0;
+        _nameWarning.Text = warning;
+        _nameWarning.IsVisible = warning is not null;
+        _nameBox.Text = initial;
+        ApplyCheckoutPalette();
+        CheckName();
+        _nameDialog.IsVisible = true;
+        Dispatcher.UIThread.Post(() => { _nameBox.Focus(); _nameBox.SelectAll(); });
+    }
+
+    // An empty box says nothing yet; anything typed is checked at once, so the reason shows before the button is tried.
+    // A problem of "" holds the button back without a reason (an unchanged name needs none).
+    private void CheckName()
+    {
+        string name = _nameBox.Text?.Trim() ?? "";
+        string? problem = _nameCheck?.Invoke(name);
+        _nameProblem.Text = problem;
+        _nameProblem.IsVisible = problem is { Length: > 0 } && name.Length > 0;
+        _nameOk.IsEnabled = problem is null;
+    }
+
+    private void AcceptName()
+    {
+        string name = _nameBox.Text?.Trim() ?? "";
+        if (_nameDone is not { } done || _nameCheck?.Invoke(name) is not null) return;
+        int choice = _nameChoices.Children.OfType<RadioButton>().ToList().FindIndex(r => r.IsChecked == true);
+        CloseNameDialog();
+        done(name, Math.Max(choice, 0));
+    }
+
+    private void CloseNameDialog()
+    {
+        _nameDialog.IsVisible = false;
+        _nameDone = null;
+        _nameCheck = null;
+        _graph.Canvas.Focus();
+    }
+
+    // A new branch, named in the dialog. A name git would refuse, or one that's taken, is caught as it's typed.
+    private void OpenBranchDialog(string detail, string action, Action<string, int> create,
+        IReadOnlyList<string>? choices = null, string? warning = null) =>
+        OpenNameDialog("New branch", detail, action, "", name => GraphCheckout.BranchNameProblem(name, _snap?.Refs ?? []),
+            create, choices, warning);
+
+    // A branch at a commit, checked out here. Uncommitted changes and a working session are asked about in the same
+    // dialog, not in a menu after it.
+    private void AskNewBranchAt(CheckoutPlan plan)
+    {
+        int dirty = _lastStatus?.Changes.Count ?? 0;
+        string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}";
+        OpenBranchDialog($"At {Dest(plan, null)}, checked out in {HereName()}.", "Create and check out",
+            (name, choice) => RunCheckout(plan, name, dirty == 0 ? DirtyChoice.None : choice == 0 ? DirtyChoice.Stash : DirtyChoice.Carry),
+            dirty > 0 ? [$"Stash the {changes} first", $"Bring the {changes} along"] : null,
+            _isActive ? $"A Claude session is working in {HereName()}; checking out under it can confuse its edits." : null);
     }
 
     // ---- busy cover ----
@@ -140,8 +246,14 @@ internal sealed partial class GitTreeWindow
         _toastMsg.Foreground = _toastError ? _pal.Red : _pal.Title;
         _toastCmd.Foreground = _pal.Muted;
         _toastClose.Foreground = _pal.Muted;
-        _branchBar.Background = _pal.WindowBg;
-        _branchLabel.Foreground = _pal.Muted;
+        _nameCard.Background = _pal.WindowBg;
+        _nameCard.BorderBrush = _pal.Border;
+        _nameTitle.Foreground = _pal.Title;
+        _nameDetail.Foreground = _pal.Muted;
+        _nameWarning.Foreground = _pal.Orange;
+        _nameProblem.Foreground = _pal.Red;
+        _nameOk.Background = _pal.Accent;
+        _nameOk.Foreground = _pal.OnAccent;
     }
 
     // ---- the gesture ----
@@ -169,8 +281,7 @@ internal sealed partial class GitTreeWindow
                 ShowMenu(anchor, atPointer: true,
                     Note(plan.Target == plan.Commit ? $"No branch points at {Short(plan.Commit)}" : $"{plan.Target} is a tag"),
                     Item($"Check out {Dest(plan, null)} here, detached", () => ConfirmAndRun(plan, null, anchor, atPointer: true)),
-                    Item($"Create a branch at {Short(plan.Commit)}…", () =>
-                        OpenBranchBar($"New branch at {Dest(plan, null)}", name => ConfirmAndRun(plan, name, _branchBar, atPointer: false))));
+                    Item($"Create a branch at {Short(plan.Commit)}…", () => AskNewBranchAt(plan)));
                 return;
             default:
                 ConfirmAndRun(plan, null, anchor, atPointer: true);
@@ -269,34 +380,6 @@ internal sealed partial class GitTreeWindow
         });
     }
 
-    // ---- new branch ----
-
-    // The inline "name a new branch" bar, for a branch at a commit or a new worktree's branch.
-    private void OpenBranchBar(string label, Action<string> create)
-    {
-        _branchCreate = create;
-        _branchLabel.Text = label;
-        _branchBar.IsVisible = true;
-        _branchBox.Text = "";
-        Dispatcher.UIThread.Post(() => _branchBox.Focus());
-    }
-
-    private void CloseBranchBar()
-    {
-        _branchBar.IsVisible = false;
-        _branchCreate = null;
-        _graph.Canvas.Focus();
-    }
-
-    private void CreateBranchFromBar()
-    {
-        string name = _branchBox.Text?.Trim() ?? "";
-        if (name.Length == 0 || _branchCreate is not { } create) return;
-        _branchBar.IsVisible = false;
-        _branchCreate = null;
-        create(name);
-    }
-
     // ---- toast ----
 
     // Busy toasts stay until replaced; the rest hide on their own (errors linger longer), unless the pointer is on them.
@@ -332,15 +415,26 @@ internal sealed partial class GitTreeWindow
         _toastExtraAction = null;
     }
 
-    /// <summary>For the headless render: the toast with Undo, the new-branch bar and the in-progress banner, which
-    /// otherwise need a gesture or a conflict.</summary>
+    /// <summary>For the headless render: the toast with Undo and the in-progress banner, which otherwise need a gesture
+    /// or a conflict.</summary>
     internal void PreviewCheckoutChrome()
     {
         UpdateInProgress(GitInProgress.Merge);
-        var at = _snap?.Current?.Head ?? "0000000";
-        OpenBranchBar($"New branch at {Short(at)}", _ => { });
         ShowToast("Checked out feeds; 3 changes stashed", "git switch feeds", () => { });
     }
+
+    /// <summary>For the headless render: the new-branch dialog as a branch at a commit asks it, with a dirty tree's
+    /// choices and a name that's already taken typed in.</summary>
+    internal void PreviewBranchDialog(string typed)
+    {
+        var at = _snap?.Current?.Head ?? "0000000";
+        OpenBranchDialog($"At {Short(at)}, checked out in {HereName()}.", "Create and check out", (_, _) => { },
+            ["Stash the 3 changes first", "Bring the 3 changes along"],
+            "A Claude session is working here; checking out under it can confuse its edits.");
+        _nameBox.Text = typed;
+    }
+
+    internal void PreviewCloseNameDialog() => CloseNameDialog();
 
     // ---- helpers ----
 

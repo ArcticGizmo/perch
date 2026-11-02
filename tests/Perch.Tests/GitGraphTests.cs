@@ -362,6 +362,50 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void Snapshot_LaneZeroFollowsTheWindowsOwnWorktreeNotTheTrunk()
+    {
+        // The window is on feat (made from m1); main has moved on to m2, and both are dirty.
+        var feat = new GraphWorktree("C:/r--feat", "feat", "f1", Changes: 2, IsCurrent: true);
+        var main = new GraphWorktree("C:/r", "main", "m2", Changes: 1, IsCurrent: false);
+        var s = Snap([C("m2", "m1"), C("f1", "m1"), C("m1")], [main, feat]);
+
+        // Its changes are the top row, and they run straight down lane 0 through f1 to m1; main branches off.
+        Assert.Equal([feat.WipHash, main.WipHash, "m2", "f1", "m1"], s.Commits.Select(c => c.Hash));
+        Assert.Equal([0, 1, 1, 0, 0], s.Rows.Select(r => r.Lane));
+
+        // Clean, it starts at its HEAD; with no worktree of the window's own, the trunk keeps lane 0.
+        Assert.Equal("f1", GraphSnapshot.PrimaryTip([feat with { Changes = 0 }], Refs, "main"));
+        Assert.Equal("m2", GraphSnapshot.PrimaryTip([main with { Changes = 0 }], Refs, "main"));
+        Assert.Equal(main.WipHash, GraphSnapshot.PrimaryTip([main], Refs, "main"));
+    }
+
+    [Fact]
+    public void Stash_SplitsGitsPrefixOffAndKeepsItOnARename()
+    {
+        var named = new GraphStash("s0", "m1", "stash@{0}", "On main: spike on feeds", 1);
+        var auto = new GraphStash("s1", "m1", "stash@{1}", "WIP on feat/x: abc1234 Fix it: properly", 1);
+        var bare = new GraphStash("s2", "m1", "stash@{2}", "renamed by hand", 1);
+
+        Assert.Equal("spike on feeds", named.Text);
+        Assert.Equal("On main: tidy", named.RenamedMessage("tidy"));
+        Assert.Equal("abc1234 Fix it: properly", auto.Text);
+        Assert.Equal("On feat/x: tidy", auto.RenamedMessage("tidy"));
+        Assert.Equal("renamed by hand", bare.Text);
+        Assert.Equal("tidy", bare.RenamedMessage("tidy"));
+    }
+
+    [Fact]
+    public void BranchNameProblem_FollowsGitsRulesAndRefusesATakenName()
+    {
+        Assert.Null(GraphCheckout.BranchNameProblem("feature/new-thing_2", Refs));
+        Assert.Null(GraphCheckout.BranchNameProblem("origin/main", Refs));   // only local names clash
+        Assert.Equal("feat already exists.", GraphCheckout.BranchNameProblem("feat", Refs));
+        foreach (var bad in new[] { "", "has space", "a..b", "-x", "x/", "x.", "a//b", "/a", ".a", "a/.b", "x.lock", "a~1", "a^", "a:b",
+                     "a?", "a*", "a[b", @"a\b", "@", "a@{1}", "HEAD", "tab\tbed" })
+            Assert.NotNull(GraphCheckout.BranchNameProblem(bad, Refs));
+    }
+
+    [Fact]
     public void Snapshot_AppendResolvesATetherToAnUnloadedHead()
     {
         var detached = new GraphWorktree("C:/r--x", null, "m1", Changes: 2, IsCurrent: false);
