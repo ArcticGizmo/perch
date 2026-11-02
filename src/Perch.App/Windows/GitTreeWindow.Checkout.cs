@@ -436,6 +436,9 @@ internal sealed partial class GitTreeWindow
 
     internal void PreviewCloseNameDialog() => CloseNameDialog();
 
+    /// <summary>For the headless render: the rail's Worktrees and Local sections collapsed (or open again).</summary>
+    internal void PreviewRailOpen(bool open) => _rail.PreviewSetOpen(open, open);
+
     // ---- helpers ----
 
     private void ShowMenu(Control anchor, bool atPointer, params Control[] items)

@@ -41,7 +41,7 @@ internal sealed class GraphRail : UserControl
     private GraphCanvas.Colors _c = GraphCanvas.Colors.For(light: false);
     private GraphSnapshot? _snap;
     private IReadOnlyDictionary<string, WorktreeSession> _sessions = new Dictionary<string, WorktreeSession>();
-    private bool _remotesOpen = true, _tagsOpen, _stashesOpen = true;
+    private bool _worktreesOpen = true, _localOpen = true, _remotesOpen = true, _tagsOpen, _stashesOpen = true;
 
     /// <summary>The Claude session working in a worktree, as the rail shows it.</summary>
     public sealed record WorktreeSession(string Name, string State, Color Color);
@@ -92,6 +92,13 @@ internal sealed class GraphRail : UserControl
     public void SetSessions(IReadOnlyDictionary<string, WorktreeSession> sessions)
     {
         _sessions = sessions;
+        Rebuild();
+    }
+
+    /// <summary>For the headless render: opens or collapses the Worktrees and Local sections, as a header click does.</summary>
+    internal void PreviewSetOpen(bool worktrees, bool local)
+    {
+        (_worktreesOpen, _localOpen) = (worktrees, local);
         Rebuild();
     }
 
@@ -156,16 +163,20 @@ internal sealed class GraphRail : UserControl
         if (_snap is not { } s)
             return;
 
-        _stack.Children.Add(Header($"Worktrees", s.Worktrees.Count));
-        foreach (var w in s.Worktrees.OrderByDescending(w => w.IsCurrent))
-            _stack.Children.Add(WorktreeCard(s, w));
+        _stack.Children.Add(Header("Worktrees", s.Worktrees.Count, _worktreesOpen, () => _worktreesOpen = !_worktreesOpen));
+        if (_worktreesOpen)
+            foreach (var w in s.Worktrees.OrderByDescending(w => w.IsCurrent))
+                _stack.Children.Add(WorktreeCard(s, w));
+        // Even with the cards collapsed, so dropping a branch on it still makes a worktree.
         if (_dragging)
             _stack.Children.Add(NewWorktreeZone());
 
         var locals = s.Refs.Where(r => r.Kind == GraphRefKind.LocalBranch).ToList();
-        _stack.Children.Add(Header("Local", locals.Count, hidden: locals.Count(s.IsHidden), menu: true));
-        foreach (var r in locals)
-            _stack.Children.Add(RefRow(s, r, r.Name, s.Worktrees.Any(w => w.Branch == r.Name)));
+        _stack.Children.Add(Header("Local", locals.Count, _localOpen, () => _localOpen = !_localOpen,
+            hidden: locals.Count(s.IsHidden), menu: true));
+        if (_localOpen)
+            foreach (var r in locals)
+                _stack.Children.Add(RefRow(s, r, r.Name, s.Worktrees.Any(w => w.Branch == r.Name)));
 
         var remotes = s.Refs.Where(r => r.Kind == GraphRefKind.RemoteBranch).ToList();
         if (remotes.Count > 0)

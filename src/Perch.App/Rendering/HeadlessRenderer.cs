@@ -818,6 +818,16 @@ internal static class HeadlessRenderer
                 dialogFrame.Save(fs);
             }
             tw.PreviewCloseNameDialog();
+            // The rail with Worktrees and Local collapsed to their headers.
+            tw.PreviewRailOpen(false);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } railFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_rail_collapsed_1x.png"));
+                railFrame.Save(fs);
+            }
+            tw.PreviewRailOpen(true);
             tw.Close();
         }
 
