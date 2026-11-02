@@ -30,7 +30,7 @@ internal sealed class GraphCanvas : Control
     {
         public static Colors For(bool light)
         {
-            var a = AuroraPalette.For(light);
+            var a = AuroraPalette.ForGraph(light);
             var lanes = GraphLanes.For(light).Select(l => Color.FromRgb(l.R, l.G, l.B)).ToArray();
             return new(a.Raised, Blend(a.Raised, a.Text, light ? 0.04 : 0.05), Blend(a.Raised, a.Accent, light ? 0.12 : 0.18),
                 a.Text, a.Title, a.Muted, a.Separator, lanes, light);
@@ -76,7 +76,7 @@ internal sealed class GraphCanvas : Control
     private IPen[] _lane = [], _laneDash = [], _laneFaded = [], _ring = [], _ringBold = [], _pillBorder = [], _pillDash = [];
     private IBrush[] _laneFill = [], _laneFillFaded = [], _laneWash = [];
     private IBrush _bg = Brushes.Transparent, _hoverBg = Brushes.Transparent, _selBg = Brushes.Transparent,
-        _text = Brushes.White, _title = Brushes.White, _muted = Brushes.Gray;
+        _text = Brushes.White, _muted = Brushes.Gray;
     private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray), _dropPen = new ImmutablePen(Brushes.White),
         _gripPen = new ImmutablePen(Brushes.Gray);
     private IBrush _matchBg = Brushes.Transparent;
@@ -167,7 +167,6 @@ internal sealed class GraphCanvas : Control
         _hoverBg = B(c.RowHover);
         _selBg = B(c.RowSelected);
         _text = B(c.Text);
-        _title = B(c.Title);
         _muted = B(c.Muted);
         _nodeEdge = new ImmutablePen(B(c.Background), 2);
         _sep = new ImmutablePen(B(c.Separator), 1);
@@ -502,7 +501,8 @@ internal sealed class GraphCanvas : Control
             tagsW = Tags(ctx, refs, subjX + subjW, y);
         }
 
-        var subject = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW - tagsW), FontSize, _title);
+        // Body text, not the title white: every row is a subject, and a screenful of them in the brightest ink glared.
+        var subject = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW - tagsW), FontSize, _text);
         OverlayDraw.TextLeftMid(ctx, subject, subjX, y);
         if (authorX < whenX)
         {

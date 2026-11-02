@@ -10,18 +10,18 @@ namespace Perch.Data.GitGraph;
 /// </summary>
 public static class GraphLanes
 {
-    /// <summary>The pane the dark lanes are painted on (Aurora Dark's raised surface).</summary>
-    public static readonly Rgb DarkPane = new(0x1F, 0x1F, 0x2A);
+    /// <summary>The pane the dark lanes are painted on (Aurora Dusk's raised surface).</summary>
+    public static readonly Rgb DarkPane = new(0x20, 0x23, 0x29);
 
     /// <summary>The pane the light lanes are painted on (Aurora Light's raised surface).</summary>
     public static readonly Rgb LightPane = new(0xFF, 0xFF, 0xFF);
 
     // Blue, violet, teal, pink, lime, amber, sky, orange: distinct from one another and from the diff's
-    // add/remove green/red.
+    // add/remove green/red. The dark set is a little desaturated, so a busy graph doesn't buzz (each still ≥5.7:1).
     public static readonly Rgb[] Dark =
     [
-        Rgb.FromHex("#60A5FA"), Rgb.FromHex("#A78BFA"), Rgb.FromHex("#2DD4BF"), Rgb.FromHex("#F472B6"),
-        Rgb.FromHex("#A3E635"), Rgb.FromHex("#FBBF24"), Rgb.FromHex("#38BDF8"), Rgb.FromHex("#FB923C"),
+        Rgb.FromHex("#6AA0E8"), Rgb.FromHex("#A391E6"), Rgb.FromHex("#45C2B1"), Rgb.FromHex("#DE7DAF"),
+        Rgb.FromHex("#A2CC5C"), Rgb.FromHex("#E3B44E"), Rgb.FromHex("#52B2DF"), Rgb.FromHex("#E39858"),
     ];
 
     public static readonly Rgb[] Light =

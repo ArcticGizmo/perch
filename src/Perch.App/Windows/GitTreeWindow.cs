@@ -2304,7 +2304,7 @@ internal sealed partial class GitTreeWindow : Window
 
         public static TreePalette Dark()
         {
-            var a = AuroraPalette.Dark;
+            var a = AuroraPalette.Dusk;
             return new()
             {
                 WindowBg = BC(a.Surface),    // page
