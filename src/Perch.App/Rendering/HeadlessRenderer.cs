@@ -769,6 +769,19 @@ internal static class HeadlessRenderer
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             Dispatcher.UIThread.RunJobs();
+            // Hover probes first: the drag below ends with its drop menu open, and an open menu takes the pointer.
+            if (tw.PreviewPill(0) is { } pill)
+            {
+                tw.MouseMove(pill);
+                Dispatcher.UIThread.RunJobs();
+                Console.WriteLine($"git graph cursors (pointer on a pill): {tw.PreviewCursors()}");
+            }
+            if (tw.PreviewNode() is { } node)
+            {
+                tw.MouseMove(node);
+                Dispatcher.UIThread.RunJobs();
+                Console.WriteLine($"git graph node tooltip: {tw.PreviewGraphTip?.Replace('\n', '|') ?? "(none)"}");
+            }
             if (tw.PreviewPill(0) is not { } from || tw.PreviewPill(1) is not { } to)
                 Console.WriteLine("git graph drag: skipped, fewer than two other branch pills on screen");
             else
@@ -802,9 +815,6 @@ internal static class HeadlessRenderer
                     tw.MouseUp(to, global::Avalonia.Input.MouseButton.Left);
                 }
                 Settle();
-                tw.MouseMove(to);
-                Settle();
-                Console.WriteLine($"git graph cursors (pointer on a pill): {tw.PreviewCursors()}");
             }
             tw.PreviewCheckoutChrome();
             Dispatcher.UIThread.RunJobs();

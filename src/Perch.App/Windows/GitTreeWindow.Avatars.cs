@@ -45,6 +45,13 @@ internal sealed partial class GitTreeWindow
     /// <summary>For the headless render: whether pictures are on, and how many authors have one.</summary>
     internal string PreviewAvatars => $"on = {_settings.GitTreeAvatars}, pictures = {_avatarImages.Count}";
 
+    /// <summary>For the headless render: where the first visible commit's node is (window coordinates), and the graph's
+    /// tooltip once the pointer has been moved there.</summary>
+    internal Point? PreviewNode() =>
+        _graph.Canvas.PreviewNodeCentre() is { } p ? _graph.Canvas.TranslatePoint(p, this) : null;
+
+    internal string? PreviewGraphTip => _graph.Canvas.PreviewTip;
+
     // Each page asks about the authors it brought that haven't been asked about yet; nothing while it's off.
     private void RequestAvatars(GraphSnapshot? snap)
     {

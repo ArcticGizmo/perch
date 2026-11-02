@@ -884,7 +884,7 @@ internal sealed class GraphCanvas : Control
         SetCursor(edge > 0 ? StandardCursorType.SizeWestEast
             : RowAt(at.Y) >= 0 || RefAt(at) is not null ? StandardCursorType.Hand
             : StandardCursorType.Arrow);
-        UpdatePillTip(at);
+        UpdateTip(at);
         if (_press is { } press && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             var d = e.GetPosition(this) - press.At;
@@ -905,7 +905,7 @@ internal sealed class GraphCanvas : Control
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
-        UpdatePillTip(null);
+        UpdateTip(null);
         if (_hover < 0 && _edgeHover == 0) return;
         _hover = -1;
         _edgeHover = 0;
@@ -924,16 +924,51 @@ internal sealed class GraphCanvas : Control
         Cursor = kind == StandardCursorType.Arrow ? Cursor.Default : new Cursor(kind);
     }
 
-    // A pill's full name as a tooltip, since long names are cut in the middle.
-    private GraphRef? _tipRef;
-    private void UpdatePillTip(Point? at)
+    // A tooltip for what's under the pointer: a pill's full name (long names are cut in the middle), or the author
+    // behind a commit's node, since a picture or initials don't say who it is. Only swapped when the target changes.
+    private string? _tipKey;
+    private void UpdateTip(Point? at)
     {
-        var r = at is { } p && _edgeDrag is null ? RefAt(p) : null;
-        if (r == _tipRef) return;
-        _tipRef = r;
-        ToolTip.SetTip(this, r is null ? null : Describe(r, _snap));
-        ToolTip.SetIsOpen(this, r is not null);
+        string? key = null, tip = null;
+        if (at is { } p && _edgeDrag is null && _snap is { } s)
+        {
+            if (RefAt(p) is { } r)
+                (key, tip) = ("ref:" + r.FullName, Describe(r, s));
+            else if (NodeAt(p) is var row and >= 0)
+                (key, tip) = ("node:" + s.Commits[row].Hash, AuthorTip(s.Commits[row]));
+        }
+        if (key == _tipKey) return;
+        _tipKey = key;
+        ToolTip.SetTip(this, tip);
+        ToolTip.SetIsOpen(this, tip is not null);
     }
+
+    // The commit whose node (picture, initials or dot) is under the point, with a little slack around the circle.
+    private int NodeAt(Point p)
+    {
+        if (_snap is null || RowAt(p.Y) is not (var r and >= 0)) return -1;
+        var c = _snap.Commits[r];
+        double x = LaneX(_snap.Rows[r].Lane);
+        if (c.IsPseudo || x >= _refsW + GraphWidth - 2) return -1;
+        double radius = (_avatars is not null && !c.IsMerge ? AvatarR : NodeR) + 3;
+        var d = p - new Point(x, RowMid(r));
+        return d.X * d.X + d.Y * d.Y <= radius * radius ? r : -1;
+    }
+
+    internal static string AuthorTip(GraphCommit c) =>
+        $"{c.AuthorName}\n{c.AuthorEmail}\nAuthored {c.Date.LocalDateTime:ddd d MMM yyyy, HH:mm}";
+
+    /// <summary>For the headless render: the centre of the first real commit's node on screen, and the tooltip now set.</summary>
+    internal Point? PreviewNodeCentre()
+    {
+        if (_snap is null) return null;
+        for (int r = Math.Max(0, RowAt(_headerH + 1)); r >= 0 && r < _snap.Commits.Count && RowTop(r) < Bounds.Height; r++)
+            if (!_snap.Commits[r].IsPseudo && RowTop(r) >= _headerH)
+                return new Point(LaneX(_snap.Rows[r].Lane), RowMid(r));
+        return null;
+    }
+
+    internal string? PreviewTip => ToolTip.GetTip(this) as string;
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
