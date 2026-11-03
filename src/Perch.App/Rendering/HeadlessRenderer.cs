@@ -873,6 +873,16 @@ internal static class HeadlessRenderer
                 railFrame.Save(fs);
             }
             tw.PreviewRailOpen(true);
+            // The newest stash with a row, scrolled to: it sits among the commits of when it was made.
+            Console.WriteLine($"git graph stashes: {tw.PreviewJumpToStash()}");
+            for (var until = DateTime.UtcNow.AddSeconds(1); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } stashFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_stash_row_1x.png"));
+                stashFrame.Save(fs);
+            }
             tw.Close();
         }
 

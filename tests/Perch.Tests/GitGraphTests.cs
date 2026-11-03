@@ -334,31 +334,57 @@ public class GitGraphTests
         Assert.Equal(-1, s.RowOf("nope"));
     }
 
-    [Fact]
-    public void Snapshot_PutsStashRowsUnderTheWipRowsTetheredToTheirBase()
-    {
-        var main = new GraphWorktree("C:/r", "main", "m2", Changes: 1, IsCurrent: true);
-        var onM1 = new GraphStash("s0", "m1", "stash@{0}", "WIP on main: m1", 10);
-        var onF1 = new GraphStash("s1", "f1", "stash@{1}", "On feat: spike", 5);
-        var lost = new GraphStash("s2", "old", "stash@{2}", "On main: ancient", 1);
-        var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("m1")],
-            Refs, [main], "main", null, 100, stashes: [onM1, onF1, lost]);
+    private static GraphCommit At(string hash, long time, params string[] parents) => new(hash, parents, "Jon", "jon@x", time, hash);
 
-        // Ordered by where their commit sits; one made on a commit outside the page gets no row.
-        Assert.Equal([main.WipHash, onF1.RowHash, onM1.RowHash, "m2", "f1", "m1"], s.Commits.Select(c => c.Hash));
+    [Fact]
+    public void Snapshot_WeavesStashRowsInByWhenTheyWereMade()
+    {
+        var main = new GraphWorktree("C:/r", "main", "m3", Changes: 1, IsCurrent: true);
+        var fresh = new GraphStash("s0", "m1", "stash@{0}", "On main: popped and stashed again", 40);
+        var onM2 = new GraphStash("s1", "m2", "stash@{1}", "On main: mid", 25);
+        var skewed = new GraphStash("s2", "f1", "stash@{2}", "On feat: clock behind", 5);
+        var old = new GraphStash("s3", "m1", "stash@{3}", "On main: old", 12);
+        var older = new GraphStash("s4", "m1", "stash@{4}", "On main: older", 11);
+        var lost = new GraphStash("s5", "gone", "stash@{5}", "On main: ancient", 1);
+        var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything,
+            [At("m3", 30, "m2"), At("m2", 20, "m1"), At("f1", 15, "m1"), At("m1", 10)],
+            Refs, [main], "main", null, 100, stashes: [fresh, onM2, skewed, old, older, lost]);
+
+        // Above the first commit no newer than it, never below its own commit, newest first where they meet; one made
+        // on a commit outside the page gets no row. The WIP row stays on top.
+        Assert.Equal([main.WipHash, fresh.RowHash, "m3", onM2.RowHash, "m2", skewed.RowHash, "f1", old.RowHash, older.RowHash, "m1"],
+            s.Commits.Select(c => c.Hash));
         Assert.True(s.Commits[1].IsStash && s.Commits[1].IsPseudo);
-        Assert.Equal(3, s.RealCommitCount);
-        Assert.Equal(onF1, s.StashAt(1));
-        Assert.Null(s.StashAt(0));
-        Assert.Equal([1, 2], s.StashTethers.Select(t => t.StashRow));
-        Assert.Equal([4, 5], s.StashTethers.Select(t => t.BaseRow));
+        Assert.Equal(4, s.RealCommitCount);
+        Assert.Equal(onM2, s.StashAt(3));
+        Assert.Null(s.StashAt(2));
+        Assert.Equal([1, 3, 5, 7, 8], s.StashTethers.Select(t => t.StashRow));
+        Assert.Equal([9, 4, 6, 9, 9], s.StashTethers.Select(t => t.BaseRow));
         var t0 = s.StashTethers[0];
-        Assert.True(s.IsTether(3, s.Rows[3].Up.Single(e => e.Color == t0.Lane)));
+        Assert.True(s.IsTether(2, s.Rows[2].Up.Single(e => e.Color == t0.Lane)));
 
         // Every stash is listed (the rail), each as a ref on its own row.
-        Assert.Equal(3, s.Stashes.Count);
-        Assert.Equal(["stash@{1}"], s.RefsAt(onF1.RowHash).Select(r => r.Name));
-        Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForCommit(s, onF1.RowHash));
+        Assert.Equal(6, s.Stashes.Count);
+        Assert.Equal(["stash@{1}"], s.RefsAt(onM2.RowHash).Select(r => r.Name));
+        Assert.Equal(CheckoutPlan.Nothing, GraphCheckout.ForCommit(s, onM2.RowHash));
+    }
+
+    [Fact]
+    public void Snapshot_StashOnACommitInALaterPageGetsItsRowWhenThatPageLoads()
+    {
+        var fresh = new GraphStash("s0", "m1", "stash@{0}", "On main: new", 40);
+        var old = new GraphStash("s1", "m1", "stash@{1}", "On main: old", 12);
+        var first = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [At("m3", 30, "m2"), At("m2", 20, "m1")],
+            Refs, [], "main", null, pageSize: 2, stashes: [fresh, old]);
+        Assert.Equal(["m3", "m2"], first.Commits.Select(c => c.Hash));
+        Assert.Empty(first.StashTethers);
+
+        // The page above is laid out already, so the newer one heads the new page.
+        var s = first.Append([At("f1", 15, "m1"), At("m1", 10)], pageSize: 2);
+        Assert.Equal(["m3", "m2", fresh.RowHash, "f1", old.RowHash, "m1"], s.Commits.Select(c => c.Hash));
+        Assert.Equal(4, s.RealCommitCount);
+        Assert.Equal([2, 4], s.StashTethers.Select(t => t.StashRow));
+        Assert.Equal([5, 5], s.StashTethers.Select(t => t.BaseRow));
     }
 
     [Fact]
