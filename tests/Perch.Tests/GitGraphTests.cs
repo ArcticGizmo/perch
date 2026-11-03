@@ -674,6 +674,29 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void Hideable_SkipsTrunkCheckedOutAndAlreadyHiddenOfThatKindOnly()
+    {
+        var refs = new GraphRef[]
+        {
+            new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m"),
+            new("feature", "refs/heads/feature", GraphRefKind.LocalBranch, "f"),
+            new("wt", "refs/heads/wt", GraphRefKind.LocalBranch, "w"),
+            new("old", "refs/heads/old", GraphRefKind.LocalBranch, "o"),
+            new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m"),
+            new("origin/wt", "refs/remotes/origin/wt", GraphRefKind.RemoteBranch, "w"),
+            new("origin/x", "refs/remotes/origin/x", GraphRefKind.RemoteBranch, "x"),
+            new("v1", "refs/tags/v1", GraphRefKind.Tag, "m"),
+        };
+        var hidden = new HashSet<string> { "refs/heads/old" };
+        var trunk = BranchVisibility.TrunkRefs(refs, "main");
+        string?[] checkedOut = ["main", "wt", null];
+
+        Assert.Equal(["feature"], BranchVisibility.Hideable(refs, GraphRefKind.LocalBranch, hidden, checkedOut, trunk).Select(r => r.Name));
+        // A worktree's branch only protects the local ref; its remote twin can go.
+        Assert.Equal(["origin/wt", "origin/x"], BranchVisibility.Hideable(refs, GraphRefKind.RemoteBranch, hidden, checkedOut, trunk).Select(r => r.Name));
+    }
+
+    [Fact]
     public void Mine_IsABranchWithACommitOffTrunkByTheUser()
     {
         // b1 (dependabot) → b0 (me) on "mixed"; d1 (dependabot) alone on "bot"; "empty" adds nothing over trunk.

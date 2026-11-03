@@ -72,8 +72,8 @@ internal sealed class GraphRail : UserControl
     /// <summary>A branch row's eye was clicked: hide it from the graph (true) or show it again.</summary>
     public event Action<GraphRef, bool>? VisibilityToggled;
 
-    /// <summary>The "⋯" on the Local or Remotes header: the host shows the visibility menu there.</summary>
-    public event Action<Control>? VisibilityMenuRequested;
+    /// <summary>The "⋯" on the Local or Remotes header: the host shows that section's visibility menu there.</summary>
+    public event Action<Control, GraphRefKind>? VisibilityMenuRequested;
     public event Action<GraphRef>? BranchActivated;
 
     public void SetColors(GraphCanvas.Colors c)
@@ -173,7 +173,7 @@ internal sealed class GraphRail : UserControl
 
         var locals = s.Refs.Where(r => r.Kind == GraphRefKind.LocalBranch).ToList();
         _stack.Children.Add(Header("Local", locals.Count, _localOpen, () => _localOpen = !_localOpen,
-            hidden: locals.Count(s.IsHidden), menu: true));
+            hidden: locals.Count(s.IsHidden), menu: GraphRefKind.LocalBranch));
         if (_localOpen)
             foreach (var r in locals)
                 _stack.Children.Add(RefRow(s, r, r.Name, s.Worktrees.Any(w => w.Branch == r.Name)));
@@ -182,7 +182,7 @@ internal sealed class GraphRail : UserControl
         if (remotes.Count > 0)
         {
             _stack.Children.Add(Header("Remotes", remotes.Count, _remotesOpen, () => _remotesOpen = !_remotesOpen,
-                hidden: remotes.Count(s.IsHidden), menu: true));
+                hidden: remotes.Count(s.IsHidden), menu: GraphRefKind.RemoteBranch));
             if (_remotesOpen)
                 foreach (var g in remotes.GroupBy(r => r.Name.Split('/')[0]))
                 {
@@ -211,7 +211,7 @@ internal sealed class GraphRail : UserControl
         }
     }
 
-    private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, bool menu = false)
+    private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, GraphRefKind? menu = null)
     {
         var label = new TextBlock
         {
@@ -224,7 +224,7 @@ internal sealed class GraphRail : UserControl
             VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
         };
         var dock = new DockPanel();
-        if (menu)
+        if (menu is { } kind)
         {
             var more = new Border
             {
@@ -232,8 +232,8 @@ internal sealed class GraphRail : UserControl
                 Cursor = new Cursor(StandardCursorType.Hand), [DockPanel.DockProperty] = Dock.Right,
                 Child = new TextBlock { Text = "⋯", FontSize = 13, FontWeight = FontWeight.Bold, Foreground = Ink(_c.Muted) },
             };
-            ToolTip.SetTip(more, "Hidden branches");
-            more.PointerPressed += (_, e) => { VisibilityMenuRequested?.Invoke(more); e.Handled = true; };
+            ToolTip.SetTip(more, "Hide or show branches");
+            more.PointerPressed += (_, e) => { VisibilityMenuRequested?.Invoke(more, kind); e.Handled = true; };
             Hover(more, -1);
             dock.Children.Add(more);
         }

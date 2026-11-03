@@ -44,6 +44,20 @@ internal static class BranchVisibility
         return refs.Where(r => r.Kind == GraphRefKind.RemoteBranch && !seen.Contains(r.FullName) && !hidden.Contains(r.FullName)).ToList();
     }
 
+    /// <summary>
+    /// The branches of <paramref name="kind"/> a bulk hide takes: not already hidden, and never the trunk or a branch a
+    /// worktree has checked out (hiding those would only make the graph lie, as a single hide refuses too).
+    /// </summary>
+    public static List<GraphRef> Hideable(IEnumerable<GraphRef> refs, GraphRefKind kind, IReadOnlySet<string> hidden,
+        IEnumerable<string?> checkedOut, IEnumerable<string> trunk)
+    {
+        var busy = checkedOut.OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var main = trunk.ToHashSet(StringComparer.Ordinal);
+        return refs.Where(r => r.Kind == kind && !hidden.Contains(r.FullName) && !main.Contains(r.FullName)
+                               && !(r.Kind == GraphRefKind.LocalBranch && busy.Contains(r.Name)))
+            .ToList();
+    }
+
     /// <summary>Marks every current remote branch as seen (turning auto-hide on, or its first look at a repo).</summary>
     public static void SeedSeen(GraphRepoPrefs prefs, IEnumerable<GraphRef> refs) =>
         prefs.Seen = refs.Where(r => r.Kind == GraphRefKind.RemoteBranch).Select(r => r.FullName).Distinct().ToList();

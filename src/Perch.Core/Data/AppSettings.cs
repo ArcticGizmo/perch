@@ -458,6 +458,10 @@ internal sealed class AppSettings
     public double GitTreeRefsWidth { get; set; }
     public double GitTreeLanesWidth { get; set; }
 
+    // The git graph's left rail (worktrees, branches, tags) width in DIPs, set by dragging its edge and persisted —
+    // not a Settings control (see SettingsRegistryTests.NotSettings). 0 (or a missing key) means the default width.
+    public double GitTreeRailWidth { get; set; }
+
     // Whether the git Tree window's files pane is collapsed to a strip (more room for the graph). Set from the pane's
     // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
     public bool GitTreeFilesCollapsed { get; set; }

@@ -762,6 +762,31 @@ internal static class HeadlessRenderer
                 Console.WriteLine($"git graph files: heading click collapsed = {collapsed}, strip click expanded = {!tw.PreviewFilesCollapsed}");
             }
 
+            // Both "⋯" menus as text, then the rail's edge dragged 120 px right (framed) and back.
+            Console.WriteLine("git graph Local ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.LocalBranch).Replace("\n", "\n  "));
+            Console.WriteLine("git graph Remotes ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.RemoteBranch).Replace("\n", "\n  "));
+            if (tw.PreviewRailEdge() is { } edge)
+            {
+                void DragEdge(Point a, double dx)
+                {
+                    tw.MouseMove(a);
+                    tw.MouseDown(a, global::Avalonia.Input.MouseButton.Left);
+                    for (int i = 1; i <= 6; i++)
+                        tw.MouseMove(new Point(a.X + dx * i / 6, a.Y), global::Avalonia.Input.RawInputModifiers.LeftMouseButton);
+                    tw.MouseUp(new Point(a.X + dx, a.Y), global::Avalonia.Input.MouseButton.Left);
+                    Dispatcher.UIThread.RunJobs();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                }
+                var before = tw.PreviewRailWidth;
+                DragEdge(edge, 120);
+                var after = tw.PreviewRailWidth;
+                if (tw.CaptureRenderedFrame() is { } wideRail) { using var fs = File.Create(Path.Combine(outDir, "git_tree_rail_wide_1x.png")); wideRail.Save(fs); }
+                if (tw.PreviewRailEdge() is { } back) DragEdge(back, -120);
+                Console.WriteLine($"git graph rail: edge drag {before:0} → {after:0} px, back to {tw.PreviewRailWidth:0}");
+            }
+            else Console.WriteLine("git graph rail: no edge to drag");
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.

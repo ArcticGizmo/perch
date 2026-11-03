@@ -326,7 +326,7 @@ internal sealed partial class GitTreeWindow : Window
         _graph.Canvas.RefMenuRequested += ShowRefMenu;
         _graph.Canvas.RowMenuRequested += ShowRowMenu;
         _rail.RefMenuRequested += ShowRefMenu;
-        _railSeparator = new Border { Width = 1 };
+        _railSeparator = new Border { Width = 1, HorizontalAlignment = HorizontalAlignment.Center };
 
         // Ctrl+F (Ctrl+G) over the graph: find commits by message, author, hash, branch or tag. Matches are washed in
         // the graph; Enter / Shift+Enter walk them; with none in what's loaded, older history can be searched too.
@@ -352,9 +352,20 @@ internal sealed partial class GitTreeWindow : Window
             Child = new DockPanel { LastChildFill = true, Children = { gotoClose, gotoNext, gotoPrev, _findOlderBtn, _gotoLabel, _gotoBox } },
         };
 
-        var graphBody = new Grid { ColumnDefinitions = new ColumnDefinitions("210,Auto,*") };
+        var railColumn = new ColumnDefinition(new GridLength(settings.GitTreeRailWidth > 0 ? settings.GitTreeRailWidth : DefaultRailWidth, GridUnitType.Pixel))
+        {
+            MinWidth = 140, MaxWidth = 520,
+        };
+        var graphBody = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions
+            {
+                railColumn, new(GridLength.Auto), new(new GridLength(1, GridUnitType.Star)) { MinWidth = 240 },
+            },
+        };
         graphBody.Children.Add(WithColumn(_rail, 0));
         graphBody.Children.Add(WithColumn(_railSeparator, 1));
+        graphBody.Children.Add(WithColumn(RailSplitter(railColumn), 1));
         graphBody.Children.Add(WithColumn(_graph, 2));
         BuildCheckoutUi();
         BuildDragUi();
@@ -755,6 +766,43 @@ internal sealed partial class GitTreeWindow : Window
         };
         _splitters.Add(s);
         return s;
+    }
+
+    private const double DefaultRailWidth = 210;
+    private GridSplitter? _railSplitter;
+
+    /// <summary>For the headless render: the middle of the rail's edge in window coordinates, and the rail's width now.</summary>
+    internal Point? PreviewRailEdge() =>
+        _railSplitter?.TranslatePoint(new Point(_railSplitter.Bounds.Width / 2, _railSplitter.Bounds.Height / 2), this);
+    internal double PreviewRailWidth => _rail.Bounds.Width;
+
+    // The rail's edge: the 1 px line stays the look, and this transparent strip over it is what the pointer grabs.
+    // Only the rail's width is kept; the graph takes whatever is left.
+    private GridSplitter RailSplitter(ColumnDefinition railColumn)
+    {
+        var s = new GridSplitter
+        {
+            Width = 6, Background = Brushes.Transparent,
+            ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        ToolTip.SetTip(s, "Drag to resize · double-click to reset");
+        ToolTip.SetShowDelay(s, 800);
+        _railSplitter = s;
+        s.DragCompleted += (_, _) => SaveRailWidth(railColumn.ActualWidth);
+        s.DoubleTapped += (_, e) =>
+        {
+            railColumn.Width = new GridLength(DefaultRailWidth, GridUnitType.Pixel);
+            SaveRailWidth(0);
+            e.Handled = true;
+        };
+        _splitters.Add(s);
+        return s;
+    }
+
+    private void SaveRailWidth(double width)
+    {
+        _settings.GitTreeRailWidth = width > 0 ? Math.Round(width) : 0;
+        _settings.Save();
     }
 
     // Wraps a pane's content in a rounded, bordered "card" on the page (the reading surface), recorded so the
