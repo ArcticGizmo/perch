@@ -1,0 +1,486 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Perch.Data.GitGraph;
+
+namespace Perch.Avalonia.Windows;
+
+// Double-click to check out (CP11 in docs/git-graph-plan.md): what a double-click means is decided in Core
+// (GraphCheckout), the git work runs through GitOps.Checkout off the UI thread, and every outcome lands in the toast,
+// with Undo when it worked. A dirty tree or a session working here asks first; neither blocks.
+internal sealed partial class GitTreeWindow
+{
+    private const int ToastMs = 6000, ToastErrorMs = 10000;
+
+    private Border _toast = null!;
+    private TextBlock _toastMsg = null!, _toastCmd = null!;
+    private Button _toastUndo = null!, _toastClose = null!, _toastExtra = null!;
+    private Action? _toastUndoAction, _toastExtraAction;
+    private DispatcherTimer? _toastTimer;
+    private bool _toastError, _toastBusy;
+
+    private Border _nameDialog = null!, _nameCard = null!;
+    private TextBox _nameBox = null!;
+    private TextBlock _nameTitle = null!, _nameDetail = null!, _nameWarning = null!, _nameProblem = null!;
+    private StackPanel _nameChoices = null!;
+    private Button _nameOk = null!, _nameCancel = null!;
+    private Func<string, string?>? _nameCheck;
+    private Action<string, int>? _nameDone;
+
+    private void BuildCheckoutUi()
+    {
+        BuildBusyCover();
+        _toastMsg = new TextBlock { FontSize = 12.5, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
+        _toastCmd = new TextBlock { FontFamily = Mono, FontSize = 11.5, Margin = new Thickness(0, 2, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
+        _toastUndo = new Button { Content = "Undo", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        _toastUndo.Click += (_, _) => { var undo = _toastUndoAction; HideToast(); undo?.Invoke(); };
+        _toastClose = new Button
+        {
+            Content = "✕", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        _toastClose.Click += (_, _) => HideToast();
+        _toastExtra = new Button { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        _toastExtra.Click += (_, _) => { var act = _toastExtraAction; HideToast(); act?.Invoke(); };
+        _toast = new Border
+        {
+            IsVisible = false, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(16, 0, 16, 16), Padding = new Thickness(14, 9, 10, 9), MaxWidth = 560,
+            CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 16, OffsetY = 3, Color = Color.FromArgb(90, 0, 0, 0) }),
+            Child = new DockPanel
+            {
+                LastChildFill = true,
+                Children = { _toastClose, _toastUndo, _toastExtra, new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _toastMsg, _toastCmd } } },
+            },
+        };
+        // Reading the toast (or reaching for Undo) holds it open.
+        _toast.PointerEntered += (_, _) => _toastTimer?.Stop();
+        _toast.PointerExited += (_, _) => { if (_toast.IsVisible && !_toastBusy) _toastTimer?.Start(); };
+
+        BuildNameDialog();
+    }
+
+    // ---- the name dialog (a new branch, a stash's new message) ----
+
+    // Over the whole window rather than a bar in the graph card: naming something is a step of its own, and a bar at the
+    // top of the graph was easy to miss and far from whatever asked for it.
+    private void BuildNameDialog()
+    {
+        _nameTitle = new TextBlock { FontSize = 15, FontWeight = FontWeight.SemiBold };
+        _nameDetail = new TextBlock { FontSize = 12.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+        _nameBox = new TextBox { Margin = new Thickness(0, 14, 0, 0) };
+        _nameBox.TextChanged += (_, _) => CheckName();
+        _nameBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { AcceptName(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { CloseNameDialog(); e.Handled = true; }
+        };
+        _nameProblem = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), IsVisible = false };
+        _nameChoices = new StackPanel { Spacing = 2, Margin = new Thickness(0, 12, 0, 0) };
+        _nameWarning = new TextBlock { FontSize = 12, FontStyle = FontStyle.Italic, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) };
+        _nameCancel = new Button { Content = "Cancel", Padding = new Thickness(14, 5) };
+        _nameCancel.Click += (_, _) => CloseNameDialog();
+        _nameOk = new Button { Padding = new Thickness(14, 5) };
+        _nameOk.Click += (_, _) => AcceptName();
+        _nameCard = new Border
+        {
+            Width = 440, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(20, 18), CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 24, OffsetY = 4, Color = Color.FromArgb(110, 0, 0, 0) }),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    _nameTitle, _nameDetail, _nameBox, _nameProblem, _nameChoices, _nameWarning,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right,
+                        Margin = new Thickness(0, 18, 0, 0), Children = { _nameCancel, _nameOk },
+                    },
+                },
+            },
+        };
+        _nameDialog = new Border { IsVisible = false, Background = new SolidColorBrush(Color.FromArgb(110, 0, 0, 0)), Child = _nameCard };
+        // A click on the dimmed window around the card cancels, as Esc does.
+        _nameDialog.PointerPressed += (_, e) => { if (e.Source == _nameDialog) { CloseNameDialog(); e.Handled = true; } };
+    }
+
+    /// <summary>
+    /// Asks for a name. <paramref name="problem"/> answers as it's typed (null = fine, "" = not yet, without saying why),
+    /// and the button waits for it;
+    /// <paramref name="choices"/> are radio options under the box (the first is picked), and <paramref name="done"/> gets
+    /// the trimmed name and the picked choice's index.
+    /// </summary>
+    private void OpenNameDialog(string title, string detail, string action, string initial, Func<string, string?> problem,
+        Action<string, int> done, IReadOnlyList<string>? choices = null, string? warning = null)
+    {
+        _nameTitle.Text = title;
+        _nameDetail.Text = detail;
+        _nameOk.Content = action;
+        _nameCheck = problem;
+        _nameDone = done;
+        _nameChoices.Children.Clear();
+        foreach (var (choice, i) in (choices ?? []).Select((c, i) => (c, i)))
+            _nameChoices.Children.Add(new RadioButton { Content = choice, GroupName = "nameDialogChoice", IsChecked = i == 0 });
+        _nameChoices.IsVisible = _nameChoices.Children.Count > 0;
+        _nameWarning.Text = warning;
+        _nameWarning.IsVisible = warning is not null;
+        _nameBox.Text = initial;
+        ApplyCheckoutPalette();
+        CheckName();
+        _nameDialog.IsVisible = true;
+        Dispatcher.UIThread.Post(() => { _nameBox.Focus(); _nameBox.SelectAll(); });
+    }
+
+    // An empty box says nothing yet; anything typed is checked at once, so the reason shows before the button is tried.
+    // A problem of "" holds the button back without a reason (an unchanged name needs none).
+    private void CheckName()
+    {
+        string name = _nameBox.Text?.Trim() ?? "";
+        string? problem = _nameCheck?.Invoke(name);
+        _nameProblem.Text = problem;
+        _nameProblem.IsVisible = problem is { Length: > 0 } && name.Length > 0;
+        _nameOk.IsEnabled = problem is null;
+    }
+
+    private void AcceptName()
+    {
+        string name = _nameBox.Text?.Trim() ?? "";
+        if (_nameDone is not { } done || _nameCheck?.Invoke(name) is not null) return;
+        int choice = _nameChoices.Children.OfType<RadioButton>().ToList().FindIndex(r => r.IsChecked == true);
+        CloseNameDialog();
+        done(name, Math.Max(choice, 0));
+    }
+
+    private void CloseNameDialog()
+    {
+        _nameDialog.IsVisible = false;
+        _nameDone = null;
+        _nameCheck = null;
+        _graph.Canvas.Focus();
+    }
+
+    // A new branch, named in the dialog. A name git would refuse, or one that's taken, is caught as it's typed.
+    private void OpenBranchDialog(string detail, string action, Action<string, int> create,
+        IReadOnlyList<string>? choices = null, string? warning = null) =>
+        OpenNameDialog("New branch", detail, action, "", name => GraphCheckout.BranchNameProblem(name, _snap?.Refs ?? []),
+            create, choices, warning);
+
+    // A branch at a commit, checked out here. Uncommitted changes and a working session are asked about in the same
+    // dialog, not in a menu after it.
+    private void AskNewBranchAt(CheckoutPlan plan)
+    {
+        int dirty = _lastStatus?.Changes.Count ?? 0;
+        string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}";
+        OpenBranchDialog($"At {Dest(plan, null)}, checked out in {HereName()}.", "Create and check out",
+            (name, choice) => RunCheckout(plan, name, dirty == 0 ? DirtyChoice.None : choice == 0 ? DirtyChoice.Stash : DirtyChoice.Carry),
+            dirty > 0 ? [$"Stash the {changes} first", $"Bring the {changes} along"] : null,
+            _isActive ? $"A Claude session is working in {HereName()}; checking out under it can confuse its edits." : null);
+    }
+
+    // ---- busy cover ----
+
+    private Border _busyOverlay = null!, _busyCard = null!;
+    private TextBlock _busyText = null!;
+    private bool _clearBusyOnLoad;
+    private DispatcherTimer? _busyFallback;
+
+    private void BuildBusyCover()
+    {
+        _busyText = new TextBlock
+        {
+            FontSize = 13, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0),
+            MaxWidth = 460, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+        };
+        _busyCard = new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(28, 18), CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 18, OffsetY = 3, Color = Color.FromArgb(90, 0, 0, 0) }),
+            Child = new StackPanel { Children = { new ProgressBar { IsIndeterminate = true, Width = 220 }, _busyText } },
+        };
+        _busyOverlay = new Border { IsVisible = false, Child = _busyCard };
+    }
+
+    // Greys the graph out while git changes what it shows, so the old picture can't be mistaken for the new one or
+    // acted on. It lifts when the refreshed graph is on screen (ShowSnapshot), or after 20 s whatever happens.
+    private void SetGraphBusy(string text)
+    {
+        _busyText.Text = text;
+        _busyOverlay.IsVisible = true;
+        _clearBusyOnLoad = false;
+        _busyFallback ??= new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background, (_, _) => ClearGraphBusy());
+        _busyFallback.Stop();
+        _busyFallback.Start();
+    }
+
+    // The git work is done: lift the cover with the next graph load.
+    private void ClearBusyOnNextLoad() => _clearBusyOnLoad = _busyOverlay.IsVisible;
+
+    private void ClearGraphBusy()
+    {
+        _busyFallback?.Stop();
+        _clearBusyOnLoad = false;
+        _busyOverlay.IsVisible = false;
+    }
+
+    private void OnGraphLoaded()
+    {
+        if (_clearBusyOnLoad) ClearGraphBusy();
+    }
+
+    private void ApplyCheckoutPalette()
+    {
+        if (_pal.PaneBg is ISolidColorBrush pane)
+            _busyOverlay.Background = new SolidColorBrush(pane.Color, 0.45);
+        _busyCard.Background = _pal.WindowBg;
+        _busyCard.BorderBrush = _pal.Border;
+        _busyText.Foreground = _pal.Title;
+        _toast.Background = _pal.WindowBg;
+        _toast.BorderBrush = _toastError ? _pal.Red : _pal.Border;
+        _toastMsg.Foreground = _toastError ? _pal.Red : _pal.Title;
+        _toastCmd.Foreground = _pal.Muted;
+        _toastClose.Foreground = _pal.Muted;
+        _nameCard.Background = _pal.WindowBg;
+        _nameCard.BorderBrush = _pal.Border;
+        _nameTitle.Foreground = _pal.Title;
+        _nameDetail.Foreground = _pal.Muted;
+        _nameWarning.Foreground = _pal.Orange;
+        _nameProblem.Foreground = _pal.Red;
+        _nameOk.Background = _pal.Accent;
+        _nameOk.Foreground = _pal.OnAccent;
+    }
+
+    // ---- the gesture ----
+
+    // A double-click resolved to a plan. Going to a branch nothing else holds runs at once; a branch another worktree
+    // holds, or a place with no branch, asks what was meant first.
+    private void BeginCheckout(CheckoutPlan plan, Control anchor)
+    {
+        if (_snap is null || _cwd is null) return;
+        switch (plan.Action)
+        {
+            case CheckoutAction.None:
+                return;
+            case CheckoutAction.AlreadyHere:
+                ShowToast($"{HereName()} is already on {Dest(plan, null)}.", "", null);
+                return;
+            case CheckoutAction.HeldElsewhere when plan.Holder is { } holder:
+                ShowMenu(anchor, atPointer: true,
+                    Note($"{plan.Target} is checked out in {holder.Name}, and a branch can be in only one worktree"),
+                    Item($"Open {holder.Name} in this window", () => Retarget(holder.Path, holder.Name, null, isActive: false)),
+                    Item($"Check out {Short(plan.Commit)} here, detached", () =>
+                        ConfirmAndRun(new CheckoutPlan(CheckoutAction.Detach, plan.Commit, plan.Commit), null, anchor, atPointer: true)));
+                return;
+            case CheckoutAction.Detach:
+                ShowMenu(anchor, atPointer: true,
+                    Note(plan.Target == plan.Commit ? $"No branch points at {Short(plan.Commit)}" : $"{plan.Target} is a tag"),
+                    Item($"Check out {Dest(plan, null)} here, detached", () => ConfirmAndRun(plan, null, anchor, atPointer: true)),
+                    Item($"Create a branch at {Short(plan.Commit)}…", () => AskNewBranchAt(plan)));
+                return;
+            default:
+                ConfirmAndRun(plan, null, anchor, atPointer: true);
+                return;
+        }
+    }
+
+    // Uncommitted changes here, or a session working here, get a menu (stash / bring along / cancel, with the session
+    // as a warning line); otherwise the checkout just runs.
+    private void ConfirmAndRun(CheckoutPlan plan, string? newBranch, Control anchor, bool atPointer)
+    {
+        int dirty = _lastStatus?.Changes.Count ?? 0;
+        if (dirty == 0 && !_isActive)
+        {
+            RunCheckout(plan, newBranch, DirtyChoice.None);
+            return;
+        }
+        AskAboutChanges(HereName(), dirty, _isActive, Dest(plan, newBranch), choice => RunCheckout(plan, newBranch, choice), anchor, atPointer);
+    }
+
+    // The checkout-with-changes menu, for any worktree: stash / bring along / cancel, or "anyway" when only a working
+    // session is the concern (it warns, never blocks).
+    private void AskAboutChanges(string where, int dirty, bool busy, string dest, Action<DirtyChoice> run, Control anchor, bool atPointer)
+    {
+        string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}";
+        var items = new List<Control>();
+        if (busy)
+            items.Add(Note($"A Claude session is working in {where}; checking out under it can confuse its edits"));
+        if (dirty > 0)
+        {
+            items.Add(Note($"{where} has {changes} not committed"));
+            items.Add(Item($"Stash the {changes}, then check out {dest}", () => run(DirtyChoice.Stash)));
+            items.Add(Item($"Bring the {changes} to {dest}", () => run(DirtyChoice.Carry)));
+        }
+        else
+        {
+            items.Add(Item($"Check out {dest} anyway", () => run(DirtyChoice.None)));
+        }
+        items.Add(Item("Cancel", () => { }));
+        ShowMenu(anchor, atPointer, items.ToArray());
+    }
+
+    private void RunCheckout(CheckoutPlan plan, string? newBranch, DirtyChoice dirty)
+    {
+        if (_cwd is not { } cwd) return;
+        string dest = Dest(plan, newBranch);
+        int changes = _lastStatus?.Changes.Count ?? 0;
+        ShowToast($"Checking out {dest}…", "", null, busy: true);
+        SetGraphBusy($"Checking out {dest}…");
+        System.Threading.Tasks.Task.Run(() => GitOps.Checkout(cwd, plan.Action, plan.Target, dirty, newBranch)).ContinueWith(t =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
+                if (!IsVisible) return;
+                ClearBusyOnNextLoad();
+                var (r, undo) = t.Result;
+                if (r.Ok && undo is not null)
+                {
+                    string what = plan.Action == CheckoutAction.Detach && newBranch is null
+                        ? $"HEAD is detached at {dest}" : $"Checked out {dest}";
+                    string extra = dirty switch
+                    {
+                        DirtyChoice.Stash => $"; {changes} change{(changes == 1 ? "" : "s")} stashed",
+                        DirtyChoice.Carry => ", changes brought along",
+                        _ => "",
+                    };
+                    ShowToast(what + extra, r.Command, () => RunUndo(cwd, undo));
+                }
+                else
+                {
+                    ShowToast(r.Message, r.Command, null, error: true);
+                }
+                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false); else ClearGraphBusy();
+            });
+        });
+    }
+
+    private void RunUndo(string cwd, CheckoutUndo undo)
+    {
+        string back = undo.Before.Branch ?? Short(undo.Before.Hash);
+        ShowToast($"Going back to {back}…", "", null, busy: true);
+        SetGraphBusy($"Going back to {back}…");
+        System.Threading.Tasks.Task.Run(() => GitOps.Undo(cwd, undo)).ContinueWith(t =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); return; }
+                if (!IsVisible) return;
+                ClearBusyOnNextLoad();
+                var r = t.Result;
+                if (r.Ok) ShowToast($"Back on {back}{(undo.Stash is null ? "" : ", stash restored")}", r.Command, null);
+                else ShowToast(r.Message, r.Command, null, error: true);
+                if (string.Equals(cwd, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: false); else ClearGraphBusy();
+            });
+        });
+    }
+
+    // ---- toast ----
+
+    // Busy toasts stay until replaced; the rest hide on their own (errors linger longer), unless the pointer is on them.
+    // <paramref name="extra"/> is a second button for a follow-up (open the worktree that has the conflicts, start a session).
+    private void ShowToast(string message, string command, Action? undo, bool error = false, bool busy = false,
+        (string Label, Action Act)? extra = null)
+    {
+        _toastExtra.Content = extra?.Label;
+        _toastExtra.IsVisible = extra is not null;
+        _toastExtraAction = extra?.Act;
+        _toastError = error;
+        _toastMsg.Text = message;
+        _toastCmd.Text = command;
+        _toastCmd.IsVisible = command.Length > 0;
+        _toastBusy = busy;
+        _toastUndoAction = undo;
+        _toastUndo.IsVisible = undo is not null;
+        _toastClose.IsVisible = !busy;
+        ApplyCheckoutPalette();
+        _toast.IsVisible = true;
+
+        _toastTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(ToastMs), DispatcherPriority.Background, (_, _) => HideToast());
+        _toastTimer.Stop();
+        _toastTimer.Interval = TimeSpan.FromMilliseconds(error ? ToastErrorMs : ToastMs);
+        if (!busy && !_toast.IsPointerOver) _toastTimer.Start();
+    }
+
+    private void HideToast()
+    {
+        _toastTimer?.Stop();
+        _toast.IsVisible = false;
+        _toastUndoAction = null;
+        _toastExtraAction = null;
+    }
+
+    /// <summary>For the headless render: the toast with Undo and the in-progress banner, which otherwise need a gesture
+    /// or a conflict.</summary>
+    internal void PreviewCheckoutChrome()
+    {
+        UpdateInProgress(GitInProgress.Merge);
+        ShowToast("Checked out feeds; 3 changes stashed", "git switch feeds", () => { });
+    }
+
+    /// <summary>For the headless render: the new-branch dialog as a branch at a commit asks it, with a dirty tree's
+    /// choices and a name that's already taken typed in.</summary>
+    internal void PreviewBranchDialog(string typed)
+    {
+        var at = _snap?.Current?.Head ?? "0000000";
+        OpenBranchDialog($"At {Short(at)}, checked out in {HereName()}.", "Create and check out", (_, _) => { },
+            ["Stash the 3 changes first", "Bring the 3 changes along"],
+            "A Claude session is working here; checking out under it can confuse its edits.");
+        _nameBox.Text = typed;
+    }
+
+    internal void PreviewCloseNameDialog() => CloseNameDialog();
+
+    /// <summary>For the headless render: the rail's Worktrees and Local sections collapsed (or open again).</summary>
+    internal void PreviewRailOpen(bool open) => _rail.PreviewSetOpen(open, open);
+
+    // ---- helpers ----
+
+    private void ShowMenu(Control anchor, bool atPointer, params Control[] items)
+    {
+        // Posted, so a menu opened from another menu's item isn't swallowed by the first one closing.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!IsVisible) return;
+            var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.BottomEdgeAlignedLeft };
+            flyout.ShowAt(anchor, showAtPointer: atPointer);
+        });
+    }
+
+    private static MenuItem Item(string header, Action act)
+    {
+        var m = new MenuItem { Header = MenuText(header) };
+        m.Click += (_, _) => act();
+        return m;
+    }
+
+    // A line that explains rather than acts: what the choices below are about.
+    private static MenuItem Note(string text) => new() { Header = MenuText(text), IsEnabled = false, FontStyle = FontStyle.Italic };
+
+    // Fluent caps a menu flyout at 456 px and a menu item's header neither wraps nor trims, so a sentence naming a long
+    // branch ran out past the menu's edge. Wrapped within what's left after the item's padding, every word stays readable.
+    internal const double MenuTextWidth = 400;
+
+    private static TextBlock MenuText(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, MaxWidth = MenuTextWidth };
+
+    // Where a plan lands, as the menus and toasts say it: the branch, "x (tracking origin/x)", the tag, or a short hash.
+    private static string Dest(CheckoutPlan plan, string? newBranch)
+    {
+        if (newBranch is not null) return newBranch;
+        return plan.Action switch
+        {
+            CheckoutAction.Track => $"{GraphCheckout.LocalName(plan.Target)} (tracking {plan.Target})",
+            _ when plan.Target == plan.Commit => Short(plan.Commit),
+            _ => plan.Target,
+        };
+    }
+
+    private static string Short(string hash) => hash.Length > 7 ? hash[..7] : hash;
+
+    private string HereName() => _snap?.Current?.Name ?? System.IO.Path.GetFileName(_cwd ?? "") ?? "This worktree";
+}

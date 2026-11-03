@@ -1,0 +1,151 @@
+using Avalonia.Controls;
+using Avalonia.Input.Platform;
+using Perch.Data;
+using Perch.Data.GitGraph;
+
+namespace Perch.Avalonia.Windows;
+
+// Right-click menus on the graph: a branch or tag (pill or rail row) and a commit row. Branching off a commit lives
+// here rather than on double-click, which is kept for a commit detail view later.
+internal sealed partial class GitTreeWindow
+{
+    private void ShowRefMenu(GraphRef r) => ShowRefMenu(r, _graph.Canvas);
+
+    private void ShowRefMenu(GraphRef r, Control anchor)
+    {
+        if (_snap is not { } snap) return;
+        if (r.Kind == GraphRefKind.Stash)
+        {
+            if (snap.Stashes.FirstOrDefault(s => s.Selector == r.Name) is { } st) ShowStashMenu(st, anchor);
+            return;
+        }
+        bool branch = r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch;
+        string name = ShortNames(r.Name);
+        var items = new List<Control>();
+        if (branch || r.Kind == GraphRefKind.Tag)
+        {
+            items.Add(Item($"Check out {name}", () => BeginCheckout(GraphCheckout.ForRef(snap, r), anchor)));
+            items.Add(Item("Branch here…", () => AskBranchHere(r.Target, r.Name)));
+            items.Add(Item(branch ? $"Create a worktree for {name}" : $"Create a worktree at {name}…", () => NewWorktreeFrom(DragSource.Of(r))));
+        }
+        if (branch)
+            items.Add(WhyNotHide(r) is { Length: > 0 } why ? Note($"Can't hide: {ShortNames(why)}") : Item($"Hide {name} from the graph", () => ToggleHidden(r, true)));
+        if (r.Kind == GraphRefKind.LocalBranch)
+        {
+            items.Add(new Separator());
+            items.Add(snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } holder
+                ? Note($"Can't delete: checked out in {ShortNames(holder.Name)}")
+                : Item($"Delete {name}…", () => DeleteBranch(r)));
+        }
+        items.Add(Item("Copy name", () => Clipboard?.SetTextAsync(r.Name)));
+        ShowMenu(anchor, atPointer: true, items.ToArray());
+    }
+
+    // A commit row: its branches to check out, a detached checkout, a branch or worktree starting there, and copying.
+    // A WIP row offers to stash its changes (and, for another worktree's, to open it); a stash row, its stash menu.
+    private void ShowRowMenu(int row)
+    {
+        if (_snap is not { } snap || row < 0 || row >= snap.Commits.Count) return;
+        var c = snap.Commits[row];
+        var items = new List<Control>();
+        if (snap.StashAt(row) is { } st)
+        {
+            ShowStashMenu(st, _graph.Canvas);
+            return;
+        }
+        if (c.IsWorkInProgress)
+        {
+            if (snap.WipAt(row) is not { } wt) return;
+            int dirty = wt.IsCurrent ? _lastStatus?.Changes.Count ?? wt.Changes : wt.Changes;
+            if (_sessionAt.TryGetValue(wt.Path, out var s) && s.Status is SessionStatus.Running or SessionStatus.AwaitingInput)
+                items.Add(Note($"A Claude session ({s.DisplayName}) is working in {wt.Name}; stashing takes its changes out from under it"));
+            if (wt.IsCurrent)
+                items.Add(Item("Branch here…", NewBranchHere));
+            items.Add(Item($"Stash the {dirty} change{(dirty == 1 ? "" : "s")}{(wt.IsCurrent ? "" : $" in {wt.Name}")}", () => Stash(wt)));
+            if (!wt.IsCurrent)
+                items.Add(Item($"Open {wt.Name} in this window", () => Retarget(wt.Path, wt.Name, null, isActive: false)));
+        }
+        else
+        {
+            items.Add(Item("Branch here…", () => AskBranchHere(c.Hash, $"{c.ShortHash} · {c.Subject}")));
+            foreach (var b in snap.RefsAt(c.Hash).Where(x => x.Kind == GraphRefKind.LocalBranch).Take(4))
+                items.Add(Item($"Check out {ShortNames(b.Name)}", () => BeginCheckout(GraphCheckout.ForRef(snap, b), _graph.Canvas)));
+            var detach = new CheckoutPlan(CheckoutAction.Detach, c.Hash, c.Hash);
+            items.Add(Item($"Check out {c.ShortHash} (detached)", () => ConfirmAndRun(detach, null, _graph.Canvas, atPointer: true)));
+            items.Add(Item($"Create a worktree at {c.ShortHash}…", () => NewWorktreeFrom(DragSource.Of(c))));
+            items.Add(new Separator());
+            items.Add(Item("Copy commit hash", () => Clipboard?.SetTextAsync(c.Hash)));
+            items.Add(Item("Copy message", () => Clipboard?.SetTextAsync(c.Subject)));
+        }
+        ShowMenu(_graph.Canvas, atPointer: true, items.ToArray());
+    }
+
+    // The same thing as dropping it on "+ New worktree": a free branch goes straight in, anything else asks for a name.
+    private void NewWorktreeFrom(DragSource src)
+    {
+        if (_snap is not { } snap) return;
+        var menu = GraphDrop.Menu(snap, src, DropTarget.NewWorktreeZone, _layout, _mainRoot);
+        if (menu.Options.FirstOrDefault() is { } option) ChooseDrop(src, option);
+        else if (menu.Note is { } note) ShowToast(note, "", null);
+    }
+
+    // A new branch at a commit. Just making it changes no files, so that's the first choice; checking it out is the
+    // other, with this worktree's changes asked about in the same dialog.
+    private void AskBranchHere(string hash, string at)
+    {
+        int dirty = _lastStatus?.Changes.Count ?? 0;
+        string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}", here = HereName();
+        List<string> choices = dirty == 0
+            ? ["Just create it", $"Create it and check it out in {here}"]
+            : ["Just create it", $"Check it out in {here}, stashing the {changes} first", $"Check it out in {here}, bringing the {changes} along"];
+        var plan = new CheckoutPlan(CheckoutAction.Detach, hash, hash);
+        OpenBranchDialog($"At {ShortNames(at)}.", "Create branch", (name, choice) =>
+            {
+                if (choice == 0) CreateBranchOnly(name, hash);
+                else RunCheckout(plan, name, dirty == 0 ? DirtyChoice.None : choice == 1 ? DirtyChoice.Stash : DirtyChoice.Carry);
+            },
+            choices,
+            _isActive ? $"A Claude session is working in {here}; checking the branch out there can confuse its edits." : null);
+    }
+
+    // `git branch <name> <commit>`; Undo deletes it again.
+    private async void CreateBranchOnly(string name, string hash)
+    {
+        if (_snap is not { } snap) return;
+        string root = snap.Root;
+        ShowToast($"Creating {name}…", "", null, busy: true);
+        var result = await System.Threading.Tasks.Task.Run(() => GitOps.CreateBranch(root, name, hash, checkout: false));
+        if (!IsVisible) return;
+        if (result.Ok)
+            ShowToast($"Created {name} at {Short(hash)}", result.Command,
+                () => RunRepoOp(root, $"Deleting {name}…", repo => GitOps.DeleteBranch(repo, name, force: true)));
+        else
+            ShowToast(result.Message, result.Command, null, error: true);
+        RefreshStatus(preserveSelection: true);
+    }
+
+    // `git branch -d`; a branch with unmerged commits asks before `-D`. Undo puts the branch back at its commit.
+    private async void DeleteBranch(GraphRef r)
+    {
+        if (_snap is not { } snap) return;
+        var (root, name, hash) = (snap.Root, r.Name, r.Target);
+        ShowToast($"Deleting {name}…", "", null, busy: true);
+        var result = await System.Threading.Tasks.Task.Run(() => GitOps.DeleteBranch(root, name, force: false));
+        if (!IsVisible) return;
+        if (GitOps.IsUnmerged(result))
+        {
+            HideToast();
+            bool go = await ConfirmDialog.ShowAsync(this, "Delete branch",
+                $"{name} has commits that aren't merged into another branch. Delete it anyway? It points at {Short(hash)}, and Undo brings it back.",
+                "Delete", "Keep it");
+            if (!go || !IsVisible) return;
+            result = await System.Threading.Tasks.Task.Run(() => GitOps.DeleteBranch(root, name, force: true));
+            if (!IsVisible) return;
+        }
+        if (result.Ok)
+            ShowToast($"Deleted {name}", result.Command, () => RunRepoOp(root, $"Restoring {name}…", repo => GitOps.CreateBranch(repo, name, hash, checkout: false)));
+        else
+            ShowToast(result.Message, result.Command, null, error: true);
+        RefreshStatus(preserveSelection: true);
+    }
+}

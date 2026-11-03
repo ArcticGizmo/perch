@@ -178,4 +178,15 @@ internal static class OverlayDraw
         return TruncateCache.GetOrAdd((text, size, maxWidth, weight),
             k => TextFit.Truncate(k.Item1, k.Item3, s => MeasureWidth(s, k.Item2, k.Item4)));
     }
+
+    private static readonly LruCache<(string, double, double, FontWeight), string> ElideCache = new(512);
+
+    /// <summary>Fits a branch name by cutting its middle (<see cref="TextFit.ElideMiddle"/>), remembered like
+    /// <see cref="Truncate"/>.</summary>
+    public static string ElideMiddle(string text, double size, double maxWidth, FontWeight weight = FontWeight.Normal)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return ElideCache.GetOrAdd((text, size, maxWidth, weight),
+            k => TextFit.ElideMiddle(k.Item1, k.Item3, s => MeasureWidth(s, k.Item2, k.Item4)));
+    }
 }

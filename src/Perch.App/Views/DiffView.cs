@@ -204,7 +204,7 @@ internal sealed class DiffView : Border
     {
         IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
         IBrush A(byte a, byte r, byte g, byte b) => new SolidColorBrush(Color.FromArgb(a, r, g, b));
-        var pal = AuroraPalette.For(_light);
+        var pal = AuroraPalette.ForGraph(_light);
         if (_light)
         {
             BodyBg = pal.Raised;                 // paper-white body for a print-legible diff
@@ -231,8 +231,8 @@ internal sealed class DiffView : Border
             SectionBarBg = new SolidColorBrush(pal.Sunken); // hunk header, the deepest strip
             TitleBrush = new SolidColorBrush(pal.Title);
             MutedBrush = new SolidColorBrush(pal.Muted);
-            GutterBrush = B(110, 110, 132);
-            ContextBrush = B(0xCD, 0xCD, 0xDB);  // brighter than the old #BEC context for easier reading
+            GutterBrush = B(0x6B, 0x71, 0x7C);
+            ContextBrush = B(0xBF, 0xC5, 0xCE);  // Dusk's body text, a touch under it so changed lines lead
             AddedBrush = B(0x3F, 0xB9, 0x50);
             RemovedBrush = B(0xF8, 0x51, 0x49);
             HunkBrush = new SolidColorBrush(pal.Accent);

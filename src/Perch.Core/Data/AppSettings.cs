@@ -447,6 +447,36 @@ internal sealed class AppSettings
     // persisted — not a Settings control (see SettingsRegistryTests.NotSettings). A missing key keeps it off.
     public bool GitTreeHunkStaging { get; set; }
 
+    // Which commits the git Tree graph shows (every branch / the worktrees / this branch). Set from the window's
+    // own scope segment and persisted — not a Settings control (see SettingsRegistryTests.NotSettings). A missing
+    // key shows every branch.
+    public GitGraph.GraphScope GitTreeScope { get; set; } = GitGraph.GraphScope.All;
+
+    // The git Tree graph's ref-pill column width and lane column width, in DIPs, set by dragging the column edges in
+    // the graph and persisted — not a Settings control (see SettingsRegistryTests.NotSettings). 0 (or a missing key)
+    // means the default pill width and lanes sized to the graph.
+    public double GitTreeRefsWidth { get; set; }
+    public double GitTreeLanesWidth { get; set; }
+
+    // Whether the git Tree window's files pane is collapsed to a strip (more room for the graph). Set from the pane's
+    // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
+    public bool GitTreeFilesCollapsed { get; set; }
+
+    // Whether the git graph paints each commit's author picture (initials until one is found) on its node, looked up
+    // through gh and GitHub's avatar host. Set from the window's own header button — not a Settings control (see
+    // SettingsRegistryTests.NotSettings). On by default.
+    public bool GitTreeAvatars { get; set; } = true;
+
+    // What the git graph's Pull button does on a plain click: the last choice made from its menu. Not a Settings
+    // control (see SettingsRegistryTests.NotSettings).
+    public GitGraph.PullMode GitTreePullMode { get; set; } = GitGraph.PullMode.FastForwardOnly;
+
+    // Branches hidden from the git Tree graph and the remote branches it has seen, per repo, keyed by the repo's
+    // shared git dir (see GitGraph.GraphRepoPrefs); and whether new remote branches that aren't the user's are hidden
+    // as they arrive. Both set from the Tree window's rail, not Settings controls (see SettingsRegistryTests.NotSettings).
+    public Dictionary<string, GitGraph.GraphRepoPrefs> GitTreeRepos { get; set; } = new();
+    public bool GitTreeAutoHideOthers { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

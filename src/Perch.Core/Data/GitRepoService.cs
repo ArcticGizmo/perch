@@ -144,6 +144,21 @@ internal sealed class GitRepoService
         return exit == 0 ? ParseUnifiedDiff(stdout) : null;
     }
 
+    /// <summary>What a stash entry holds, against the commit it was made on, untracked files included (<c>git stash show
+    /// -p --include-untracked</c>; a git older than 2.32 doesn't know that flag, so it falls back to the tracked files).
+    /// A stash commit is a merge, so <see cref="GetCommitDiff"/> would show a combined diff instead.</summary>
+    public GitDiff? GetStashDiff(string cwd, string hash)
+    {
+        if (string.IsNullOrEmpty(hash) || hash[0] == '-' || !IsRepo(cwd))
+            return null;
+        // GitRunner hardens diff/show/log by name; `stash show -p` renders a diff too, so it's hardened here by hand.
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "stash", "show", "--patch", "--no-ext-diff", "--no-textconv",
+            "--include-untracked", hash);
+        if (exit != 0)
+            (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "stash", "show", "--patch", "--no-ext-diff", "--no-textconv", hash);
+        return exit == 0 ? ParseUnifiedDiff(stdout) : null;
+    }
+
     /// <summary>
     /// The full contents of an untracked file rendered as an added-file diff, so the review window can show
     /// what a session's new files contain; null on any failure. Runs <c>git diff --no-index -- /dev/null
@@ -344,6 +359,49 @@ internal sealed class GitRepoService
             ? RunGitCore(cwd, GitTimeoutMs, null, "clean", "-f", "-d", "--", path)
             : RunGitCore(cwd, GitTimeoutMs, null, "restore", "--worktree", "--", path);
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>Puts a file back to its last commit, staged and unstaged changes alike (<c>git restore --source=HEAD
+    /// --staged --worktree</c>). A file the commit doesn't have is removed; for a rename, pass the old path as
+    /// <paramref name="origPath"/> so it comes back too. Destructive.</summary>
+    public (bool Ok, string Error) DiscardFileEntirely(string cwd, string path, string? origPath)
+    {
+        if (string.IsNullOrEmpty(path)) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        string[] args = origPath is { Length: > 0 } o
+            ? ["restore", "--source=HEAD", "--staged", "--worktree", "--", o, path]
+            : ["restore", "--source=HEAD", "--staged", "--worktree", "--", path];
+        var r = RunGitCore(cwd, GitTimeoutMs, null, args);
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>Deletes a file from disk and, when git knows it, from the index too (<c>git rm -f</c>), so a tracked
+    /// file becomes a staged deletion and a new one is simply gone. An untracked file or folder is deleted from disk.
+    /// Destructive.</summary>
+    public (bool Ok, string Error) DeleteFile(string cwd, string path, bool untracked)
+    {
+        if (string.IsNullOrEmpty(path)) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        if (!untracked)
+        {
+            var r = RunGitCore(cwd, GitTimeoutMs, null, "rm", "-f", "-r", "--quiet", "--", path);
+            return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+        }
+        try
+        {
+            var root = Path.GetFullPath(cwd);
+            var full = Path.GetFullPath(Path.Combine(root, path));
+            // A path from git status never leaves the worktree; refuse one that would rather than delete outside it.
+            if (!full.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return (false, $"{path} is outside this worktree.");
+            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
+            else File.Delete(full);
+            return (true, "");
+        }
+        catch (Exception e)
+        {
+            return (false, e.Message);
+        }
     }
 
     /// <summary>Commits the staged changes with <paramref name="message"/>. Returns whether it succeeded

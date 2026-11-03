@@ -1568,7 +1568,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // ── Right-click context menu (4.13) ───────────────────────────────────────
     // External (ntfy) notifications are gated by a global setting that decides whether their per-session items
     // appear at all. The QR / history windows themselves are Phase 5; the menu wires only their triggers. (The
-    // git-history "View git history…" item has no global toggle — it always shows on a repo row.)
+    // "Git graph…" item has no global toggle — it always shows on a repo row.)
     private bool _externalNotifyAvailable;
     private bool _gitKrakenAvailable;
     // The local wall-clock end of the current Quiet-mode window, or null when it's off. Drives the header
@@ -1661,7 +1661,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
 
-    /// <summary>Raised when the user picks "View git history…" for a session. The app opens the git Tree window
+    /// <summary>Raised when the user picks "Git graph…" for a session. The app opens the git Tree window
     /// on the session's working directory. Shown on any repo row (a cheap repo check) — no global toggle.
     /// Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? ViewTreeRequested;
@@ -5087,8 +5087,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             //    external notifications. Each gated by its global switch / a cheap repo check.
             var actions = new List<Control>();
             bool isRepo = !subRow && GitRepoService.IsRepo(s.Cwd);
-            if (isRepo)
-                actions.Add(MenuItem("View git history…", () => ViewTreeRequested?.Invoke(s)));
             if (isRepo && _gitKrakenAvailable)
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
             if (isRepo && (_showPullRequests || _showJiraTickets) && WorktreeSubmenu(s) is { } worktreeMenu)
@@ -5116,6 +5114,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // Work items (docs/work-items-plan.md): tick the items this session belongs to, or start one from it.
             // A sub-agent row works on its parent session, which is the thing that belongs to an item.
             actions.Insert(0, WorkItemsSubmenu(s));
+            // The git graph leads the group, above work items.
+            if (isRepo)
+                actions.Insert(0, MenuItem("Git graph…", () => ViewTreeRequested?.Invoke(s)));
 
             // Elevate to Perch (PoC, session-control M4): take over this terminal session over
             // stream-json. Only a real interactive CLI session can be elevated (not sub-agents, desktop,

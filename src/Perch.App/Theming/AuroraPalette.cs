@@ -52,6 +52,26 @@ internal readonly record struct AuroraPalette(
         Accent:      C(0x25, 0x63, 0xEB),
         AccentHover: C(0x1D, 0x4E, 0xD8));
 
+    /// <summary>
+    /// Aurora (Dusk): the git graph window's dark. Neutral grey surfaces a step lighter than <see cref="Dark"/>'s
+    /// blue-black, and text eased off pure white (commit text ~9.5:1 on the card rather than ~12.6:1, well clear of
+    /// AA), because a graph is scanned for long stretches and the brighter set glared next to GitKraken's.
+    /// </summary>
+    public static readonly AuroraPalette Dusk = new(
+        Sunken:      C(0x16, 0x18, 0x1D),
+        Surface:     C(0x1A, 0x1D, 0x22),
+        Raised:      C(0x20, 0x23, 0x29),
+        Border:      C(0x30, 0x34, 0x3C),
+        Separator:   C(0x29, 0x2D, 0x34),
+        Text:        C(0xC4, 0xC9, 0xD1),
+        Title:       C(0xDD, 0xE1, 0xE7),
+        Muted:       C(0x8B, 0x91, 0x9C),
+        Accent:      C(0x64, 0xA0, 0xE8),
+        AccentHover: C(0x8D, 0xB9, 0xF0));
+
     /// <summary>The Aurora base for the requested polarity.</summary>
     public static AuroraPalette For(bool light) => light ? Light : Dark;
+
+    /// <summary>The git graph window's base: <see cref="Light"/>, or <see cref="Dusk"/> for dark.</summary>
+    public static AuroraPalette ForGraph(bool light) => light ? Light : Dusk;
 }

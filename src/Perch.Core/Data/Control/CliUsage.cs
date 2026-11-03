@@ -10,7 +10,7 @@ internal static class CliUsage
     /// <summary>The verbs <c>Program.Main</c> dispatches before any session parsing. Their arguments are theirs.</summary>
     private static readonly HashSet<string> Subcommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "render", "bench-roost", "configdirs", "statusline", "handle", "uninstall", "replay", "artifact", "work",
+        "render", "bench-roost", "bench-graph", "configdirs", "statusline", "handle", "uninstall", "replay", "artifact", "work",
     };
 
     /// <summary>True for <c>perch --help</c>, <c>-h</c>, <c>-?</c>, <c>/?</c> or <c>perch help</c>, unless a subcommand leads.</summary>
@@ -58,6 +58,8 @@ internal static class CliUsage
           perch render <dir> [theme]  render every owner-drawn surface to PNG
           perch replay <recording>    drive the app through a recorded session
           perch bench-roost [turns]   time the Roost's drag/drop/refresh passes
+          perch bench-graph [repo] [count]
+                                      time the git graph's read and layout on a repository
 
           perch -h, --help            show this help
           perch -v, --version         show the version

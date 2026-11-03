@@ -31,4 +31,24 @@ internal static class RepoWatchFilter
         }
         return true;
     }
+
+    /// <summary>
+    /// For a watcher on a repo's shared git directory (the git graph watches it so every worktree's commits, branch
+    /// moves and staging show up): its <c>HEAD</c>, <c>index</c>, <c>packed-refs</c> and <c>refs/</c>; each linked
+    /// worktree's folder (added or removed) and its <c>HEAD</c>/<c>index</c>; and the markers of a merge, rebase or
+    /// cherry-pick in progress. Object writes, logs and hooks don't refresh.
+    /// </summary>
+    public static bool IsRelevantInGitDir(string? relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath)) return true;
+        var parts = relativePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return true;
+        if (parts[0] == "refs") return true;
+        if (parts[0] == "worktrees")
+            return parts.Length <= 2 || (parts.Length == 3 && (InProgress(parts[2]) || parts[2] is "HEAD" or "index"));
+        return parts.Length == 1 && (parts[0] is "HEAD" or "index" or "packed-refs" || InProgress(parts[0]));
+    }
+
+    private static bool InProgress(string name) =>
+        name is "MERGE_HEAD" or "CHERRY_PICK_HEAD" or "REVERT_HEAD" or "rebase-merge" or "rebase-apply";
 }

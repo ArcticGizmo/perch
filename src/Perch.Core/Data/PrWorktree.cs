@@ -78,6 +78,20 @@ public static class PrWorktree
         return text + sep + "# Perch: worktrees for pull request sessions\n" + entry + "\n";
     }
 
+    /// <summary>A nested <paramref name="layout"/>: keeps its worktrees out of <c>git status</c> locally (a line in the
+    /// repo's <c>info/exclude</c>), without touching the repo's <c>.gitignore</c>. Throws on IO failure.</summary>
+    public static void EnsureExcluded(string root, WorktreeLayout layout, bool bare)
+    {
+        if (layout.ExcludeEntry(bare) is not { } entry || GitWorktreeScanner.CommonDir(root) is not { } common) return;
+        var excludePath = Path.Combine(common, "info", "exclude");
+        var current = File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
+        if (WithExcludeEntry(current, entry) is { } updated)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+            File.WriteAllText(excludePath, updated);
+        }
+    }
+
     /// <summary>Makes (or finds) the PR's worktree. <paramref name="layout"/> overrides the inferred layout, when the
     /// user picked another in the dialog.</summary>
     public static PrWorktreeResult Ensure(string checkoutRoot, GitRepoRef repo, int number, WorktreeLayout? layout = null)
@@ -104,18 +118,7 @@ public static class PrWorktree
             if (fetch.Exit != 0)
                 return new(null, false, Describe("Couldn't fetch the PR", fetch));
 
-            // A nested layout: keep the worktree out of `git status` locally, without touching the repo's .gitignore.
-            if (ctx.Layout.ExcludeEntry(ctx.Set.Bare) is { } entry && GitWorktreeScanner.CommonDir(root) is { } common)
-            {
-                var excludePath = Path.Combine(common, "info", "exclude");
-                var current = File.Exists(excludePath) ? File.ReadAllText(excludePath) : null;
-                if (WithExcludeEntry(current, entry) is { } updated)
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-                    File.WriteAllText(excludePath, updated);
-                }
-            }
-
+            EnsureExcluded(root, ctx.Layout, ctx.Set.Bare);
             Directory.CreateDirectory(Path.GetDirectoryName(plan.Path)!);
             var add = GitRunner.Run(root, AddTimeoutMs, GitRunner.Trust.UserAction, null,
                 "worktree", "add", plan.Path, plan.Branch);

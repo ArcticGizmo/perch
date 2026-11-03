@@ -9,6 +9,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.2] - 2026-11-03
+
+- "View tree" grows up into a full git graph (it was a list; it had ambitions)
+- Branches, tags and every worktree on one graph, your branch down the left
+- Double-click a branch to check it out, with Undo
+- Drag to merge, rebase, fast-forward, cherry-pick or make a worktree
+- Pull, Push, Branch, Stash and Pop on a toolbar
+- Stashes in the graph: apply, pop, drop, rename (git can't rename them; we did it anyway)
+- "Branch here…" on any commit, pill or your changes
+- Right-click menus for branches, commits and files
+- Ctrl+F commit search, resizable columns, exact times on hover
+- Hide branches; optionally auto-hide ones that aren't yours
+- Upstream ahead/behind marks on branch pills
+- Author pictures on commits (via GitHub, never Gravatar)
+- Softer dark mode for the graph window
+- Conflict banner with Continue, Skip and Abort
+
+---
+
 ## [v0.6.1] - 2026-10-29
 
 - Green tick on the PR glyph once a PR is approved

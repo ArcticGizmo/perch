@@ -125,6 +125,21 @@ public class PlacementMathTests
     }
 
     [Fact]
+    public void BesideOverlay_OpensInTheWiderStripAndShrinksToFit()
+    {
+        var work = (0, 0, 2560, 1400);
+
+        // Overlay docked down the left: the window takes the space to its right, never under it, shrunk to fit.
+        Assert.Equal((420, 20, 2120, 1360), PlacementMath.BesideOverlay(work, (0, 0, 400, 1400), 3000, 2000, 820, 20));
+        // Overlay floating at the right: the window fits left of it and is centred there.
+        Assert.Equal((300, 200, 1500, 1000),PlacementMath.BesideOverlay(work, (2100, 50, 420, 600), 1500, 1000, 820, 20));
+        // Neither strip is wide enough: the whole work area, overlay or not.
+        Assert.Equal((20, 20, 1560, 1360), PlacementMath.BesideOverlay((0, 0, 1600, 1400), (500, 0, 600, 600), 1800, 2000, 820, 20));
+        // Overlay on another monitor: centred in the whole work area.
+        Assert.Equal((530, 200, 1500, 1000), PlacementMath.BesideOverlay(work, (3000, 0, 400, 800), 1500, 1000, 820, 20));
+    }
+
+    [Fact]
     public void Clamp_WindowLargerThanWorkArea_PinsToOrigin()
     {
         // A window wider/taller than the work area can't fit; it lands flush at the top-left.

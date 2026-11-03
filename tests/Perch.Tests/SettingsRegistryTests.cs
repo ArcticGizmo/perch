@@ -78,11 +78,19 @@ public class SettingsRegistryTests
         // a Settings-window control — like the placements themselves.
         nameof(AppSettings.FloatingWidthDip),
         nameof(AppSettings.DockedWidthDip),
-        // The git Tree window's diff-view preferences (split vs unified, light mode, hunk staging) are set
-        // from that window's own toolbar controls and persisted, not from a Settings-window control.
+        // The git Tree window's view preferences (split vs unified, light mode, hunk staging, graph scope, graph
+        // column widths) are set from that window's own controls and persisted, not from a Settings-window control.
         nameof(AppSettings.GitReviewSplitView),
         nameof(AppSettings.GitTreeLight),
         nameof(AppSettings.GitTreeHunkStaging),
+        nameof(AppSettings.GitTreeScope),
+        nameof(AppSettings.GitTreeRefsWidth),
+        nameof(AppSettings.GitTreeLanesWidth),
+        nameof(AppSettings.GitTreeFilesCollapsed),
+        nameof(AppSettings.GitTreeAvatars),
+        nameof(AppSettings.GitTreePullMode),
+        nameof(AppSettings.GitTreeRepos),
+        nameof(AppSettings.GitTreeAutoHideOthers),
         // Perch-managed session auto-compaction (enable + threshold) is set from the session window's own
         // /autocompact modal (a slider), not a Settings-window control.
         nameof(AppSettings.SessionAutoCompactEnabled),

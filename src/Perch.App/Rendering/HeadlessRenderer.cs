@@ -670,6 +670,187 @@ internal static class HeadlessRenderer
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
         RenderControl(BuildTreeSurface(light: true), Path.Combine(outDir, "git_tree_light_1x.png"), 96);
 
+        // The git graph canvas: lanes, merges, ref pills, worktree rings and two dirty worktrees' WIP rows with their
+        // dashed tethers, selected on a commit, in both of the Tree window's polarities.
+        RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1x.png"), 96);
+        RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1.5x.png"), 144);
+        RenderControl(BuildGraphCanvas(light: true), Path.Combine(outDir, "git_graph_light_1x.png"), 96);
+
+        // The real Tree window on the repo the render runs in (when it runs in one): the whole load path (graph,
+        // rail, files, diff) with its background work let finish. Live data, so it changes run to run.
+        if (GitCheckoutScanner.FindRoot(Environment.CurrentDirectory) is { } liveRepo)
+        {
+            // Author pictures without gh or the network: no lookups, and every noreply author (Dependabot) gets a drawn
+            // stand-in, so the picture path paints as well as the initials.
+            var fakeAvatar = FakeAvatarPng();
+            Views.AvatarImages.FetcherOverride = () => new Perch.Data.GitGraph.AvatarFetcher(
+                Path.Combine(outDir, "_avatar-cache"), graphql: _ => null, download: _ => fakeAvatar);
+            var tw = new Windows.GitTreeWindow(new AppSettings()) { Width = 1700, Height = 860 };
+            tw.Show();
+            tw.Retarget(liveRepo, Path.GetFileName(liveRepo), null, isActive: false);
+            for (var until = DateTime.UtcNow.AddSeconds(6); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } liveFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_live_1x.png"));
+                liveFrame.Save(fs);
+            }
+            Console.WriteLine($"git graph avatars: {tw.PreviewAvatars}");
+
+            // The selected node's first file, opened over the graph as a file click would.
+            tw.PreviewDiff(open: true);
+            for (var until = DateTime.UtcNow.AddSeconds(2); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } diffFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_diff_open_1x.png"));
+                diffFrame.Save(fs);
+            }
+            tw.PreviewDiff(open: false);
+
+            // The commit search with matches washed, then the busy cover with the files pane collapsed.
+            void Snap(string name)
+            {
+                for (var until = DateTime.UtcNow.AddSeconds(1); DateTime.UtcNow < until; Thread.Sleep(50))
+                    Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+            }
+            tw.PreviewFind("git graph");
+            Snap("git_tree_find_1x.png");
+            tw.PreviewFind(null);
+            tw.PreviewBusyCollapsed(true);
+            Snap("git_tree_busy_collapsed_1x.png");
+            tw.PreviewBusyCollapsed(false);
+
+            // A remote branch hidden: dimmed in the rail with its eye struck through, gone from the graph.
+            tw.PreviewHideFirstRemote();
+            for (var until = DateTime.UtcNow.AddSeconds(4); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } hiddenFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_hidden_branch_1x.png"));
+                hiddenFrame.Save(fs);
+            }
+
+            // Clicks with synthetic pointer input: empty space under a file list opens nothing; the Files heading collapses
+            // the pane and a click on the strip brings it back.
+            void Click(Point p)
+            {
+                tw.MouseMove(p);
+                tw.MouseDown(p, global::Avalonia.Input.MouseButton.Left);
+                tw.MouseUp(p, global::Avalonia.Input.MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+            }
+            if (tw.PreviewBlankListSpot() is { } blank)
+            {
+                Click(blank);
+                Console.WriteLine($"git graph files: after a click below the rows, diff open = {tw.PreviewDiffOpen}, shown = {tw.PreviewShownFile}");
+                tw.PreviewDiff(open: false);
+            }
+            else Console.WriteLine("git graph files: no blank space under a file list to click");
+            if (tw.PreviewFilesHeading() is { } heading)
+            {
+                Click(heading);
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                Dispatcher.UIThread.RunJobs();
+                bool collapsed = tw.PreviewFilesCollapsed;
+                if (tw.PreviewFilesStrip() is { } strip) Click(strip);
+                Console.WriteLine($"git graph files: heading click collapsed = {collapsed}, strip click expanded = {!tw.PreviewFilesCollapsed}");
+            }
+
+            // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
+            // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
+            // runs on the repo.
+            tw.PreviewShowPills();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            // Hover probes first: the drag below ends with its drop menu open, and an open menu takes the pointer.
+            if (tw.PreviewPill(0) is { } pill)
+            {
+                tw.MouseMove(pill);
+                Dispatcher.UIThread.RunJobs();
+                Console.WriteLine($"git graph cursors (pointer on a pill): {tw.PreviewCursors()}");
+            }
+            if (tw.PreviewNode() is { } node)
+            {
+                tw.MouseMove(node);
+                Dispatcher.UIThread.RunJobs();
+                Console.WriteLine($"git graph node tooltip: {tw.PreviewGraphTip?.Replace('\n', '|') ?? "(none)"}");
+            }
+            if (tw.PreviewPill(0) is not { } from || tw.PreviewPill(1) is not { } to)
+                Console.WriteLine("git graph drag: skipped, fewer than two other branch pills on screen");
+            else
+            {
+                void Settle() { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Dispatcher.UIThread.RunJobs(); }
+                void Frame(string name)
+                {
+                    Settle();
+                    if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+                }
+                const global::Avalonia.Input.RawInputModifiers held = global::Avalonia.Input.RawInputModifiers.LeftMouseButton;
+                tw.MouseMove(from);
+                tw.MouseDown(from, global::Avalonia.Input.MouseButton.Left);
+                for (int i = 1; i <= 8; i++)
+                {
+                    tw.MouseMove(new Point(from.X + (to.X - from.X) * i / 8, from.Y + (to.Y - from.Y) * i / 8), held);
+                    Settle();
+                }
+                Console.WriteLine($"git graph drag: dragging={tw.PreviewDragging}, hint over a pill: {tw.PreviewGhostHint}");
+                Frame("git_tree_drag_pill_1x.png");
+                if (tw.PreviewNewWorktreeZone() is { } zone)
+                {
+                    tw.MouseMove(zone, held);
+                    Console.WriteLine($"git graph drag: hint over New worktree: {tw.PreviewGhostHint}");
+                    Frame("git_tree_drag_newworktree_1x.png");
+                    tw.MouseUp(zone, global::Avalonia.Input.MouseButton.Left);
+                    Frame("git_tree_drop_menu_1x.png");
+                    // Over the commit rows, clear of the first menu, so the second opens beside it.
+                    tw.MouseMove(new Point(tw.Bounds.Width * 0.45, tw.Bounds.Height * 0.45));
+                    tw.PreviewLongDropMenu();
+                    Frame("git_tree_drop_menu_long_1x.png");
+                }
+                else
+                {
+                    tw.MouseUp(to, global::Avalonia.Input.MouseButton.Left);
+                }
+                Settle();
+            }
+            tw.PreviewCheckoutChrome();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } chromeFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_checkout_1x.png"));
+                chromeFrame.Save(fs);
+            }
+            // The new-branch dialog with a taken name typed, so its live check shows.
+            tw.PreviewBranchDialog("main");
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } dialogFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_branch_dialog_1x.png"));
+                dialogFrame.Save(fs);
+            }
+            tw.PreviewCloseNameDialog();
+            // The rail with Worktrees and Local collapsed to their headers.
+            tw.PreviewRailOpen(false);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } railFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_rail_collapsed_1x.png"));
+                railFrame.Save(fs);
+            }
+            tw.PreviewRailOpen(true);
+            tw.Close();
+        }
+
         // Markdown viewer window: the file tree (session produced/referenced groups + the project folder
         // tree) beside the rendered preview. Unlike the owner-drawn surfaces this uses templated controls
         // (TreeView/ScrollViewer/SelectableTextBlock) that only realise inside a shown window, so it's
@@ -3669,25 +3850,115 @@ internal static class HeadlessRenderer
         }
     }
 
-    // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph
-    // node rows (built by the real GitTreeWindow.NodeRow), a sample files list, and the diff view. Painted
-    // from the window's own light/dark palette so both modes can be eyeballed.
+    // A sample history shaped like docs/git-graph-design.html: main with tags, three feature branches (one merged
+    // from main, one left behind), worktrees on two of them (both dirty) and a clean one on a third.
+    private static Control BuildGraphCanvas(bool light, double width = 1180, double? height = null)
+    {
+        var snap = SampleGraph();
+        var canvas = new Views.GraphCanvas { Width = width };
+        canvas.Height = height ?? snap.Rows.Length * canvas.RowHeight;
+        canvas.SetColors(Views.GraphCanvas.Colors.For(light));
+        canvas.SetSnapshot(snap, keepPlace: false);
+        canvas.SetSessions(SampleGraphSessions());
+        canvas.Measure(new Size(canvas.Width, canvas.Height));
+        canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
+        canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
+        return canvas;
+    }
+
+    // A stand-in avatar for the live render: a blue square with a pale head and shoulders, as PNG bytes.
+    private static byte[] FakeAvatarPng()
+    {
+        using var rtb = new RenderTargetBitmap(new PixelSize(64, 64));
+        using (var ctx = rtb.CreateDrawingContext())
+        {
+            ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x3B, 0x6E, 0xC8)), new Rect(0, 0, 64, 64));
+            var pale = new SolidColorBrush(Color.FromRgb(0xE8, 0xEE, 0xF8));
+            ctx.DrawEllipse(pale, null, new Point(32, 25), 11, 11);
+            ctx.DrawEllipse(pale, null, new Point(32, 62), 22, 18);
+        }
+        using var ms = new MemoryStream();
+        rtb.Save(ms);
+        return ms.ToArray();
+    }
+
+    private static Dictionary<string, Views.GraphRail.WorktreeSession> SampleGraphSessions() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        [Path.Combine(@"C:\src", "perch--roost-tabs")] = new("Roost tabs: rail sort", "Running", Color.FromRgb(0x3F, 0xB9, 0x50)),
+        [Path.Combine(@"C:\src", "perch--feeds")] = new("Feeds: OPML import", "Needs you", Color.FromRgb(0xE3, 0xB3, 0x41)),
+    };
+
+    private static Perch.Data.GitGraph.GraphSnapshot SampleGraph()
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        int age = 0;
+        Perch.Data.GitGraph.GraphCommit C(string hash, string subject, params string[] parents) =>
+            new(hash.PadRight(40, '0'), parents.Select(p => p.PadRight(40, '0')).ToArray(), "Jon Howell", "jon@x", now - (age += 2700), subject);
+        var log = new[]
+        {
+            C("a1f3c9e", "Roost tabs: rail sort survives a restart", "e02d5b1"),
+            C("7be0d42", "Graph: lane allocator + topo-order reader", "9083893"),
+            C("4c19a07", "Feeds: OPML import, per-feed images", "b7d2e90"),
+            C("e02d5b1", "Merge branch 'main' into roost-tabs", "31ac6f8", "9083893"),
+            C("9083893", "PR glyph: green approval tick beside the CI dot; bump to 0.6.1 (#94)", "ea56d6d"),
+            C("ea56d6d", "Slim perch-hook to native signals; bump to 0.6.0 (#93)", "58cc471"),
+            C("b7d2e90", "Feeds: story player + injection guard", "926a009"),
+            C("31ac6f8", "Roost tabs: Focus tab + tab painter", "926a009"),
+            C("58cc471", "Idle compaction toggle, per-directory Edit in search (#92)", "926a009"),
+            C("3c51d94", "GitHub dashboard: card redesign + simpler dialog", "d81f2aa"),
+            C("926a009", "Keep sign-ins fresh (experimental), Login required (#91)", "309e0f1"),
+            C("309e0f1", "PR glyph: emoji in check names, terminal-started trays (#90)", "6fa0b3c"),
+            C("d81f2aa", "GitHub alerts: dismiss + filters", "6fa0b3c"),
+            C("6fa0b3c", "Per-dir expected account; drift warning (#89)", "0e7c4d5"),
+            C("0e7c4d5", "Mermaid diagrams: flowchart, sequence, ER (#85)"),
+        };
+        Perch.Data.GitGraph.GraphRef R(string name, Perch.Data.GitGraph.GraphRefKind kind, string at) =>
+            new(name, name, kind, at.PadRight(40, '0'));
+        var refs = new[]
+        {
+            R("main", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "9083893"),
+            R("roost-tabs", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "a1f3c9e"),
+            R("feeds", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "4c19a07"),
+            R("git-graph", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "7be0d42"),
+            R("github-dashboard", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "3c51d94"),
+            R("origin/main", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "9083893"),
+            R("origin/roost-tabs", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "31ac6f8"),
+            R("origin/github-dashboard", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "3c51d94"),
+            R("v0.6.1", Perch.Data.GitGraph.GraphRefKind.Tag, "9083893"),
+            R("v0.6.0", Perch.Data.GitGraph.GraphRefKind.Tag, "ea56d6d"),
+            R("v0.5.46", Perch.Data.GitGraph.GraphRefKind.Tag, "926a009"),
+        };
+        string P(string name) => Path.Combine(@"C:\src", name);
+        var worktrees = new[]
+        {
+            new Perch.Data.GitGraph.GraphWorktree(P("perch"), "main", "9083893".PadRight(40, '0'), 0, IsCurrent: true),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--roost-tabs"), "roost-tabs", "a1f3c9e".PadRight(40, '0'), 3, false),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--feeds"), "feeds", "4c19a07".PadRight(40, '0'), 1, false),
+            new Perch.Data.GitGraph.GraphWorktree(P("perch--git-graph"), "git-graph", "7be0d42".PadRight(40, '0'), 0, false),
+        };
+        return Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
+            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
+    }
+
+    // Composes the git Tree window's three panes into one static surface for eyeballing: the graph (the real
+    // GraphCanvas over the sample history), a sample files list, and the diff view. Painted from the window's own
+    // light/dark palette so both modes can be eyeballed.
     private static Control BuildTreeSurface(bool light)
     {
         var pal = light ? GitTreeWindow.TreePalette.Light() : GitTreeWindow.TreePalette.Dark();
-        var now = DateTimeOffset.Now;
-        GitTreeWindow.TreeNode Commit(string hash, string subj, int hoursAgo, bool head) =>
-            new(GitTreeWindow.NodeKind.Commit, head, false, false,
-                new GitCommit(hash + "0000000", hash, "Jon Howell", now.AddHours(-hoursAgo), subj, subj, "p"), 0, null);
-
-        var nodes = new StackPanel();
-        nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Wip, false, IsFirst: true, IsLast: false, default, 3, null), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false), pal));
-        nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Base, false, IsFirst: false, IsLast: true, default, 0, "origin/main"), pal));
+        var rail = new Views.GraphRail { Width = 210, [DockPanel.DockProperty] = Dock.Left };
+        rail.SetColors(Views.GraphCanvas.Colors.For(light));
+        rail.SetSnapshot(SampleGraph());
+        rail.SetSessions(SampleGraphSessions());
+        var graph = new DockPanel
+        {
+            Children =
+            {
+                rail,
+                new Border { Width = 1, Background = pal.Separator, [DockPanel.DockProperty] = Dock.Left },
+                BuildGraphCanvas(light, width: 690, height: 360),
+            },
+        };
 
         var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
         TextBlock FileRow(string t, IBrush c) => new()
@@ -3731,17 +4002,17 @@ internal static class HeadlessRenderer
 
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("300,16,254,16,*"),
+            ColumnDefinitions = new ColumnDefinitions("903,16,254,16,*"),
             Margin = new Thickness(14, 12, 14, 14),   // the padded "page"
         };
         void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }
-        Add(Pane("Commits · this branch", nodes), 0);
+        Add(Pane("Graph · all branches", graph), 0);
         Add(Gutter(), 1);
         Add(Pane("Files", files), 2);
         Add(Gutter(), 3);
         Add(Pane("Diff", diff), 4);
 
-        return new Border { Width = 1180, Height = 340, Background = pal.WindowBg, Child = grid };
+        return new Border { Width = 1800, Height = 420, Background = pal.WindowBg, Child = grid };
     }
 
     private static StatsReport SampleStatsReport()

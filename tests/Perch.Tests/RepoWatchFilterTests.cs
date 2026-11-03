@@ -33,4 +33,32 @@ public sealed class RepoWatchFilterTests
     [InlineData(".git/index.lock")]
     [InlineData(".git/FETCH_HEAD")]
     public void Ignored(string path) => Assert.False(RepoWatchFilter.IsRelevant(path));
+
+    // The git graph's watcher on the shared git directory.
+    [Theory]
+    [InlineData("HEAD")]
+    [InlineData("index")]
+    [InlineData("packed-refs")]
+    [InlineData(@"refs\heads\feature\x")]
+    [InlineData("worktrees")]
+    [InlineData("worktrees/perch--feeds")]
+    [InlineData("worktrees/perch--feeds/HEAD")]
+    [InlineData(@"worktrees\perch--feeds\index")]
+    [InlineData("worktrees/perch--feeds/rebase-merge")]
+    [InlineData("MERGE_HEAD")]
+    [InlineData("CHERRY_PICK_HEAD")]
+    [InlineData("rebase-merge")]
+    [InlineData(null)]
+    public void RelevantInGitDir(string? path) => Assert.True(RepoWatchFilter.IsRelevantInGitDir(path));
+
+    [Theory]
+    [InlineData("objects/ab/cdef")]
+    [InlineData("logs/HEAD")]
+    [InlineData("index.lock")]
+    [InlineData("FETCH_HEAD")]
+    [InlineData("worktrees/perch--feeds/logs/HEAD")]
+    [InlineData("worktrees/perch--feeds/index.lock")]
+    [InlineData("rebase-merge/msgnum")]
+    [InlineData("hooks/pre-commit")]
+    public void IgnoredInGitDir(string path) => Assert.False(RepoWatchFilter.IsRelevantInGitDir(path));
 }

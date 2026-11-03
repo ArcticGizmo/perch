@@ -33,6 +33,69 @@ internal static class TextFit
         return lo == 0 ? Ellipsis : text[..ends[lo - 1]] + Ellipsis;
     }
 
+    /// <summary>
+    /// Fits a branch name by cutting its middle: <paramref name="text"/> when it fits, else its first path segment, an
+    /// ellipsis and as much of the end as fits (<c>dependabot/…site-1e18</c>), since the end is what tells similar
+    /// branches apart. Falls back to an ellipsis and the end alone when the first segment leaves no room for at least a
+    /// few characters of it. Whole graphemes only; binary search, like <see cref="Truncate"/>.
+    /// </summary>
+    public static string ElideMiddle(string? text, double maxWidth, Func<string, double> measure)
+    {
+        const int minTail = 4;
+        if (string.IsNullOrEmpty(text)) return "";
+        if (measure(text) <= maxWidth) return text;
+        if (maxWidth <= 0) return "";
+        int slash = text.IndexOf('/');
+        if (slash > 0 && slash < text.Length - 1
+            && FitTail(text[(slash + 1)..], text[..(slash + 1)] + Ellipsis, maxWidth, measure, minTail) is { } kept)
+            return kept;
+        return FitTail(text, Ellipsis, maxWidth, measure, 1) ?? Ellipsis;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> with each whole occurrence of one of <paramref name="names"/> replaced by
+    /// <paramref name="shorten"/>(name), so a sentence keeps its words and only the long names in it are cut (a menu
+    /// line naming two dependabot branches). One pass, longest name first, so a name inside a longer one, or inside
+    /// what a replacement produced, is never touched. "Whole" means not glued to more name characters on either side.
+    /// </summary>
+    public static string ShortenNames(string text, IEnumerable<string?> names, Func<string, string> shorten)
+    {
+        var sorted = names.Where(n => !string.IsNullOrEmpty(n)).Distinct(StringComparer.Ordinal)
+            .OrderByDescending(n => n!.Length).ToList();
+        if (sorted.Count == 0 || string.IsNullOrEmpty(text)) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            string? hit = null;
+            if (i == 0 || !IsNameChar(text[i - 1]))
+                hit = sorted.FirstOrDefault(n => string.CompareOrdinal(text, i, n, 0, n!.Length) == 0
+                    && (i + n.Length == text.Length || !IsNameChar(text[i + n.Length]) || EndsSentence(text, i + n.Length)));
+            if (hit is null) { sb.Append(text[i++]); continue; }
+            sb.Append(shorten(hit));
+            i += hit.Length;
+        }
+        return sb.ToString();
+    }
+
+    // Characters a branch or folder name runs on with. A '.' is one, except a full stop ending the sentence.
+    private static bool IsNameChar(char c) => char.IsLetterOrDigit(c) || c is '/' or '-' or '_' or '.' or '@';
+    private static bool EndsSentence(string text, int at) => text[at] == '.' && (at + 1 == text.Length || char.IsWhiteSpace(text[at + 1]));
+
+    // `lead` plus the longest whole-grapheme tail of `rest` that fits, or null when fewer than `minTail` graphemes do.
+    private static string? FitTail(string rest, string lead, double maxWidth, Func<string, double> measure, int minTail)
+    {
+        var ends = GraphemeEnds(rest);
+        int Start(int keep) => keep >= ends.Length ? 0 : ends[ends.Length - keep - 1];
+        int lo = 0, hi = ends.Length;   // how many trailing graphemes to keep
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (measure(lead + rest[Start(mid)..]) <= maxWidth) lo = mid; else hi = mid - 1;
+        }
+        return lo < Math.Min(minTail, ends.Length) ? null : lead + rest[Start(lo)..];
+    }
+
     /// <summary>The end offset of each grapheme cluster in <paramref name="text"/>, in order.</summary>
     internal static int[] GraphemeEnds(string text)
     {

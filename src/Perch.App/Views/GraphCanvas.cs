@@ -1,0 +1,1074 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
+using Perch.Avalonia.Rendering;
+using Perch.Avalonia.Theming;
+using Perch.Data;
+using Perch.Data.GitGraph;
+
+namespace Perch.Avalonia.Views;
+
+/// <summary>
+/// The Tree window's commit graph: one owner-drawn surface that scrolls itself and paints only the rows in view, so
+/// a 100k-commit history costs the same per frame as a 100-commit one. Columns: ref pills (right-aligned against
+/// the graph), lanes and nodes, subject (with tags), author, age. A dirty worktree's WIP row is a dashed node whose
+/// dashed tether runs down its own lane to its HEAD; a commit that is some worktree's HEAD wears a ring.
+///
+/// <para>Paint allocates nothing per frame beyond the hit list it reuses: text comes from
+/// <see cref="OverlayDraw.Text"/>'s cache, pens and brushes are built once per <see cref="Colors"/>, and curves
+/// are drawn as short line runs instead of geometry objects.</para>
+/// </summary>
+internal sealed class GraphCanvas : Control
+{
+    /// <summary>The colours the graph paints with: the Tree window's Aurora surfaces plus a lane set per polarity.</summary>
+    public sealed record Colors(Color Background, Color RowHover, Color RowSelected, Color Text, Color Title, Color Muted,
+        Color Separator, Color[] Lanes, bool Light)
+    {
+        public static Colors For(bool light)
+        {
+            var a = AuroraPalette.ForGraph(light);
+            var lanes = GraphLanes.For(light).Select(l => Color.FromRgb(l.R, l.G, l.B)).ToArray();
+            return new(a.Raised, Blend(a.Raised, a.Text, light ? 0.04 : 0.05), Blend(a.Raised, a.Accent, light ? 0.12 : 0.18),
+                a.Text, a.Title, a.Muted, a.Separator, lanes, light);
+        }
+
+        public IBrush LaneBrush(int lane) => OverlayDraw.Brush(Lanes[lane % Lanes.Length]);
+
+        private static Color Blend(Color a, Color b, double t) => Color.FromRgb(
+            (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
+    }
+
+    private const double FontSize = 12.5, SmallSize = 11.5, PillSize = 11.5;
+    private const double LaneW = 16, GraphPad = 12, MinGraphW = 44, MaxGraphW = 280;
+    private const double DefaultRefsW = 188, MinRefsW = 70, MaxRefsW = 480, MaxLanesW = 900;
+    private const double AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760, MaxPillText = 160;
+
+    // The pill column's width and, once the user has dragged it, the lane column's (null = sized to the graph).
+    private double _refsW = DefaultRefsW;
+    private double? _lanesW;
+
+    // Column-edge resizing: which edge the pointer is over (0 = none, 1 = pills|lanes, 2 = lanes|subject), and the
+    // edge being dragged with the width it started from.
+    private int _edgeHover;
+    private (int Edge, double StartX, double StartW)? _edgeDrag;
+    private const double EdgeGrip = 4;
+    private const double NodeR = 4.5, MergeR = 3.6, RingR = 8, WipR = 5.5;
+
+    // Author pictures on the nodes (null = plain dots). A picture needs room: lanes spread from 16 to 24 DIP.
+    private const double AvatarR = 9.5, AvatarLaneW = 24, InitialsSize = 8.5;
+    private AvatarImages? _avatars;
+    private readonly EllipseGeometry _avatarClip = new(new Rect(-AvatarR, -AvatarR, AvatarR * 2, AvatarR * 2));
+    private readonly Dictionary<string, (string Initials, int Color)> _authorMarks = new(StringComparer.OrdinalIgnoreCase);
+    private IBrush[] _authorFill = [], _authorInk = [];
+    private IPen[] _avatarRing = [];
+
+    private double LaneStep => _avatars is null ? LaneW : AvatarLaneW;
+    private double HeadRingR => _avatars is null ? RingR : AvatarR + 3.5;
+
+    /// <summary>Paints each commit's author picture (initials until one is found) instead of a dot, or plain dots for null.</summary>
+    public void SetAvatars(AvatarImages? avatars)
+    {
+        if (ReferenceEquals(_avatars, avatars)) return;
+        if (_avatars is not null) _avatars.Changed -= InvalidateVisual;
+        _avatars = avatars;
+        if (_avatars is not null) _avatars.Changed += InvalidateVisual;
+        InvalidateVisual();
+    }
+    private const int CurveSteps = 8;
+
+    private const int FlashMs = 900;
+
+    private GraphSnapshot? _snap;
+    private Colors _c = Colors.For(light: false);
+    private int _sel = -1, _hover = -1;
+    private int _hlLane = -1;
+    private int _flashRow = -1;
+    private long _flashStart;
+    private global::Avalonia.Threading.DispatcherTimer? _flashTimer;
+    private double _offset;
+    private bool _moreRequested;
+    private readonly double _rowH, _headerH;
+
+    // Built once per palette.
+    private IPen[] _lane = [], _laneDash = [], _laneFaded = [], _ring = [], _ringBold = [], _pillBorder = [], _pillDash = [];
+    private IBrush[] _laneFill = [], _laneFillFaded = [], _laneWash = [];
+    private IBrush _bg = Brushes.Transparent, _hoverBg = Brushes.Transparent, _selBg = Brushes.Transparent,
+        _text = Brushes.White, _muted = Brushes.Gray;
+    private IPen _nodeEdge = new ImmutablePen(Brushes.Black), _sep = new ImmutablePen(Brushes.Gray), _dropPen = new ImmutablePen(Brushes.White),
+        _gripPen = new ImmutablePen(Brushes.Gray);
+    private IBrush _matchBg = Brushes.Transparent;
+
+    // Rows that match the find bar, washed so they stand out while scrolling.
+    private IReadOnlySet<int> _matches = new HashSet<int>();
+
+    /// <summary>Washes the rows that match a search (an empty set clears it).</summary>
+    public void SetMatches(IReadOnlySet<int> rows)
+    {
+        _matches = rows;
+        InvalidateVisual();
+    }
+
+    // Where the pills were painted, for hit-testing (drag sources and double-click targets in later checkpoints).
+    private readonly List<(Rect Rect, int Row, GraphRef Ref)> _pillHits = new();
+
+    public GraphCanvas()
+    {
+        Focusable = true;
+        ClipToBounds = true;
+        // Row height from the font's line height, never a fixed pixel count.
+        _rowH = Math.Ceiling(OverlayDraw.Text("Ag", FontSize, Brushes.White).Height + 13);
+        _headerH = Math.Ceiling(OverlayDraw.Text("Ag", SmallSize, Brushes.White, FontWeight.SemiBold).Height + 12);
+        SetColors(_c);
+    }
+
+    /// <summary>The selected row changed (−1 when cleared).</summary>
+    public event Action<int>? SelectionChanged;
+
+    /// <summary>A row was double-clicked (anywhere but a pill) or Enter was pressed on it.</summary>
+    public event Action<int>? RowActivated;
+
+    /// <summary>A ref pill was double-clicked.</summary>
+    public event Action<GraphRef>? RefActivated;
+
+    /// <summary>A ref pill was right-clicked: the host shows its menu at the pointer.</summary>
+    public event Action<GraphRef>? RefMenuRequested;
+
+    /// <summary>A row was right-clicked away from its pills (and selected): the host shows the commit's menu.</summary>
+    public event Action<int>? RowMenuRequested;
+
+    /// <summary>A branch pill or a commit row was pressed and dragged past the threshold; the host runs the drag from
+    /// here (the pointer stays captured by the canvas until release).</summary>
+    public event Action<DragSource, IPointer>? DragRequested;
+
+    /// <summary>The last loaded row came into view and the snapshot has more to load.</summary>
+    public event Action? LoadMoreRequested;
+
+    /// <summary>The extent, viewport or offset changed, for a host scroll bar.</summary>
+    public event Action? ScrollChanged;
+
+    public GraphSnapshot? Snapshot => _snap;
+    public int SelectedRow => _sel;
+    public double RowHeight => _rowH;
+    public double Extent => (_snap?.Rows.Length ?? 0) * _rowH + (_snap?.HasMore == true ? _rowH : 0);
+    public double Viewport => Math.Max(0, Bounds.Height - _headerH);
+
+    public double Offset
+    {
+        get => _offset;
+        set
+        {
+            var v = Math.Clamp(value, 0, Math.Max(0, Extent - Viewport));
+            if (v == _offset) return;
+            _offset = v;
+            InvalidateVisual();
+            ScrollChanged?.Invoke();
+        }
+    }
+
+    public void SetColors(Colors c)
+    {
+        _c = c;
+        IImmutableSolidColorBrush B(Color col, double o = 1) => (IImmutableSolidColorBrush)OverlayDraw.Brush(col, o);
+        var dash = new ImmutableDashStyle([2.2, 2.6], 0);
+        _lane = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2, null, PenLineCap.Round)).ToArray();
+        _laneDash = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 1.7, dash, PenLineCap.Round)).ToArray();
+        _laneFaded = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l, 0.22), 2, null, PenLineCap.Round)).ToArray();
+        _laneFillFaded = c.Lanes.Select(l => (IBrush)B(l, 0.3)).ToArray();
+        _ring = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 1.8)).ToArray();
+        _ringBold = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2.6)).ToArray();
+        _pillBorder = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l, 0.5), 1)).ToArray();
+        _pillDash = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l, 0.6), 1, new ImmutableDashStyle([3, 2], 0))).ToArray();
+        _laneFill = c.Lanes.Select(l => (IBrush)B(l)).ToArray();
+        _laneWash = c.Lanes.Select(l => (IBrush)B(l, c.Light ? 0.10 : 0.16)).ToArray();
+        _bg = B(c.Background);
+        _hoverBg = B(c.RowHover);
+        _selBg = B(c.RowSelected);
+        _text = B(c.Text);
+        _muted = B(c.Muted);
+        _nodeEdge = new ImmutablePen(B(c.Background), 2);
+        _sep = new ImmutablePen(B(c.Separator), 1);
+        _dropPen = new ImmutablePen(B(c.Title, 0.85), 1.8);
+        _gripPen = new ImmutablePen(B(c.Muted, 0.75), 1.2);
+        _matchBg = B(c.Lanes[5], c.Light ? 0.14 : 0.2);
+        // An author's initials sit on a colour of the lane set, in whichever of black or white reads on it.
+        _authorFill = c.Lanes.Select(l => (IBrush)B(l)).ToArray();
+        _authorInk = c.Lanes.Select(l =>
+        {
+            var ink = global::Perch.Theming.Contrast.BestForeground(new global::Perch.Theming.Rgb(l.R, l.G, l.B));
+            return (IBrush)B(Color.FromRgb(ink.R, ink.G, ink.B));
+        }).ToArray();
+        _avatarRing = c.Lanes.Select(l => (IPen)new ImmutablePen(B(l), 2)).ToArray();
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Shows <paramref name="snap"/>. With <paramref name="keepPlace"/>, the selected commit stays selected (found by
+    /// hash, so a refresh that adds rows above doesn't move the selection) and the scroll offset is kept.
+    /// </summary>
+    public void SetSnapshot(GraphSnapshot? snap, bool keepPlace)
+    {
+        string? selected = keepPlace && _snap is not null && _sel >= 0 && _sel < _snap.Commits.Count ? _snap.Commits[_sel].Hash : null;
+        _snap = snap;
+        _moreRequested = false;
+        _hover = -1;
+        int sel = selected is not null && snap is not null ? snap.RowOf(selected) : -1;
+        if (!keepPlace)
+            _offset = 0;
+        _offset = Math.Clamp(_offset, 0, Math.Max(0, Extent - Viewport));
+        bool changed = sel != _sel;
+        _sel = sel;
+        InvalidateVisual();
+        ScrollChanged?.Invoke();
+        if (changed)
+            SelectionChanged?.Invoke(_sel);
+    }
+
+    public void Select(int row, bool scrollIntoView = true)
+    {
+        if (_snap is null) return;
+        row = Math.Clamp(row, -1, _snap.Rows.Length - 1);
+        if (scrollIntoView && row >= 0)
+            EnsureVisible(row);
+        if (row == _sel) return;
+        _sel = row;
+        InvalidateVisual();
+        SelectionChanged?.Invoke(_sel);
+    }
+
+    /// <summary>The session working in each worktree (by path), shown on that worktree's WIP row.</summary>
+    public void SetSessions(IReadOnlyDictionary<string, GraphRail.WorktreeSession> sessions)
+    {
+        _sessions = sessions;
+        InvalidateVisual();
+    }
+
+    private IReadOnlyDictionary<string, GraphRail.WorktreeSession> _sessions = new Dictionary<string, GraphRail.WorktreeSession>();
+
+    /// <summary>Fades every lane but <paramref name="lane"/> (−1 restores them all): hovering a worktree or branch in
+    /// the rail shows where it runs.</summary>
+    public void HighlightLane(int lane)
+    {
+        if (_hlLane == lane) return;
+        _hlLane = lane;
+        InvalidateVisual();
+    }
+
+    /// <summary>Selects <paramref name="row"/>, scrolls it into view and briefly washes it, so a jump from the rail or
+    /// go-to is easy to find. No wash when the OS asks for reduced motion.</summary>
+    public void Flash(int row)
+    {
+        Select(row);
+        if (row < 0 || PlatformServices.MotionPreference.ReduceMotion) return;
+        _flashRow = row;
+        _flashStart = Environment.TickCount64;
+        _flashTimer ??= new global::Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(40), global::Avalonia.Threading.DispatcherPriority.Render, (_, _) =>
+        {
+            if (Environment.TickCount64 - _flashStart > FlashMs) { _flashRow = -1; _flashTimer?.Stop(); }
+            InvalidateVisual();
+        });
+        _flashTimer.Start();
+    }
+
+    /// <summary>Scrolls so <paramref name="row"/> is in view, centring it when it was off screen.</summary>
+    public void EnsureVisible(int row)
+    {
+        double top = row * _rowH, bottom = top + _rowH;
+        if (top < _offset || bottom > _offset + Viewport)
+            Offset = top - (Viewport - _rowH) / 2;
+    }
+
+    /// <summary>
+    /// What a drag would drop on at <paramref name="p"/>: a branch pill; else a worktree's WIP row; else a row's local
+    /// branch (this worktree's first), so the drop needn't land exactly on the pill; else the worktree whose HEAD it is.
+    /// </summary>
+    public DropTarget? DropTargetAt(Point p)
+    {
+        if (_snap is null) return null;
+        if (RefAt(p) is { Kind: GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch } r) return DropTarget.Of(r);
+        int row = RowAt(p.Y);
+        if (row < 0) return null;
+        if (_snap.WipAt(row) is { } wt) return DropTarget.Of(wt);
+        var hash = _snap.Commits[row].Hash;
+        var locals = _snap.RefsAt(hash).Where(x => x.Kind == GraphRefKind.LocalBranch).ToList();
+        if (locals.Count > 0)
+            return DropTarget.Of(locals.FirstOrDefault(x => x.Name == _snap.Current?.Branch) ?? locals[0]);
+        return _snap.WorktreesAt(hash).FirstOrDefault() is { } at ? DropTarget.Of(at) : null;
+    }
+
+    /// <summary>Outlines what a drag would drop on (null clears it).</summary>
+    public void SetDropHighlight(DropTarget? target)
+    {
+        if (target == _drop) return;
+        _drop = target;
+        InvalidateVisual();
+    }
+
+    private DropTarget? _drop;
+    private (Point At, int Row)? _press;
+    private const double DragThreshold = 6;
+
+    /// <summary>Scrolls a step when <paramref name="y"/> (canvas coordinates) is near the top or bottom edge, for a drag
+    /// that wants to reach rows out of view. Returns whether it moved.</summary>
+    public bool AutoScroll(double y)
+    {
+        const double edge = 28;
+        y -= _headerH;
+        double step = y < edge ? -(edge - Math.Max(y, 0)) : y > Viewport - edge ? y - (Viewport - edge) : 0;
+        if (step == 0) return false;
+        double before = _offset;
+        Offset += Math.Clamp(step, -edge, edge) * _rowH / 14;
+        return _offset != before;
+    }
+
+    /// <summary>The pills the last paint drew, in canvas coordinates.</summary>
+    internal IEnumerable<(Rect Rect, GraphRef Ref)> PaintedPills => _pillHits.Select(h => (h.Rect, h.Ref));
+
+    /// <summary>The ref pill under <paramref name="p"/>, if any.</summary>
+    public GraphRef? RefAt(Point p)
+    {
+        foreach (var h in _pillHits)
+            if (h.Rect.Contains(p)) return h.Ref;
+        return null;
+    }
+
+    public int RowAt(double y)
+    {
+        if (_snap is null) return -1;
+        if (y < _headerH) return -1;
+        int r = (int)Math.Floor((y - _headerH + _offset) / _rowH);
+        return r >= 0 && r < _snap.Rows.Length ? r : -1;
+    }
+
+    private double GraphWidth => _lanesW
+        ?? (_snap is null ? MinGraphW : Math.Clamp(GraphPad * 2 + _snap.Width * LaneStep, MinGraphW, MaxGraphW));
+
+    /// <summary>The user dragged a column edge; the host persists the widths (0 = lanes sized to the graph).</summary>
+    public event Action<double, double>? ColumnsResized;
+
+    /// <summary>Restores dragged column widths (0 keeps the default pill width / lanes sized to the graph).</summary>
+    public void SetColumnWidths(double refs, double lanes)
+    {
+        _refsW = refs > 0 ? Math.Clamp(refs, MinRefsW, MaxRefsW) : DefaultRefsW;
+        _lanesW = lanes > 0 ? Math.Clamp(lanes, MinGraphW, MaxLanesW) : null;
+        InvalidateVisual();
+    }
+
+    // Which column edge is under the point: the pills|lanes edge, or the lanes|subject edge. Only in the header, where
+    // the grips are drawn: across the rows an edge sat on top of pills and nodes and stole their clicks.
+    private int EdgeAt(Point p) =>
+        p.Y < 0 || p.Y >= _headerH ? 0
+        : Math.Abs(p.X - _refsW) <= EdgeGrip ? 1 : Math.Abs(p.X - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
+    private double LaneX(int lane) => _refsW + GraphPad + lane * LaneStep;
+    private double RowTop(int row) => _headerH + row * _rowH - _offset;
+    private double RowMid(int row) => RowTop(row) + _rowH / 2;
+
+    // ---- paint ----
+
+    public override void Render(DrawingContext ctx)
+    {
+        var size = Bounds.Size;
+        ctx.FillRectangle(_bg, new Rect(size));
+        _pillHits.Clear();
+        if (_snap is null || _snap.Rows.Length == 0)
+        {
+            var empty = OverlayDraw.Text(_snap is null ? "Loading…" : "No commits", FontSize, _muted);
+            ctx.DrawText(empty, new Point((size.Width - empty.Width) / 2, 24));
+            return;
+        }
+
+        var s = _snap;
+        int first = Math.Max(0, (int)Math.Floor(_offset / _rowH));
+        int last = Math.Min(s.Rows.Length - 1, (int)Math.Ceiling((_offset + Viewport) / _rowH));
+        double graphW = GraphWidth;
+        double subjX = _refsW + graphW + Gap;
+        double whenX = size.Width - WhenW - Gap;
+        // In a narrow pane the subject matters more than the author, so the author column goes first.
+        double authorX = whenX - (size.Width < NarrowW ? 0 : AuthorW);
+        double subjW = Math.Max(40, authorX - Gap - subjX);
+
+        // Rows scroll under the fixed column header.
+        var rowsClip = ctx.PushClip(new Rect(0, _headerH, size.Width, Math.Max(0, size.Height - _headerH)));
+        for (int r = first; r <= last; r++)
+        {
+            var band = new Rect(0, RowTop(r), size.Width, _rowH);
+            if (_matches.Contains(r)) ctx.FillRectangle(_matchBg, band);
+            if (r == _sel) ctx.FillRectangle(_selBg, band);
+            else if (r == _hover) ctx.FillRectangle(_hoverBg, band);
+            if (r == _flashRow)
+            {
+                // Quantised so the brush cache sees a handful of opacities, not one per frame.
+                double left = 1 - Math.Min(1, (Environment.TickCount64 - _flashStart) / (double)FlashMs);
+                ctx.FillRectangle(OverlayDraw.Brush(_c.Lanes[0], Math.Round(left * 10) / 25), band);
+            }
+        }
+
+        using (ctx.PushClip(new Rect(_refsW, 0, graphW, size.Height)))
+        {
+            // The band above each visible row, plus the one below the last (its upper end may be on screen).
+            for (int r = first; r <= Math.Min(last + 1, s.Rows.Length - 1); r++)
+                foreach (var e in s.Rows[r].Up)
+                    Edge(ctx, e, RowMid(r - 1), RowMid(r), s.IsTether(r, e));
+            if (last == s.Rows.Length - 1)
+                foreach (var e in s.OpenEdges)
+                    Edge(ctx, e, RowMid(last), RowMid(last) + _rowH, s.IsTether(last + 1, e));
+        }
+
+        for (int r = first; r <= last; r++)
+            PaintRow(ctx, s, r, subjX, subjW, authorX, whenX);
+
+        if (_drop is not null)
+            for (int r = first; r <= last; r++)
+                if (IsDropRow(s, r))
+                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(new Rect(2, RowTop(r) + 1.5, size.Width - 4, _rowH - 3), 6));
+
+        if (s.HasMore && last == s.Rows.Length - 1)
+        {
+            var more = OverlayDraw.Text("Loading older commits…", SmallSize, _muted);
+            ctx.DrawText(more, new Point(subjX, RowMid(last) + _rowH - more.Height / 2));
+            if (!_moreRequested)
+            {
+                _moreRequested = true;
+                Dispatcher.Post(() => LoadMoreRequested?.Invoke());
+            }
+        }
+
+        rowsClip.Dispose();
+        PaintHeader(ctx, size, graphW, subjX, authorX, whenX);
+        if ((_edgeDrag?.Edge ?? _edgeHover) is var edge and > 0)
+        {
+            double ex = edge == 1 ? _refsW : _refsW + graphW;
+            ctx.DrawLine(_dropPen, new Point(ex, 0), new Point(ex, size.Height));
+        }
+    }
+
+    // The fixed column header: what each column is, with a grip on each edge that can be dragged, so it's visible
+    // that (and where) the columns resize.
+    private void PaintHeader(DrawingContext ctx, Size size, double graphW, double subjX, double authorX, double whenX)
+    {
+        ctx.FillRectangle(_hoverBg, new Rect(0, 0, size.Width, _headerH));
+        ctx.DrawLine(_sep, new Point(0, _headerH - 0.5), new Point(size.Width, _headerH - 0.5));
+        void Label(string text, double x, double width)
+        {
+            if (width < 28) return;
+            var ft = OverlayDraw.Text(Fit(text, SmallSize, width), SmallSize, _muted, FontWeight.SemiBold);
+            OverlayDraw.TextLeftMid(ctx, ft, x, _headerH / 2);
+        }
+        Label("Branch / tag", 10, _refsW - 18);
+        Label("Graph", _refsW + 8, graphW - 14);
+        Label("Commit message", subjX, authorX - Gap - subjX);
+        if (authorX < whenX) Label("Author", authorX, AuthorW - Gap);
+        var when = OverlayDraw.Text("When", SmallSize, _muted, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, when, whenX + WhenW - when.Width, _headerH / 2);
+        foreach (var x in (ReadOnlySpan<double>)[_refsW, _refsW + graphW])
+        {
+            ctx.DrawLine(_gripPen, new Point(x - 1.5, 6), new Point(x - 1.5, _headerH - 6));
+            ctx.DrawLine(_gripPen, new Point(x + 1.5, 6), new Point(x + 1.5, _headerH - 6));
+        }
+    }
+
+    private void PaintRow(DrawingContext ctx, GraphSnapshot s, int r, double subjX, double subjW, double authorX, double whenX)
+    {
+        var c = s.Commits[r];
+        var row = s.Rows[r];
+        int lane = row.Lane % _lane.Length;
+        double y = RowMid(r), x = LaneX(row.Lane);
+        bool inGraph = x < _refsW + GraphWidth - 2;
+
+        if (c.IsWorkInProgress)
+        {
+            var wt = s.Tethers.FirstOrDefault(t => t.WipRow == r).Worktree;
+            if (inGraph)
+                ctx.DrawEllipse(_bg, _laneDash[lane], new Point(x, y), WipR, WipR);
+            // No pill: a pill here read as a branch. Another worktree's changes say whose they are in the text.
+            string changes = $"{wt?.Changes ?? 0} uncommitted change{(wt?.Changes == 1 ? "" : "s")}";
+            if (wt is { IsCurrent: false }) changes += $" in {wt.Name}";
+            var label = OverlayDraw.Text(Fit(changes, FontSize, subjW), FontSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, label, subjX, y);
+            if (wt is not null && _sessions.TryGetValue(wt.Path, out var sess))
+                SessionPill(ctx, sess, subjX + label.Width + 12, subjX + subjW, y);
+            var now = OverlayDraw.Text("now", SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, now, whenX + WhenW - now.Width, y);
+            return;
+        }
+
+        if (c.IsStash)
+        {
+            // A small lidded box on its own dashed line down to the commit it was made on, its stash@{n} as a pill.
+            if (inGraph)
+            {
+                var box = new Rect(x - WipR, y - WipR + 0.5, WipR * 2, WipR * 2 - 1);
+                ctx.DrawRectangle(_bg, _ring[lane], box, 1.5, 1.5);
+                ctx.DrawLine(_ring[lane], new Point(box.X, box.Y + 3.2), new Point(box.Right, box.Y + 3.2));
+            }
+            var pills = s.RefsAt(c.Hash);
+            if (pills.Count > 0)
+                Pills(ctx, s, r, pills, [], lane, x, y);
+            var message = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW), FontSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, message, subjX, y);
+            var age = OverlayDraw.Text(Age(c), SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, age, whenX + WhenW - age.Width, y);
+            return;
+        }
+
+        var worktrees = s.WorktreesAt(c.Hash);
+        if (inGraph)
+        {
+            if (worktrees.Count > 0)
+                ctx.DrawEllipse(null, worktrees.Any(w => w.IsCurrent) ? _ringBold[lane] : _ring[lane], new Point(x, y), HeadRingR, HeadRingR);
+            bool faded = _hlLane >= 0 && row.Lane != _hlLane;
+            // A merge keeps its small dot: its author only joined two lines, and the picture would crowd them.
+            if (_avatars is not null && !c.IsMerge)
+            {
+                if (faded) { using (ctx.PushOpacity(0.35)) PaintAvatar(ctx, c, lane, x, y); }
+                else PaintAvatar(ctx, c, lane, x, y);
+            }
+            else
+            {
+                double nr = c.IsMerge ? MergeR : NodeR;
+                ctx.DrawEllipse(faded ? _laneFillFaded[lane] : _laneFill[lane], _nodeEdge, new Point(x, y), nr, nr);
+            }
+        }
+
+        double tagsW = 0;
+        var refs = s.RefsAt(c.Hash);
+        if (refs.Count > 0)
+        {
+            Pills(ctx, s, r, refs, worktrees, lane, x, y);
+            tagsW = Tags(ctx, refs, subjX + subjW, y);
+        }
+
+        // Body text, not the title white: every row is a subject, and a screenful of them in the brightest ink glared.
+        var subject = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW - tagsW), FontSize, _text);
+        OverlayDraw.TextLeftMid(ctx, subject, subjX, y);
+        if (authorX < whenX)
+        {
+            var author = OverlayDraw.Text(Fit(c.AuthorName, SmallSize, AuthorW - Gap), SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, author, authorX, y);
+        }
+        var when = OverlayDraw.Text(Age(c), SmallSize, _muted);
+        OverlayDraw.TextLeftMid(ctx, when, whenX + WhenW - when.Width, y);
+    }
+
+    // The author's picture clipped to a circle ringed in the lane colour, or, until (or unless) one is found, their
+    // initials on their own colour. Initials and colour are worked out once per author, not per paint.
+    private void PaintAvatar(DrawingContext ctx, GraphCommit c, int lane, double x, double y)
+    {
+        var at = new Point(x, y);
+        if (_avatars!.Get(c.AuthorEmail) is { } image)
+        {
+            ctx.DrawEllipse(_bg, null, at, AvatarR, AvatarR);
+            using (ctx.PushTransform(Matrix.CreateTranslation(x, y)))
+            using (ctx.PushGeometryClip(_avatarClip))
+                ctx.DrawImage(image, new Rect(-AvatarR, -AvatarR, AvatarR * 2, AvatarR * 2));
+        }
+        else
+        {
+            if (!_authorMarks.TryGetValue(c.AuthorEmail, out var mark))
+                _authorMarks[c.AuthorEmail] = mark = (GraphAvatars.Initials(c.AuthorName, c.AuthorEmail),
+                    GraphAvatars.ColorIndex(c.AuthorEmail, _authorFill.Length));
+            ctx.DrawEllipse(_authorFill[mark.Color], null, at, AvatarR, AvatarR);
+            var ft = OverlayDraw.Text(mark.Initials, InitialsSize, _authorInk[mark.Color], FontWeight.SemiBold);
+            ctx.DrawText(ft, new Point(x - ft.Width / 2, y - ft.Height / 2));
+        }
+        ctx.DrawEllipse(null, _avatarRing[lane], at, AvatarR, AvatarR);
+    }
+
+    // Local branches (the window's own worktree's first), then remote branches that aren't just a local's upstream at
+    // the same commit, laid out right to left from the graph edge; what doesn't fit collapses to "+N".
+    private void Pills(DrawingContext ctx, GraphSnapshot s, int r, IReadOnlyList<GraphRef> refs,
+        IReadOnlyList<GraphWorktree> worktrees, int lane, double nodeX, double y)
+    {
+        double right = _refsW - 6;
+        double left = 8;
+        int shown = 0, total = 0;
+        string? current = null;
+        foreach (var w in s.Worktrees)
+            if (w.IsCurrent) current = w.Branch;
+        for (int pass = 0; pass < 3; pass++)
+            foreach (var rf in refs)
+            {
+                bool local = rf.Kind == GraphRefKind.LocalBranch;
+                if (pass == 0 && !(local && rf.Name == current)) continue;
+                if (pass == 1 && !(local && rf.Name != current)) continue;
+                if (pass == 2 && !(rf.Kind is GraphRefKind.RemoteBranch or GraphRefKind.Stash)) continue;
+                if (rf.Kind == GraphRefKind.RemoteBranch && UpstreamOfLocal(refs, rf))
+                    continue;
+                total++;
+                bool here = local && rf.Name == current;
+                bool checkedOut = local && IsCheckedOut(s, rf.Name);
+                var ink = here ? _bg : local ? _laneFill[lane] : _muted;
+                // The remote mark: nothing for a local-only branch, a dot when it matches its upstream, ↑/↓ counts
+                // when they've moved apart, a struck circle when the upstream is gone.
+                var track = local && rf.Upstream is not null && !rf.UpstreamGone && !rf.InSync
+                    ? OverlayDraw.Text(TrackText(rf), SmallSize - 1, ink, FontWeight.SemiBold) : null;
+                double lead = checkedOut ? 13 : 0;
+                double trail = !local || rf.Upstream is null ? 0 : track is not null ? track.Width + 9 : 11;
+                // The first pill (this worktree's branch when it's here) always gets one, cut to the room there is;
+                // later ones are capped and leave space for the "+N".
+                double room = right - left - 14 - lead - trail;
+                double cap = shown == 0 ? room : Math.Min(MaxPillText, room - 24);
+                if (cap < 28)
+                    continue;
+                var ft = OverlayDraw.Text(OverlayDraw.ElideMiddle(rf.Name, PillSize, cap, FontWeight.SemiBold), PillSize, ink, FontWeight.SemiBold);
+                double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
+                var rect = new Rect(right - w, y - h / 2, w, h);
+                if (here)
+                    OverlayDraw.Panel(ctx, rect, _laneFill[lane], null, 5);
+                else if (local)
+                    OverlayDraw.Panel(ctx, rect, _laneWash[lane], _pillBorder[lane], 5);
+                else
+                    OverlayDraw.Panel(ctx, rect, null, _pillDash[lane], 5);
+                if (checkedOut)
+                    FolderGlyph(ctx, ink, rect.X + 7, y);
+                ctx.DrawText(ft, new Point(rect.X + 7 + lead, y - ft.Height / 2));
+                if (track is not null)
+                    ctx.DrawText(track, new Point(rect.Right - 6 - track.Width, y - track.Height / 2));
+                else if (local && rf.InSync)
+                    ctx.DrawEllipse(ink, null, new Point(rect.Right - 9, y), 2.6, 2.6);
+                else if (local && rf.UpstreamGone)
+                {
+                    var pen = OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.1);
+                    ctx.DrawEllipse(null, pen, new Point(rect.Right - 9, y), 3, 3);
+                    ctx.DrawLine(pen, new Point(rect.Right - 11.2, y + 2.2), new Point(rect.Right - 6.8, y - 2.2));
+                }
+                _pillHits.Add((rect, r, rf));
+                if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
+                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
+                if (shown == 0)
+                    ctx.DrawLine(_pillBorder[lane], new Point(_refsW - 6, y), new Point(nodeX - HeadRingR - 1, y));
+                right = rect.X - 4;
+                shown++;
+            }
+        if (total > shown)
+        {
+            var more = OverlayDraw.Text($"+{total - shown}", SmallSize, _muted);
+            OverlayDraw.TextLeftMid(ctx, more, Math.Max(2, right - more.Width), y);
+        }
+    }
+
+    // The row a drop would land on: the target branch's commit, or the target worktree's WIP row (its HEAD when clean).
+    private bool IsDropRow(GraphSnapshot s, int r)
+    {
+        var c = s.Commits[r];
+        if (_drop?.Ref is { } dr) return dr.Target == c.Hash;
+        if (_drop?.Worktree is { } w)
+            return c.IsWorkInProgress ? c.Hash == w.WipHash : w.Changes == 0 && w.Head == c.Hash;
+        return false;
+    }
+
+    // A remote branch at the same commit as a local that tracks it (or, untracked, shares its name) adds nothing a
+    // pill's dot doesn't say, so it gets no pill of its own.
+    private static bool UpstreamOfLocal(IReadOnlyList<GraphRef> refs, GraphRef remote)
+    {
+        foreach (var l in refs)
+            if (l.Kind == GraphRefKind.LocalBranch
+                && (l.Upstream == remote.Name || (l.Upstream is null && remote.Name.EndsWith("/" + l.Name, StringComparison.Ordinal))))
+                return true;
+        return false;
+    }
+
+    internal static string TrackText(GraphRef r) => (r.Ahead, r.Behind) switch
+    {
+        (> 0, > 0) => $"↑{r.Ahead} ↓{r.Behind}",
+        (> 0, _) => $"↑{r.Ahead}",
+        _ => $"↓{r.Behind}",
+    };
+
+    /// <summary>What a pill's marks mean, in words: its tooltip.</summary>
+    internal static string Describe(GraphRef r, GraphSnapshot? s)
+    {
+        string where = s?.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt ? $"\nChecked out in {wt.Name}" : "";
+        return r.Kind switch
+        {
+            GraphRefKind.RemoteBranch => $"{r.Name}\nRemote branch",
+            GraphRefKind.Tag => $"{r.Name}\nTag",
+            GraphRefKind.Stash => s?.Stashes.FirstOrDefault(x => x.Selector == r.Name) is { } st
+                ? $"{r.Name}\n{st.Message}\nRight-click to apply, pop or drop it" : r.Name,
+            _ when r.Upstream is null => $"{r.Name}\nLocal only: no remote branch{where}",
+            _ when r.UpstreamGone => $"{r.Name}\nIts remote branch {r.Upstream} is gone{where}",
+            _ when r.InSync => $"{r.Name}\nSame commit as {r.Upstream} (●){where}",
+            _ => $"{r.Name}\n{Apart(r)} {r.Upstream}{where}",
+        };
+
+        static string Apart(GraphRef r) => (r.Ahead, r.Behind) switch
+        {
+            (> 0, > 0) => $"{r.Ahead} ahead of and {r.Behind} behind",
+            (> 0, _) => $"{r.Ahead} commit{(r.Ahead == 1 ? "" : "s")} ahead of",
+            _ => $"{r.Behind} commit{(r.Behind == 1 ? "" : "s")} behind",
+        };
+    }
+
+    private static bool IsCheckedOut(GraphSnapshot s, string branch)
+    {
+        foreach (var w in s.Worktrees)
+            if (w.Branch == branch) return true;
+        return false;
+    }
+
+    // A small folder outline: marks a branch that some worktree has checked out.
+    private static void FolderGlyph(DrawingContext ctx, IBrush ink, double x, double cy)
+    {
+        var pen = OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.2, PenLineCap.Round, PenLineJoin.Round);
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, cy - 3, 9, 6.5), 1.2));
+        ctx.DrawLine(pen, new Point(x + 0.5, cy - 3), new Point(x + 0.5, cy - 4.4));
+        ctx.DrawLine(pen, new Point(x + 0.5, cy - 4.4), new Point(x + 3.6, cy - 4.4));
+    }
+
+    // "● Running · <session name>" in the session's status colour, on a faint wash of it, clipped to the space left.
+    private void SessionPill(DrawingContext ctx, GraphRail.WorktreeSession s, double x, double right, double y)
+    {
+        var ink = OverlayDraw.Brush(s.Color);
+        var ft = OverlayDraw.Text(Fit($"{s.State} · {s.Name}", SmallSize, right - x - 24), SmallSize, ink, FontWeight.SemiBold);
+        if (ft.Width < 20) return;
+        double w = ft.Width + 24, h = ft.Height + 4;
+        var rect = new Rect(x, y - h / 2, w, h);
+        OverlayDraw.Panel(ctx, rect, OverlayDraw.Brush(s.Color, 0.12), OverlayDraw.SolidPen(s.Color, 1), h / 2);
+        ctx.DrawEllipse(ink, null, new Point(x + 10, y), 3, 3);
+        ctx.DrawText(ft, new Point(x + 17, y - ft.Height / 2));
+    }
+
+    // Tags sit at the right end of the subject column, muted, each after a small tag mark; returns the width taken.
+    private double Tags(DrawingContext ctx, IReadOnlyList<GraphRef> refs, double right, double y)
+    {
+        double used = 0;
+        var pen = OverlayDraw.SolidPen(_c.Muted, 1.2, PenLineCap.Round, PenLineJoin.Round);
+        foreach (var rf in refs)
+        {
+            if (rf.Kind != GraphRefKind.Tag) continue;
+            var ft = OverlayDraw.Text(rf.Name, SmallSize, _muted);
+            double w = ft.Width + 11 + Gap;
+            if (used + w > 220) break;
+            used += w;
+            double x = right - used + Gap;
+            ctx.DrawLine(pen, new Point(x, y), new Point(x + 3.5, y - 3.5));
+            ctx.DrawLine(pen, new Point(x + 3.5, y - 3.5), new Point(x + 7, y));
+            ctx.DrawLine(pen, new Point(x + 7, y), new Point(x + 3.5, y + 3.5));
+            ctx.DrawLine(pen, new Point(x + 3.5, y + 3.5), new Point(x, y));
+            OverlayDraw.TextLeftMid(ctx, ft, x + 11, y);
+        }
+        return used;
+    }
+
+    private void Edge(DrawingContext ctx, GraphEdge e, double y1, double y2, bool dashed)
+    {
+        int color = e.Color % _lane.Length;
+        var pen = _hlLane >= 0 && e.Color != _hlLane ? _laneFaded[color] : (dashed ? _laneDash : _lane)[color];
+        double x1 = LaneX(e.From), x2 = LaneX(e.To);
+        if (x1 == x2)
+        {
+            ctx.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
+            return;
+        }
+        // A cubic S-curve across the band (vertical tangents at both rows), as short straight runs.
+        double h = y2 - y1;
+        var prev = new Point(x1, y1);
+        for (int i = 1; i <= CurveSteps; i++)
+        {
+            double t = (double)i / CurveSteps, u = 1 - t;
+            double bx = (u * u * u + 3 * u * u * t) * x1 + (3 * u * t * t + t * t * t) * x2;
+            double by = u * u * u * y1 + 3 * u * u * t * (y1 + h * 0.5) + 3 * u * t * t * (y2 - h * 0.5) + t * t * t * y2;
+            var p = new Point(bx, by);
+            ctx.DrawLine(pen, prev, p);
+            prev = p;
+        }
+    }
+
+    private static string Fit(string text, double size, double width) =>
+        width <= 8 ? "" : OverlayDraw.Truncate(text, size, width);
+
+    private static string Age(GraphCommit c)
+    {
+        var at = c.Date.UtcDateTime;
+        var now = DateTime.UtcNow;
+        return now - at < TimeSpan.FromDays(30) ? RelativeTime.Span(now, at) : c.Date.LocalDateTime.ToString("d MMM yy");
+    }
+
+    // ---- input ----
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsRightButtonPressed)
+        {
+            var at = e.GetPosition(this);
+            if (RefAt(at) is { } menuRef)
+                RefMenuRequested?.Invoke(menuRef);
+            else if (RowAt(at.Y) is var menuRow and >= 0)
+            {
+                Select(menuRow, scrollIntoView: false);
+                RowMenuRequested?.Invoke(menuRow);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (!props.IsLeftButtonPressed) return;
+        Focus();
+        var pos = e.GetPosition(this);
+        if (EdgeAt(pos) is var edge and > 0)
+        {
+            // Double-clicking an edge puts the column back to its default.
+            if (e.ClickCount == 2)
+            {
+                if (edge == 1) _refsW = DefaultRefsW; else _lanesW = null;
+                ColumnsResized?.Invoke(_refsW == DefaultRefsW ? 0 : _refsW, _lanesW ?? 0);
+                InvalidateVisual();
+            }
+            else
+            {
+                _edgeDrag = (edge, pos.X, edge == 1 ? _refsW : GraphWidth);
+                e.Pointer.Capture(this);
+            }
+            e.Handled = true;
+            return;
+        }
+        int r = RowAt(pos.Y);
+        if (r < 0) return;
+        Select(r, scrollIntoView: false);
+        if (e.ClickCount == 2)
+        {
+            _press = null;
+            if (RefAt(pos) is { } rf) RefActivated?.Invoke(rf);
+            else RowActivated?.Invoke(r);
+        }
+        else
+        {
+            _press = (pos, r);
+            e.Pointer.Capture(this);
+        }
+        e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        _press = null;
+        if (_edgeDrag is not null)
+        {
+            _edgeDrag = null;
+            ColumnsResized?.Invoke(_refsW == DefaultRefsW ? 0 : _refsW, _lanesW ?? 0);
+        }
+    }
+
+    // Past the threshold, a press on a branch pill drags that branch and a press elsewhere on a commit row drags the
+    // commit. WIP rows, tags and stashes don't drag.
+    private DragSource? SourceAt(Point p, int row)
+    {
+        if (_snap is null || row < 0 || row >= _snap.Commits.Count) return null;
+        if (RefAt(p) is { } r)
+            return r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch ? DragSource.Of(r) : null;
+        var c = _snap.Commits[row];
+        return c.IsPseudo ? null : DragSource.Of(c);
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        var at = e.GetPosition(this);
+        if (_edgeDrag is { } drag)
+        {
+            double w = drag.StartW + at.X - drag.StartX;
+            if (drag.Edge == 1) _refsW = Math.Clamp(w, MinRefsW, MaxRefsW);
+            else _lanesW = Math.Clamp(w, MinGraphW, MaxLanesW);
+            InvalidateVisual();
+            return;
+        }
+        int edge = _press is null ? EdgeAt(at) : 0;
+        if (edge != _edgeHover)
+        {
+            _edgeHover = edge;
+            InvalidateVisual();
+        }
+        SetCursor(edge > 0 ? StandardCursorType.SizeWestEast
+            : RowAt(at.Y) >= 0 || RefAt(at) is not null ? StandardCursorType.Hand
+            : StandardCursorType.Arrow);
+        UpdateTip(at);
+        if (_press is { } press && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            var d = e.GetPosition(this) - press.At;
+            if (Math.Abs(d.X) + Math.Abs(d.Y) >= DragThreshold)
+            {
+                _press = null;
+                if (SourceAt(press.At, press.Row) is { } src)
+                    DragRequested?.Invoke(src, e.Pointer);
+                return;
+            }
+        }
+        int r = RowAt(e.GetPosition(this).Y);
+        if (r == _hover) return;
+        _hover = r;
+        InvalidateVisual();
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        UpdateTip(null);
+        if (_hover < 0 && _edgeHover == 0) return;
+        _hover = -1;
+        _edgeHover = 0;
+        InvalidateVisual();
+    }
+
+    // A row or pill is clickable (select, right-click, double-click a pill to check out), so it shows the hand, as the
+    // rest of the window's clickable things do; a column edge shows the resize arrows. Only swapped on a change, since
+    // this runs on every move.
+    private StandardCursorType _cursorKind = StandardCursorType.Arrow;
+    internal StandardCursorType PreviewCursorKind => _cursorKind;
+    private void SetCursor(StandardCursorType kind)
+    {
+        if (kind == _cursorKind) return;
+        _cursorKind = kind;
+        Cursor = kind == StandardCursorType.Arrow ? Cursor.Default : new Cursor(kind);
+    }
+
+    // A tooltip for what's under the pointer: a pill's full name (long names are cut in the middle), or the author
+    // behind a commit's node, since a picture or initials don't say who it is. Only swapped when the target changes.
+    private string? _tipKey;
+    private void UpdateTip(Point? at)
+    {
+        string? key = null, tip = null;
+        if (at is { } p && _edgeDrag is null && _snap is { } s)
+        {
+            if (RefAt(p) is { } r)
+                (key, tip) = ("ref:" + r.FullName, Describe(r, s));
+            else if (NodeAt(p) is var row and >= 0)
+                (key, tip) = ("node:" + s.Commits[row].Hash, AuthorTip(s.Commits[row]));
+            else if (p.X >= Bounds.Width - WhenW - Gap && RowAt(p.Y) is var whenRow and >= 0 && !s.Commits[whenRow].IsWorkInProgress)
+                (key, tip) = ("when:" + s.Commits[whenRow].Hash, ExactTime(s.Commits[whenRow]));
+        }
+        if (key == _tipKey) return;
+        _tipKey = key;
+        _tipDelay?.Stop();
+        ToolTip.SetTip(this, tip);
+        // The When column is passed over constantly on the way to the scrollbar, so its tip waits for a deliberate hover.
+        if (key?.StartsWith("when:", StringComparison.Ordinal) == true)
+        {
+            ToolTip.SetIsOpen(this, false);
+            _tipDelay ??= new global::Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(WhenTipDelayMs),
+                global::Avalonia.Threading.DispatcherPriority.Input, (_, _) =>
+                {
+                    _tipDelay!.Stop();
+                    if (ToolTip.GetTip(this) is not null) ToolTip.SetIsOpen(this, true);
+                });
+            _tipDelay.Start();
+        }
+        else
+            ToolTip.SetIsOpen(this, tip is not null);
+    }
+
+    private const int WhenTipDelayMs = 500;
+    private global::Avalonia.Threading.DispatcherTimer? _tipDelay;
+
+    // The commit whose node (picture, initials or dot) is under the point, with a little slack around the circle.
+    private int NodeAt(Point p)
+    {
+        if (_snap is null || RowAt(p.Y) is not (var r and >= 0)) return -1;
+        var c = _snap.Commits[r];
+        double x = LaneX(_snap.Rows[r].Lane);
+        if (c.IsPseudo || x >= _refsW + GraphWidth - 2) return -1;
+        double radius = (_avatars is not null && !c.IsMerge ? AvatarR : NodeR) + 3;
+        var d = p - new Point(x, RowMid(r));
+        return d.X * d.X + d.Y * d.Y <= radius * radius ? r : -1;
+    }
+
+    internal static string AuthorTip(GraphCommit c) => $"{c.AuthorName}\n{c.AuthorEmail}\nAuthored {ExactTime(c)}";
+
+    // The machine's own date and time formats (Windows region settings, including any customised ones), not a fixed
+    // pattern: a reader checking a time against their clock reads it the way the clock shows it.
+    internal static string ExactTime(GraphCommit c) =>
+        c.Date.LocalDateTime.ToString("F", System.Globalization.CultureInfo.CurrentCulture);
+
+    /// <summary>For the headless render: the centre of the first real commit's node on screen, and the tooltip now set.</summary>
+    internal Point? PreviewNodeCentre()
+    {
+        if (_snap is null) return null;
+        for (int r = Math.Max(0, RowAt(_headerH + 1)); r >= 0 && r < _snap.Commits.Count && RowTop(r) < Bounds.Height; r++)
+            if (!_snap.Commits[r].IsPseudo && RowTop(r) >= _headerH)
+                return new Point(LaneX(_snap.Rows[r].Lane), RowMid(r));
+        return null;
+    }
+
+    internal string? PreviewTip => ToolTip.GetTip(this) as string;
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        Offset -= e.Delta.Y * _rowH * 3;
+        e.Handled = true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (_snap is null || _snap.Rows.Length == 0) return;
+        int page = Math.Max(1, (int)(Viewport / _rowH) - 1);
+        int? target = e.Key switch
+        {
+            Key.Down => _sel + 1,
+            Key.Up => Math.Max(0, _sel - 1),
+            Key.PageDown => _sel + page,
+            Key.PageUp => Math.Max(0, _sel - page),
+            Key.Home => 0,
+            Key.End => _snap.Rows.Length - 1,
+            _ => null,
+        };
+        if (target is int t)
+        {
+            Select(Math.Min(t, _snap.Rows.Length - 1));
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Enter && _sel >= 0)
+        {
+            RowActivated?.Invoke(_sel);
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnSizeChanged(SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        _offset = Math.Clamp(_offset, 0, Math.Max(0, Extent - Viewport));
+        ScrollChanged?.Invoke();
+    }
+}
+
+/// <summary>A <see cref="GraphCanvas"/> with a vertical scroll bar beside it, kept in step both ways.</summary>
+internal sealed class GraphPane : Grid
+{
+    private readonly ScrollBar _bar = new() { Orientation = Orientation.Vertical, AllowAutoHide = true };
+    private bool _syncing;
+
+    public GraphPane()
+    {
+        ColumnDefinitions = new ColumnDefinitions("*,Auto");
+        Canvas = new GraphCanvas();
+        Children.Add(Canvas);
+        Grid.SetColumn(_bar, 1);
+        Children.Add(_bar);
+        Canvas.ScrollChanged += Sync;
+        _bar.ValueChanged += (_, e) =>
+        {
+            if (_syncing) return;
+            Canvas.Offset = e.NewValue;
+        };
+    }
+
+    public GraphCanvas Canvas { get; }
+
+    private void Sync()
+    {
+        _syncing = true;
+        _bar.Maximum = Math.Max(0, Canvas.Extent - Canvas.Viewport);
+        _bar.ViewportSize = Canvas.Viewport;
+        _bar.SmallChange = Canvas.RowHeight;
+        _bar.LargeChange = Math.Max(Canvas.RowHeight, Canvas.Viewport - Canvas.RowHeight);
+        _bar.Value = Canvas.Offset;
+        _bar.IsVisible = _bar.Maximum > 0;
+        _syncing = false;
+    }
+}
