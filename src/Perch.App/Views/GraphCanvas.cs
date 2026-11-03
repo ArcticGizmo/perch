@@ -943,9 +943,26 @@ internal sealed class GraphCanvas : Control
         }
         if (key == _tipKey) return;
         _tipKey = key;
+        _tipDelay?.Stop();
         ToolTip.SetTip(this, tip);
-        ToolTip.SetIsOpen(this, tip is not null);
+        // The When column is passed over constantly on the way to the scrollbar, so its tip waits for a deliberate hover.
+        if (key?.StartsWith("when:", StringComparison.Ordinal) == true)
+        {
+            ToolTip.SetIsOpen(this, false);
+            _tipDelay ??= new global::Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(WhenTipDelayMs),
+                global::Avalonia.Threading.DispatcherPriority.Input, (_, _) =>
+                {
+                    _tipDelay!.Stop();
+                    if (ToolTip.GetTip(this) is not null) ToolTip.SetIsOpen(this, true);
+                });
+            _tipDelay.Start();
+        }
+        else
+            ToolTip.SetIsOpen(this, tip is not null);
     }
+
+    private const int WhenTipDelayMs = 500;
+    private global::Avalonia.Threading.DispatcherTimer? _tipDelay;
 
     // The commit whose node (picture, initials or dot) is under the point, with a little slack around the circle.
     private int NodeAt(Point p)
