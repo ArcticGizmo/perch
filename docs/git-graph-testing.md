@@ -141,6 +141,17 @@ Use a throwaway clone with a few local branches (one checked out in an extra wor
 4. **Show all, per section.** With branches hidden in both sections, Remotes' **⋯** offers **Show all N hidden remote branches** and Local's the local ones; each brings back only its own section. *Before:* one "Show all hidden branches" for both.
 5. **The setting reads as a setting.** In Remotes' **⋯**, a divider separates the actions above from **Hide new remote branches that aren't mine**, which has a real checkbox (ticked when on). Clicking it flips the setting with a toast, as before. Local's **⋯** has no such checkbox (it's about remote branches). *Before:* the setting sat at the top of the menu with a ✓ text prefix, looking like one more action.
 
+## Feedback round 10: compact lanes
+
+Use the repo from your screenshot (a few side branches near main, a stash, some hideable branches), or a throwaway clone with two branches off main that overlap in time.
+
+1. **Hiding closes the gap.** Hide a branch whose line ran beside main (eye in the rail, or **⋯ → Hide all**). The branches that were further out move in a column; nothing is left with an empty column between it and main unless something still runs there. Show it again: it takes its column back and the others move out again. *Before:* after a hide, every line kept its old column, so the graph kept the hidden branch's empty gutter until the window was reopened.
+2. **New lines start in the innermost free column.** A stash row, a fresh branch, or another worktree's uncommitted-changes row opens in the first column that's free at its row, usually the one next to main. *Before:* after any refresh, a new line opened out past every column the graph had ever used (the stash two or three columns out in your screenshot).
+3. **Lines move only on a conflict.** A branch doesn't wander between columns along its length. When a new branch appears near the top (a fetch, a new commit on a fresh branch), the lines it runs beside move out a column, but only alongside it; lines that don't overlap it stay put.
+4. **Same layout every time.** Close and reopen the window, or press Refresh: the graph looks the same as the live view did (it no longer depends on what was on screen before).
+5. **Behind your upstream: the remote holds the main line.** In a clone, `git fetch` after someone else has pushed to `main`, without pulling (the rail shows `main` with `↓N`). `origin/main` is now the straight line down the left, and your local `main` pill sits further down that same line; nothing branches off to the side for origin's new commits. With uncommitted changes, their row is still the top row, one column out, with its dashed line down to your local `main`. Pull, and everything is one line again. *Before:* origin's new commits ran in their own column beside the line and joined it at your checkout.
+6. **Diverged keeps your line.** Commit locally while still behind (`↑1 ↓N`): your branch takes the left line again and `origin/main`'s new commits branch off beside it, since you have work it doesn't. The same happens if the upstream is hidden or outside the scope (**This branch**).
+
 ## Feedback round 9: stashes in time order
 
 Use a throwaway clone with a few commits a few minutes apart.

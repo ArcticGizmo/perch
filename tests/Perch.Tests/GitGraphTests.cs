@@ -13,9 +13,9 @@ public class GitGraphTests
 
     private static GraphCommit C(string hash, params string[] parents) => new(hash, parents, "Jon", "jon@x", 0, hash);
 
-    private static LaneAllocator Layout(IReadOnlyList<GraphCommit> commits, string? primary = null, IReadOnlyDictionary<string, int>? hints = null)
+    private static LaneAllocator Layout(IReadOnlyList<GraphCommit> commits, string? primary = null)
     {
-        var a = new LaneAllocator(new LaneAllocator.Options(primary, hints));
+        var a = new LaneAllocator(new LaneAllocator.Options(primary));
         a.Add(commits);
         return a;
     }
@@ -242,34 +242,36 @@ public class GitGraphTests
     }
 
     [Fact]
-    public void Hints_NewCommitOnASideBranchKeepsEveryLane()
+    public void Compact_HidingABranchClosesUpTheGapItLeft()
     {
-        List<GraphCommit> before = [C("f2", "f1"), C("g1", "m1"), C("m2", "m1"), C("f1", "m1"), C("m1")];
-        var first = Layout(before, primary: "m2");
-        var hints = LaneAllocator.HintsFrom(before, first.Rows);
+        // a and b run beside main together; b sits out in lane 2 only because a holds lane 1.
+        List<GraphCommit> both = [C("a2", "a1"), C("b2", "b1"), C("m3", "m2"), C("a1", "m1"), C("b1", "m1"), C("m2", "m1"), C("m1")];
+        Assert.Equal([1, 2, 0, 1, 2, 0, 0], Layout(both, primary: "m3").Rows.Select(r => r.Lane));
 
-        // Two new commits on g, newer than everything else.
-        List<GraphCommit> after = [C("g3", "g2"), C("g2", "g1"), .. before];
-        var second = Layout(after, primary: "m2", hints: hints);
-
-        for (int i = 0; i < before.Count; i++)
-            Assert.Equal(first.Rows[i].Lane, second.Rows[i + 2].Lane);
-        Assert.Equal(hints["g1"], second.Rows[0].Lane);
+        // With a hidden its commits leave the walk, and b moves in next to main.
+        List<GraphCommit> withoutA = [C("b2", "b1"), C("m3", "m2"), C("b1", "m1"), C("m2", "m1"), C("m1")];
+        Assert.Equal([1, 0, 1, 0, 0], Layout(withoutA, primary: "m3").Rows.Select(r => r.Lane));
     }
 
     [Fact]
-    public void Hints_NewBranchTipOpensAfterExistingLanes()
+    public void Compact_ALateTipTakesTheInnermostLaneFreeAtItsRow()
+    {
+        // f and g ran in lanes 1 and 2 and both joined main above s (a stash-like tip made on m1): lanes 1 and 2 are
+        // free again by s's row, so it sits in lane 1 rather than out past everything that came before.
+        var a = Layout([C("m4", "m3", "f1"), C("m3", "m2", "g1"), C("f1", "m2"), C("g1", "m2"), C("m2", "m1"), C("s", "m1"), C("m1")],
+            primary: "m4");
+        Assert.Equal(1, a.Rows[5].Lane);
+    }
+
+    [Fact]
+    public void Compact_ANewTipOnTopOnlyPushesTheLinesItRunsBeside()
     {
         List<GraphCommit> before = [C("f1", "m1"), C("m2", "m1"), C("m1")];
-        var first = Layout(before, primary: "m2");
-        var hints = LaneAllocator.HintsFrom(before, first.Rows);
+        Assert.Equal([1, 0, 0], Layout(before, primary: "m2").Rows.Select(r => r.Lane));
 
-        // Without hints a new tip on top would take lane 1 and push f sideways.
+        // n runs from the top down to m2, beside f: n takes lane 1 and f moves out one. Below m2 nothing changes.
         List<GraphCommit> after = [C("n1", "m2"), .. before];
-        var second = Layout(after, primary: "m2", hints: hints);
-
-        Assert.Equal(first.Rows[0].Lane, second.Rows[1].Lane);
-        Assert.True(second.Rows[0].Lane >= first.Width);
+        Assert.Equal([1, 2, 0, 0], Layout(after, primary: "m2").Rows.Select(r => r.Lane));
     }
 
     [Fact]
@@ -305,7 +307,7 @@ public class GitGraphTests
     ];
 
     private static GraphSnapshot Snap(IReadOnlyList<GraphCommit> log, IReadOnlyList<GraphWorktree> wts, int pageSize = 100) =>
-        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, log, Refs, wts, "main", null, pageSize);
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, log, Refs, wts, "main", pageSize);
 
     [Fact]
     public void Snapshot_PutsAWipRowPerDirtyWorktreeOnTopWithItsOwnTether()
@@ -348,7 +350,7 @@ public class GitGraphTests
         var lost = new GraphStash("s5", "gone", "stash@{5}", "On main: ancient", 1);
         var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything,
             [At("m3", 30, "m2"), At("m2", 20, "m1"), At("f1", 15, "m1"), At("m1", 10)],
-            Refs, [main], "main", null, 100, stashes: [fresh, onM2, skewed, old, older, lost]);
+            Refs, [main], "main", 100, stashes: [fresh, onM2, skewed, old, older, lost]);
 
         // Above the first commit no newer than it, never below its own commit, newest first where they meet; one made
         // on a commit outside the page gets no row. The WIP row stays on top.
@@ -375,7 +377,7 @@ public class GitGraphTests
         var fresh = new GraphStash("s0", "m1", "stash@{0}", "On main: new", 40);
         var old = new GraphStash("s1", "m1", "stash@{1}", "On main: old", 12);
         var first = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [At("m3", 30, "m2"), At("m2", 20, "m1")],
-            Refs, [], "main", null, pageSize: 2, stashes: [fresh, old]);
+            Refs, [], "main", pageSize: 2, stashes: [fresh, old]);
         Assert.Equal(["m3", "m2"], first.Commits.Select(c => c.Hash));
         Assert.Empty(first.StashTethers);
 
@@ -403,6 +405,31 @@ public class GitGraphTests
         Assert.Equal("f1", GraphSnapshot.PrimaryTip([feat with { Changes = 0 }], Refs, "main"));
         Assert.Equal("m2", GraphSnapshot.PrimaryTip([main with { Changes = 0 }], Refs, "main"));
         Assert.Equal(main.WipHash, GraphSnapshot.PrimaryTip([main], Refs, "main"));
+    }
+
+    [Fact]
+    public void Snapshot_LaneZeroStartsAtTheUpstreamWhenTheCheckoutIsOnlyBehindIt()
+    {
+        // Local main is at m1 with changes; origin/main has moved on to m3.
+        var here = new GraphWorktree("C:/r", "main", "m1", Changes: 2, IsCurrent: true);
+        GraphRef[] refs =
+        [
+            new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m1") { Upstream = "origin/main", Behind = 2 },
+            new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m3"),
+        ];
+        var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m3", "m2"), C("m2", "m1"), C("m1", "m0"), C("m0")],
+            refs, [here], "main", 100);
+
+        // One straight line from origin/main down through the checkout; the changes stay the top row, tethered to m1.
+        Assert.Equal([here.WipHash, "m3", "m2", "m1", "m0"], s.Commits.Select(c => c.Hash));
+        Assert.Equal([1, 0, 0, 0, 0], s.Rows.Select(r => r.Lane));
+        Assert.Equal([new GraphTether(0, 3, 1, here)], s.Tethers);
+
+        // With work of its own (diverged), the checkout keeps lane 0; so it does when the upstream isn't in the walk.
+        GraphRef[] diverged = [refs[0] with { Ahead = 1 }, refs[1]];
+        Assert.Equal(here.WipHash, GraphSnapshot.PrimaryTip([here], diverged, "main"));
+        Assert.Equal(here.WipHash, GraphSnapshot.PrimaryTip([here], refs, "main", loaded: h => h != "m3"));
+        Assert.Equal("m3", GraphSnapshot.PrimaryTip([here], refs, "main"));
     }
 
     [Fact]
@@ -455,7 +482,7 @@ public class GitGraphTests
         var s = GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything,
             [Named("aaaa1111", "Fix the feed", "cccc3333"), Named("bbbb2222", "Feed images", "cccc3333"), Named("cccc3333", "Root")],
             [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "aaaa1111"), new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "bbbb2222")],
-            [], "main", null, 100);
+            [], "main", 100);
 
         Assert.Equal(1, s.Find("FEAT", -1));          // ref name, any case
         Assert.Equal(2, s.Find("cccc", -1));          // hash prefix
@@ -484,7 +511,7 @@ public class GitGraphTests
             new("origin/spike", "refs/remotes/origin/spike", GraphRefKind.RemoteBranch, "x1"),
             new("v1", "refs/tags/v1", GraphRefKind.Tag, "m1"),
             new("stash", "refs/stash", GraphRefKind.Stash, "m1"),
-        ], wts, "main", null, 100);
+        ], wts, "main", 100);
 
     private static GraphRef RefNamed(GraphSnapshot s, string name) => s.Refs.Single(r => r.Name == name);
 
@@ -555,7 +582,7 @@ public class GitGraphTests
             new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m2"),
             new("origin/spike", "refs/remotes/origin/spike", GraphRefKind.RemoteBranch, "x1"),
             new("v1", "refs/tags/v1", GraphRefKind.Tag, "m1"),
-        ], [DropHere, DropOther], "main", null, 100);
+        ], [DropHere, DropOther], "main", 100);
 
     private static DropMenu Drop(GraphSnapshot s, string from, string onto) =>
         GraphDrop.Menu(s, DragSource.Of(RefNamed(s, from)), DropTarget.Of(RefNamed(s, onto)));
@@ -660,7 +687,7 @@ public class GitGraphTests
 
         // Opened on a linked worktree, a new one still goes beside the main worktree, not beside the linked one.
         var fromLinked = GraphSnapshot.Build("C:/r--x", GraphScope.All, GraphLogQuery.Everything, [C("m1")],
-            [new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "m1")], [], "main", null, 100);
+            [new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "m1")], [], "main", 100);
         var opt = Assert.Single(GraphDrop.Menu(fromLinked, DragSource.Of(fromLinked.Refs[0]), DropTarget.NewWorktreeZone, null, "C:/r").Options);
         Assert.Equal(Path.GetFullPath("C:/r--feat"), opt.NewPath);
     }
@@ -675,7 +702,7 @@ public class GitGraphTests
 
         var s = GraphSnapshot.Build("C:/r", GraphScope.All, q, [C("m2", "m1"), C("m1")],
             [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2"), new("old", "refs/heads/old", GraphRefKind.LocalBranch, "m1")],
-            [], "main", null, 100, new GraphSnapshot.ScopeContext(null, null, []) { Hidden = new HashSet<string> { "refs/heads/old" } });
+            [], "main", 100, new GraphSnapshot.ScopeContext(null, null, []) { Hidden = new HashSet<string> { "refs/heads/old" } });
         Assert.Empty(s.RefsAt("m1"));
         Assert.True(s.IsHidden(s.Refs[1]));
         Assert.Equal(2, s.Refs.Count);   // the rail still lists it

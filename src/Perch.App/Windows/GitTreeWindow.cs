@@ -1009,7 +1009,7 @@ internal sealed partial class GitTreeWindow : Window
         var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
         System.Threading.Tasks.Task.Run(() =>
             {
-                var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
+                var snap = GraphLoader.Load(cwd, scope, baseOverride: baseOverride, hidden: hidden);
                 return (snap, invisible: ComputeInvisible(cwd, snap?.Context.CurrentStatus));
             })
             .ContinueWith(t =>
@@ -1910,11 +1910,11 @@ internal sealed partial class GitTreeWindow : Window
         bool wipSelected = _selectedNode is { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
         var contentMode = _contentMode;
-        var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
+        var (scope, baseOverride, hidden) = (_scope, _baseOverride, HiddenSet());
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
+            var snap = GraphLoader.Load(cwd, scope, baseOverride: baseOverride, hidden: hidden);
             var status = snap?.Context.CurrentStatus;
             var invisible = ComputeInvisible(cwd, status);
             // The shown working-tree file's content in the active content mode, for the repaint-if-changed

@@ -3972,7 +3972,7 @@ internal static class HeadlessRenderer
             new Perch.Data.GitGraph.GraphWorktree(P("perch--git-graph"), "git-graph", "7be0d42".PadRight(40, '0'), 0, false),
         };
         return Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
-            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
+            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", 2000);
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the graph (the real

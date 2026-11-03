@@ -241,18 +241,27 @@ internal sealed class GraphSnapshot
         return false;
     }
 
-    /// <summary>Every row's lane, as hints for the next layout of the same scope.</summary>
-    public Dictionary<string, int> Hints() => LaneAllocator.HintsFrom(Commits, Rows);
-
     /// <summary>
     /// Where lane 0 starts: the window's own worktree (its WIP row when dirty, else its HEAD), so the history being
-    /// worked on is the straight line down the left and everything else branches off it. With no current worktree it's
+    /// worked on is the straight line down the left and everything else branches off it. When that branch is only
+    /// behind its upstream (nothing of its own the upstream lacks), lane 0 starts at the upstream instead: that's where
+    /// the line is heading, and the checkout sits further down the same line. With no current worktree it's
     /// <paramref name="primaryBranch"/> (the trunk), again from its worktree's WIP row when that's dirty.
+    /// <paramref name="loaded"/> says whether a commit is in the walk; an upstream that isn't (hidden, or outside the
+    /// scope) can't hold lane 0.
     /// </summary>
-    internal static string? PrimaryTip(IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphRef> refs, string? primaryBranch)
+    internal static string? PrimaryTip(IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphRef> refs, string? primaryBranch,
+        Func<string, bool>? loaded = null)
     {
         if (worktrees.FirstOrDefault(w => w.IsCurrent && w.Head is not null) is { } here)
+        {
+            if (here.Branch is { } b
+                && refs.FirstOrDefault(r => r.Kind == GraphRefKind.LocalBranch && r.Name == b) is { Upstream: { } up, UpstreamGone: false, Ahead: 0, Behind: > 0 }
+                && refs.FirstOrDefault(r => r.Kind == GraphRefKind.RemoteBranch && r.Name == up) is { } upstream
+                && (loaded?.Invoke(upstream.Target) ?? true))
+                return upstream.Target;
             return here.Changes > 0 ? here.WipHash : here.Head;
+        }
         if (primaryBranch is null)
             return null;
         return worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
@@ -266,7 +275,7 @@ internal sealed class GraphSnapshot
     /// </summary>
     public static GraphSnapshot Build(string root, GraphScope scope, GraphLogQuery query, IReadOnlyList<GraphCommit> log,
         IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryBranch,
-        IReadOnlyDictionary<string, int>? hints, int pageSize, ScopeContext? context = null,
+        int pageSize, ScopeContext? context = null,
         IReadOnlyList<GraphStash>? stashes = null)
     {
         stashes ??= [];
@@ -282,7 +291,7 @@ internal sealed class GraphSnapshot
             .ToList();
         refs = stashes.Count == 0 ? refs : [.. refs, .. stashes.Select(st => st.AsRef())];
 
-        string? primaryTip = PrimaryTip(worktrees, refs, primaryBranch);
+        string? primaryTip = PrimaryTip(worktrees, refs, primaryBranch, logRow.ContainsKey);
 
         var woven = WithStashes(log, stashes);
         var commits = new GraphCommit[pseudo.Count + woven.Count];
@@ -292,7 +301,7 @@ internal sealed class GraphSnapshot
         for (int i = 0; i < commits.Length; i++)
             rowOf[commits[i].Hash] = i;
 
-        var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip, hints));
+        var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip));
         lanes.Add(commits);
         return new GraphSnapshot(root, scope, query, commits, log.Count, log.Count >= pageSize, refs, worktrees, stashes,
             primaryTip, lanes, rowOf, context ?? ScopeContext.None);
