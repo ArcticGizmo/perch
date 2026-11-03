@@ -186,7 +186,35 @@ internal static class GraphLoader
         }
     }
 
-    private static bool SamePath(string a, string b) =>
+    // Git records a linked worktree's path with its links resolved (on macOS a temp folder under /var is really under
+    // /private/var), while the window's own path is as it was opened, so equal-as-written falls back to the real paths.
+    private static bool SamePath(string a, string b) => SameText(a, b) || SameText(RealPath(a), RealPath(b));
+
+    private static bool SameText(string a, string b) =>
         string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    /// <summary>The path with a link at any level resolved, not only the last one (where
+    /// <see cref="Directory.ResolveLinkTarget"/> alone stops). A part that can't be resolved is kept as written.</summary>
+    internal static string RealPath(string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch { return path; }
+        var current = Path.GetPathRoot(full) ?? "";
+        foreach (var part in full[current.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            try
+            {
+                if (Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target)
+                    current = target.FullName;
+            }
+            catch
+            {
+                // Missing or unreadable: compare it as written.
+            }
+        }
+        return current;
+    }
 }
