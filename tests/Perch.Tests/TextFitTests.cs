@@ -56,6 +56,32 @@ public sealed class TextFitTests
     public void Branch_names_lose_their_middle(string text, double width, string expected) =>
         Assert.Equal(expected, TextFit.ElideMiddle(text, width, Graphemes));
 
+    private static string Upper(string s) => s.ToUpperInvariant();
+
+    [Fact]
+    public void Names_in_a_sentence_are_replaced_whole_and_the_words_kept()
+    {
+        const string a = "dependabot/github_actions/actions-c673", b = "dependabot/npm_and_yarn/site/site-1e18";
+        string text = $"Merge {a} into {b} (checks out {b} in perch first)";
+        Assert.Equal($"Merge {Upper(a)} into {Upper(b)} (checks out {Upper(b)} in perch first)",
+            TextFit.ShortenNames(text, [a, b], Upper));
+    }
+
+    [Theory]
+    [InlineData("Rebase main-old onto main", "Rebase main-old onto MAIN")]        // glued to more name: not a hit
+    [InlineData("origin/main is behind main.", "origin/main is behind MAIN.")]   // a full stop ends the name
+    [InlineData("main.x and main", "main.x and MAIN")]                            // a '.' mid-name doesn't
+    public void Only_whole_names_are_replaced(string text, string expected) =>
+        Assert.Equal(expected, TextFit.ShortenNames(text, ["main"], Upper));
+
+    [Fact]
+    public void The_longer_name_wins_and_replacements_are_not_rescanned()
+    {
+        // "origin/feat" contains "feat"; and a replacement containing a name isn't replaced again.
+        Assert.Equal("Track [origin/feat] as [feat]",
+            TextFit.ShortenNames("Track origin/feat as feat", ["feat", "origin/feat", null], n => $"[{n}]"));
+    }
+
     [Fact]
     public void Measures_only_logarithmically_many_prefixes()
     {

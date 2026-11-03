@@ -52,6 +52,36 @@ internal static class TextFit
         return FitTail(text, Ellipsis, maxWidth, measure, 1) ?? Ellipsis;
     }
 
+    /// <summary>
+    /// <paramref name="text"/> with each whole occurrence of one of <paramref name="names"/> replaced by
+    /// <paramref name="shorten"/>(name), so a sentence keeps its words and only the long names in it are cut (a menu
+    /// line naming two dependabot branches). One pass, longest name first, so a name inside a longer one, or inside
+    /// what a replacement produced, is never touched. "Whole" means not glued to more name characters on either side.
+    /// </summary>
+    public static string ShortenNames(string text, IEnumerable<string?> names, Func<string, string> shorten)
+    {
+        var sorted = names.Where(n => !string.IsNullOrEmpty(n)).Distinct(StringComparer.Ordinal)
+            .OrderByDescending(n => n!.Length).ToList();
+        if (sorted.Count == 0 || string.IsNullOrEmpty(text)) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            string? hit = null;
+            if (i == 0 || !IsNameChar(text[i - 1]))
+                hit = sorted.FirstOrDefault(n => string.CompareOrdinal(text, i, n, 0, n!.Length) == 0
+                    && (i + n.Length == text.Length || !IsNameChar(text[i + n.Length]) || EndsSentence(text, i + n.Length)));
+            if (hit is null) { sb.Append(text[i++]); continue; }
+            sb.Append(shorten(hit));
+            i += hit.Length;
+        }
+        return sb.ToString();
+    }
+
+    // Characters a branch or folder name runs on with. A '.' is one, except a full stop ending the sentence.
+    private static bool IsNameChar(char c) => char.IsLetterOrDigit(c) || c is '/' or '-' or '_' or '.' or '@';
+    private static bool EndsSentence(string text, int at) => text[at] == '.' && (at + 1 == text.Length || char.IsWhiteSpace(text[at + 1]));
+
     // `lead` plus the longest whole-grapheme tail of `rest` that fits, or null when fewer than `minTail` graphemes do.
     private static string? FitTail(string rest, string lead, double maxWidth, Func<string, double> measure, int minTail)
     {

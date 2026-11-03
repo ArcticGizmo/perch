@@ -809,6 +809,10 @@ internal static class HeadlessRenderer
                     Frame("git_tree_drag_newworktree_1x.png");
                     tw.MouseUp(zone, global::Avalonia.Input.MouseButton.Left);
                     Frame("git_tree_drop_menu_1x.png");
+                    // Over the commit rows, clear of the first menu, so the second opens beside it.
+                    tw.MouseMove(new Point(tw.Bounds.Width * 0.45, tw.Bounds.Height * 0.45));
+                    tw.PreviewLongDropMenu();
+                    Frame("git_tree_drop_menu_long_1x.png");
                 }
                 else
                 {

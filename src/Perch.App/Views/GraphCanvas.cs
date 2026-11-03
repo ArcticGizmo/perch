@@ -357,9 +357,11 @@ internal sealed class GraphCanvas : Control
         InvalidateVisual();
     }
 
-    // Which column edge is under x: the pills|lanes edge, or the lanes|subject edge.
-    private int EdgeAt(double x) =>
-        Math.Abs(x - _refsW) <= EdgeGrip ? 1 : Math.Abs(x - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
+    // Which column edge is under the point: the pills|lanes edge, or the lanes|subject edge. Only in the header, where
+    // the grips are drawn: across the rows an edge sat on top of pills and nodes and stole their clicks.
+    private int EdgeAt(Point p) =>
+        p.Y < 0 || p.Y >= _headerH ? 0
+        : Math.Abs(p.X - _refsW) <= EdgeGrip ? 1 : Math.Abs(p.X - (_refsW + GraphWidth)) <= EdgeGrip ? 2 : 0;
     private double LaneX(int lane) => _refsW + GraphPad + lane * LaneStep;
     private double RowTop(int row) => _headerH + row * _rowH - _offset;
     private double RowMid(int row) => RowTop(row) + _rowH / 2;
@@ -807,7 +809,7 @@ internal sealed class GraphCanvas : Control
         if (!props.IsLeftButtonPressed) return;
         Focus();
         var pos = e.GetPosition(this);
-        if (EdgeAt(pos.X) is var edge and > 0)
+        if (EdgeAt(pos) is var edge and > 0)
         {
             // Double-clicking an edge puts the column back to its default.
             if (e.ClickCount == 2)
@@ -875,7 +877,7 @@ internal sealed class GraphCanvas : Control
             InvalidateVisual();
             return;
         }
-        int edge = _press is null ? EdgeAt(at.X) : 0;
+        int edge = _press is null ? EdgeAt(at) : 0;
         if (edge != _edgeHover)
         {
             _edgeHover = edge;
@@ -936,6 +938,8 @@ internal sealed class GraphCanvas : Control
                 (key, tip) = ("ref:" + r.FullName, Describe(r, s));
             else if (NodeAt(p) is var row and >= 0)
                 (key, tip) = ("node:" + s.Commits[row].Hash, AuthorTip(s.Commits[row]));
+            else if (p.X >= Bounds.Width - WhenW - Gap && RowAt(p.Y) is var whenRow and >= 0 && !s.Commits[whenRow].IsWorkInProgress)
+                (key, tip) = ("when:" + s.Commits[whenRow].Hash, ExactTime(s.Commits[whenRow]));
         }
         if (key == _tipKey) return;
         _tipKey = key;
@@ -955,8 +959,12 @@ internal sealed class GraphCanvas : Control
         return d.X * d.X + d.Y * d.Y <= radius * radius ? r : -1;
     }
 
-    internal static string AuthorTip(GraphCommit c) =>
-        $"{c.AuthorName}\n{c.AuthorEmail}\nAuthored {c.Date.LocalDateTime:ddd d MMM yyyy, HH:mm}";
+    internal static string AuthorTip(GraphCommit c) => $"{c.AuthorName}\n{c.AuthorEmail}\nAuthored {ExactTime(c)}";
+
+    // The machine's own date and time formats (Windows region settings, including any customised ones), not a fixed
+    // pattern: a reader checking a time against their clock reads it the way the clock shows it.
+    internal static string ExactTime(GraphCommit c) =>
+        c.Date.LocalDateTime.ToString("F", System.Globalization.CultureInfo.CurrentCulture);
 
     /// <summary>For the headless render: the centre of the first real commit's node on screen, and the tooltip now set.</summary>
     internal Point? PreviewNodeCentre()

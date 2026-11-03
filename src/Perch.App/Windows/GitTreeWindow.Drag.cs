@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Perch.Avalonia.Rendering;
 using Perch.Data;
 using Perch.Data.GitGraph;
 
@@ -90,7 +91,10 @@ internal sealed partial class GitTreeWindow
         _dragMenu = null;
         pointer.Capture(_graph.Canvas);   // the rail row that started it may be rebuilt under the pointer
         _rail.SetDragging(true);
-        _ghostLabel.Text = src.Ref is { } r ? r.Name : $"{src.Label}  {src.Commit!.Subject}";
+        _ghostLabel.Text = src.Ref is { } r ? OverlayDraw.ElideMiddle(r.Name, _ghostLabel.FontSize, _ghostHint.MaxWidth, FontWeight.SemiBold)
+            : $"{src.Label}  {src.Commit!.Subject}";
+        _ghostLabel.MaxWidth = _ghostHint.MaxWidth;
+        _ghostLabel.TextTrimming = TextTrimming.CharacterEllipsis;
         _ghostHint.Text = NoTargetHint;
         _ghost.IsVisible = true;
         _dragScroll ??= new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Input, (_, _) => DragAutoScroll());
@@ -124,9 +128,24 @@ internal sealed partial class GitTreeWindow
         _ghostHint.Text = _dragMenu switch
         {
             null => NoTargetHint,
-            { Options.Count: 0 } m => m.Note ?? "Nothing to do here.",
-            var m => m.Options[0].Label + (m.Options.Count > 1 ? $"  ·  {m.Options.Count - 1} more on drop" : ""),
+            { Options.Count: 0 } m => ShortNames(m.Note ?? "Nothing to do here.", [_dragSrc!.Rev], _ghostHint.FontSize),
+            var m => ShortNames(m.Options[0].Label, [_dragSrc!.Rev, m.Options[0].Branch, m.Options[0].Rev], _ghostHint.FontSize)
+                + (m.Options.Count > 1 ? $"  ·  {m.Options.Count - 1} more on drop" : ""),
         };
+    }
+
+    private const double MenuNameWidth = 220, MenuFontSize = 14;
+
+    // Long branch names in a sentence lose their middle, as the pills do, so the words around them (merge, into, which
+    // worktree) stay readable. Only names that are long to begin with are candidates, which keeps a big repo's
+    // thousands of refs out of the scan.
+    private string ShortNames(string text, IEnumerable<string?>? extra = null, double size = MenuFontSize)
+    {
+        if (_snap is not { } snap) return text;
+        var names = snap.Refs.Select(r => r.Name).Concat(snap.Worktrees.Select(w => w.Name)).Concat(extra ?? [])
+            .Where(n => n is { Length: > 24 });
+        double width = MenuNameWidth * size / MenuFontSize;
+        return TextFit.ShortenNames(text, names, n => OverlayDraw.ElideMiddle(n, size, width));
     }
 
     // The graph canvas answers for itself; anywhere else, the rail control under the pointer carries a RailItem tag.
@@ -191,28 +210,31 @@ internal sealed partial class GitTreeWindow
     private void ShowDropMenu(DragSource src, DropMenu menu)
     {
         var items = new List<Control>();
-        if (menu.Note is { } note) items.Add(Note(note));
+        string[] extra = [src.Rev, .. menu.Options.SelectMany(o => new[] { o.Branch, o.Rev, GraphCheckout.LocalName(o.Rev) }).OfType<string>()];
+        if (menu.Note is { } note) items.Add(Note(ShortNames(note, extra)));
         foreach (var where in menu.Options.Select(o => o.RunIn).OfType<GraphWorktree>().DistinctBy(w => w.Path))
             if (_sessionAt.TryGetValue(where.Path, out var s) && s.Status is SessionStatus.Running or SessionStatus.AwaitingInput)
-                items.Add(Note($"A Claude session ({s.DisplayName}) is working in {where.Name}; this changes files under it"));
+                items.Add(Note($"A Claude session ({s.DisplayName}) is working in {ShortNames(where.Name)}; this changes files under it"));
         int dirtyHere = _lastStatus?.Changes.Count ?? 0;
         foreach (var o in menu.Options)
         {
             bool blocked = o.SwitchFirst && dirtyHere > 0;
+            string label = blocked ? $"{o.Label} · commit or stash this worktree's changes first" : o.Label;
             var header = new StackPanel
             {
                 Children =
                 {
-                    MenuText(blocked ? $"{o.Label} · commit or stash this worktree's changes first" : o.Label),
-                    // A long command keeps its tail (the path's folder name and the branch), per the path convention.
+                    MenuText(ShortNames(label, extra)),
+                    // The command is what will actually run, so it's never cut: it wraps instead (mid-name if it must).
                     new TextBlock
                     {
                         Text = o.Command, FontFamily = Mono, FontSize = 11, Opacity = 0.7, Margin = new Thickness(0, 1, 0, 0),
-                        MaxWidth = MenuTextWidth, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+                        MaxWidth = MenuTextWidth, TextWrapping = TextWrapping.Wrap,
                     },
                 },
             };
             var item = new MenuItem { Header = header, IsEnabled = !blocked };
+            ToolTip.SetTip(item, label);
             var option = o;
             item.Click += (_, _) => ChooseDrop(src, option);
             items.Add(item);
@@ -458,6 +480,21 @@ internal sealed partial class GitTreeWindow
         this.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Tag is Views.GraphRail.RailItem { NewWorktree: true }) is { } zone
             ? zone.TranslatePoint(new Point(zone.Bounds.Width / 2, zone.Bounds.Height / 2), this)
             : null;
+
+    /// <summary>For the headless render: a drop menu naming two long dependabot-style branches, built the way
+    /// <see cref="GraphDrop"/> words them, so the shortened names and the wrapped command can be eyeballed.</summary>
+    internal void PreviewLongDropMenu()
+    {
+        if (_snap is not { } snap || snap.Commits.FirstOrDefault(c => !c.IsPseudo) is not { } commit) return;
+        const string a = "dependabot/github_actions/actions-c673fd7efc", b = "dependabot/npm_and_yarn/site/site-1e1827e218";
+        string here = snap.Current?.Name ?? "this worktree";
+        ShowDropMenu(DragSource.Of(commit), new DropMenu(null,
+        [
+            new DropOption(DropKind.Merge, $"Merge {a} into {b} (checks out {b} in {here} first)", $"git switch {b} && git merge {a}",
+                snap.Current, a, b),
+            new DropOption(DropKind.Rebase, $"Rebase {a} onto {b} in {here}", $"git rebase {b}", snap.Current, a, b),
+        ]));
+    }
 
     internal bool PreviewDragging => _dragSrc is not null;
     internal string PreviewGhostHint => _ghostHint.Text ?? "";
