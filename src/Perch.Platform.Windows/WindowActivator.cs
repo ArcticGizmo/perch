@@ -25,8 +25,8 @@ public sealed class WindowActivator : IWindowActivator
     // Windows Terminal windows that share a single process. For a plain top-level window (an IDE) the
     // root owner is the window itself; there the title (carrying the folder name, e.g.
     // "… - perch - Visual Studio Code") disambiguates projectHint among windows sharing a pid.
-    // Focus is best-effort for Windows Terminal, whose title follows the *active tab* and can't be
-    // steered to a background tab via Win32.
+    // Win32 can only raise the Windows Terminal *window*, which shows whatever tab was last active, so
+    // for a WT host SelectSessionTab first selects the session's own tab through UI Automation.
     //
     // Returns false when no host window could be resolved at all, so the caller can say so instead of
     // leaving a click that appears to do nothing.
@@ -81,6 +81,7 @@ public sealed class WindowActivator : IWindowActivator
                 // reachable window, so return false and let the caller show its "no window" notification.
                 IntPtr viaConsole = ResolveTerminalViaConsole(pid);
                 if (viaConsole == IntPtr.Zero) return false;
+                SelectSessionTab(viaConsole, pid, processes);
                 FocusWindow(viaConsole);
                 return true;
             }
@@ -100,6 +101,7 @@ public sealed class WindowActivator : IWindowActivator
 
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
+        SelectSessionTab(chosen.hWnd, pid, processes);
         FocusWindow(chosen.hWnd);
         return true;
     }
@@ -161,26 +163,60 @@ public sealed class WindowActivator : IWindowActivator
     // than Perch (access denied). The caller treats zero as "no window" and notifies the user.
     private static readonly object _consoleLock = new();
 
-    private static IntPtr ResolveTerminalViaConsole(int pid)
+    private static IntPtr ResolveTerminalViaConsole(int pid) => WithConsole(pid, () =>
+    {
+        IntPtr consoleWnd = GetConsoleWindow();
+        if (consoleWnd == IntPtr.Zero)
+            return IntPtr.Zero;
+        IntPtr owner = GetAncestor(consoleWnd, GA_ROOTOWNER);
+        return owner == IntPtr.Zero ? consoleWnd : owner;
+    });
+
+    // The title the session gave its console: Claude Code's status glyph plus the session title, which is
+    // also what Windows Terminal shows as that session's tab name. Read live from the console object, like
+    // ResolveTerminalViaConsole; null when the console can't be attached (gone, mintty, higher integrity).
+    private static string? ReadConsoleTitle(int pid) => WithConsole(pid, () =>
+    {
+        var sb = new StringBuilder(1024);
+        return GetConsoleTitleW(sb, (uint)sb.Capacity) == 0 ? null : sb.ToString();
+    });
+
+    // Runs read while attached to pid's console, under the rules ResolveTerminalViaConsole describes: one
+    // attach at a time, only console reads while attached, always detached again. default(T) when the
+    // attach fails.
+    private static T? WithConsole<T>(int pid, Func<T> read)
     {
         lock (_consoleLock)
         {
             FreeConsole();
             if (!AttachConsole((uint)pid))
-                return IntPtr.Zero;
+                return default;
             try
             {
-                IntPtr consoleWnd = GetConsoleWindow();
-                if (consoleWnd == IntPtr.Zero)
-                    return IntPtr.Zero;
-                IntPtr owner = GetAncestor(consoleWnd, GA_ROOTOWNER);
-                return owner == IntPtr.Zero ? consoleWnd : owner;
+                return read();
             }
             finally
             {
                 FreeConsole();
             }
         }
+    }
+
+    // When the session's terminal window is Windows Terminal, selects the session's own tab in it before
+    // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
+    // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: no title,
+    // no single matching tab, or any UIA failure leaves the tab as it was, and the window is still raised.
+    private static void SelectSessionTab(
+        IntPtr terminalWindow, int pid, Dictionary<int, (int ParentPid, string ExeFile)> processes)
+    {
+        GetWindowThreadProcessId(terminalWindow, out uint windowPid);
+        if (!processes.TryGetValue((int)windowPid, out var host)
+            || !string.Equals(host.ExeFile, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var title = ReadConsoleTitle(pid);
+        if (!string.IsNullOrEmpty(title))
+            WindowsTerminalTabs.TrySelect(terminalWindow, title);
     }
 
     // Focuses the app that owns pid, where pid may well be a windowless helper process — the case this
@@ -434,6 +470,9 @@ public sealed class WindowActivator : IWindowActivator
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint GetConsoleTitleW(StringBuilder lpConsoleTitle, uint nSize);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -139,8 +139,14 @@ bool — and reproduce Perch's runtime with a **WinExe/STA** harness, not a cons
 - **Git Bash / mintty.** `GetConsoleWindow()` returns 0 there (mintty is not a Win32 console),
   so `AttachConsole` yields nothing — but traversal already handles mintty (the `mintty.exe`
   window is a real ancestor), so the fallback is not needed.
-- **Background tab.** Both paths resolve the terminal *window*; Windows Terminal still shows
-  only its active tab and cannot be steered to a background tab via Win32. Known ceiling.
+- **Background tab.** Both paths resolve the terminal *window*, and Win32 cannot steer Windows
+  Terminal to a background tab. UI Automation can: WT's tabs are `TabItem` elements supporting
+  `SelectionItemPattern`. So when the resolved window belongs to `WindowsTerminal.exe`,
+  `WindowActivator.SelectSessionTab` reads the session's console title (`AttachConsole` +
+  `GetConsoleTitleW`, the same attach as the fallback above), which is also WT's name for that tab,
+  and `WindowsTerminalTabs` selects the one tab carrying it before the window is raised. The match
+  (`Perch.Data.TerminalTabMatch`) ignores Claude Code's animated status glyph and refuses to guess:
+  a renamed tab or two tabs with the same title leave the tab as it was.
 
 ## Trying it
 
