@@ -12,6 +12,32 @@ internal sealed partial class GitTreeWindow
     private bool _searchingOlder;
 
     /// <summary>For the headless render: the commit search with <paramref name="query"/> typed.</summary>
+    /// <summary>For the headless render: selects (and so scrolls to) the top stash row, and says where each stash row
+    /// sits against the commit it was made on.</summary>
+    internal string PreviewJumpToStash()
+    {
+        if (_snap is not { } s || s.StashTethers.Count == 0) return $"no stash rows ({_snap?.Stashes.Count ?? 0} stashes)";
+        _graph.Canvas.Flash(s.StashTethers[0].StashRow);
+        return $"{s.StashTethers.Count}/{s.Stashes.Count} have rows: " + string.Join(", ", s.StashTethers.Select(t =>
+            $"{t.Stash.Selector} row {t.StashRow} (made on row {t.BaseRow})"));
+    }
+
+    /// <summary>For the headless render: the rail's tags grouped and opened.</summary>
+    internal void PreviewTags() => _rail.PreviewTags();
+
+    /// <summary>For the headless render: Pull spinning with the rest of the toolbar off, or back to normal.</summary>
+    internal void PreviewSpinner(bool on)
+    {
+        if (on) StartSpinner(_pullBtn); else StopSpinner();
+    }
+
+    /// <summary>For the headless render: the right-click menu of the first commit row (not a WIP or stash row).</summary>
+    internal void PreviewCommitMenu()
+    {
+        if (_snap is { } s && Enumerable.Range(0, s.Commits.Count).FirstOrDefault(i => !s.Commits[i].IsPseudo, -1) is var row and >= 0)
+            ShowRowMenu(row);
+    }
+
     internal void PreviewFind(string? query)
     {
         if (query is null) { CloseGoTo(); return; }

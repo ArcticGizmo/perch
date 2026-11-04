@@ -762,6 +762,43 @@ internal static class HeadlessRenderer
                 Console.WriteLine($"git graph files: heading click collapsed = {collapsed}, strip click expanded = {!tw.PreviewFilesCollapsed}");
             }
 
+            // Both "⋯" menus as text, then the rail's edge dragged 120 px right (framed) and back.
+            Console.WriteLine("git graph Local ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.LocalBranch).Replace("\n", "\n  "));
+            Console.WriteLine("git graph Remotes ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.RemoteBranch).Replace("\n", "\n  "));
+            if (tw.PreviewRailEdge() is { } edge)
+            {
+                void DragEdge(Point a, double dx)
+                {
+                    tw.MouseMove(a);
+                    tw.MouseDown(a, global::Avalonia.Input.MouseButton.Left);
+                    for (int i = 1; i <= 6; i++)
+                        tw.MouseMove(new Point(a.X + dx * i / 6, a.Y), global::Avalonia.Input.RawInputModifiers.LeftMouseButton);
+                    tw.MouseUp(new Point(a.X + dx, a.Y), global::Avalonia.Input.MouseButton.Left);
+                    Dispatcher.UIThread.RunJobs();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                }
+                var before = tw.PreviewRailWidth;
+                DragEdge(edge, 120);
+                var after = tw.PreviewRailWidth;
+                if (tw.CaptureRenderedFrame() is { } wideRail) { using var fs = File.Create(Path.Combine(outDir, "git_tree_rail_wide_1x.png")); wideRail.Save(fs); }
+                if (tw.PreviewRailEdge() is { } back) DragEdge(back, -120);
+                Console.WriteLine($"git graph rail: edge drag {before:0} → {after:0} px, back to {tw.PreviewRailWidth:0}");
+            }
+            else Console.WriteLine("git graph rail: no edge to drag");
+
+            // A confirmation (Drop stash) in the window's own modal, centred, rather than its own window. Taken before the
+            // drag probes below, whose menus stay open over everything after.
+            tw.PreviewConfirm();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } confirmFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_confirm_1x.png"));
+                confirmFrame.Save(fs);
+            }
+            tw.PreviewCloseNameDialog();
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.
@@ -848,6 +885,39 @@ internal static class HeadlessRenderer
                 railFrame.Save(fs);
             }
             tw.PreviewRailOpen(true);
+            // The newest stash with a row, scrolled to: it sits among the commits of when it was made.
+            Console.WriteLine($"git graph stashes: {tw.PreviewJumpToStash()}");
+            for (var until = DateTime.UtcNow.AddSeconds(1); DateTime.UtcNow < until; Thread.Sleep(50))
+                Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } stashFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_stash_row_1x.png"));
+                stashFrame.Save(fs);
+            }
+
+            // The rail's Local rows (lead marks, ahead/behind column) over the tags grouped by name, one group open; the
+            // Tags ⋯ menu as text; Pull spinning with the rest of the toolbar off; a commit's right-click menu.
+            void Frame11(string name)
+            {
+                for (var until = DateTime.UtcNow.AddSeconds(0.6); DateTime.UtcNow < until; Thread.Sleep(50))
+                    Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                Dispatcher.UIThread.RunJobs();
+                if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+            }
+            Console.WriteLine("git graph Tags ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.Tag).Replace("\n", "\n  "));
+            tw.PreviewTags();
+            tw.PreviewSpinner(true);
+            Frame11("git_tree_rail_tags_busy_1x.png");
+            tw.PreviewSpinner(false);
+            tw.PreviewCommitMenu();
+            Frame11("git_tree_commit_menu_1x.png");
+            // Three files picked in Changes: the header reads "Stage (3)", the rows lose their +, and the shared menu opens.
+            tw.PreviewSelectWip();
+            Frame11("git_tree_wip_selected_1x.png");
+            Console.WriteLine($"git graph multi-pick: {tw.PreviewPickFiles(3)}");
+            Frame11("git_tree_files_multi_1x.png");
             tw.Close();
         }
 
@@ -3937,7 +4007,7 @@ internal static class HeadlessRenderer
             new Perch.Data.GitGraph.GraphWorktree(P("perch--git-graph"), "git-graph", "7be0d42".PadRight(40, '0'), 0, false),
         };
         return Perch.Data.GitGraph.GraphSnapshot.Build(P("perch"), Perch.Data.GitGraph.GraphScope.All,
-            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", null, 2000);
+            Perch.Data.GitGraph.GraphLogQuery.Everything, log, refs, worktrees, "main", 2000);
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the graph (the real

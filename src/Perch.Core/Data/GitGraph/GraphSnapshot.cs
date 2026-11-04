@@ -61,11 +61,10 @@ internal sealed class GraphSnapshot
         }
         Tethers = tethers;
         var stashTethers = new List<GraphStashTether>();
-        for (; i < commits.Length && commits[i].IsStash; i++)
-        {
-            var st = stashes.First(x => x.RowHash == commits[i].Hash);
-            stashTethers.Add(new(i, RowOf(st.Base) is var b and >= 0 ? b : int.MaxValue, Rows[i].Lane, st));
-        }
+        foreach (var st in stashes)
+            if (RowOf(st.RowHash) is var s and >= 0)
+                stashTethers.Add(new(s, RowOf(st.Base), Rows[s].Lane, st));
+        stashTethers.Sort((a, b) => a.StashRow.CompareTo(b.StashRow));
         StashTethers = stashTethers;
     }
 
@@ -91,7 +90,8 @@ internal sealed class GraphSnapshot
     public GraphLogQuery Query { get; }
     public ScopeContext Context { get; }
 
-    /// <summary>Every row's commit, in display order: WIP pseudo-commits first, then stash ones.</summary>
+    /// <summary>Every row's commit, in display order: WIP pseudo-commits first, then the log with stash pseudo-commits
+    /// woven in by when they were made.</summary>
     public IReadOnlyList<GraphCommit> Commits { get; }
     public GraphRow[] Rows { get; }
     public int Width { get; }
@@ -113,7 +113,7 @@ internal sealed class GraphSnapshot
     /// has none).</summary>
     public IReadOnlyList<GraphStash> Stashes { get; }
 
-    /// <summary>The stashes that have rows, under the WIP rows.</summary>
+    /// <summary>The stashes that have rows, top to bottom.</summary>
     public IReadOnlyList<GraphStashTether> StashTethers { get; }
 
     /// <summary>The stash entry whose row is <paramref name="row"/>, or null.</summary>
@@ -241,18 +241,27 @@ internal sealed class GraphSnapshot
         return false;
     }
 
-    /// <summary>Every row's lane, as hints for the next layout of the same scope.</summary>
-    public Dictionary<string, int> Hints() => LaneAllocator.HintsFrom(Commits, Rows);
-
     /// <summary>
     /// Where lane 0 starts: the window's own worktree (its WIP row when dirty, else its HEAD), so the history being
-    /// worked on is the straight line down the left and everything else branches off it. With no current worktree it's
+    /// worked on is the straight line down the left and everything else branches off it. When that branch is only
+    /// behind its upstream (nothing of its own the upstream lacks), lane 0 starts at the upstream instead: that's where
+    /// the line is heading, and the checkout sits further down the same line. With no current worktree it's
     /// <paramref name="primaryBranch"/> (the trunk), again from its worktree's WIP row when that's dirty.
+    /// <paramref name="loaded"/> says whether a commit is in the walk; an upstream that isn't (hidden, or outside the
+    /// scope) can't hold lane 0.
     /// </summary>
-    internal static string? PrimaryTip(IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphRef> refs, string? primaryBranch)
+    internal static string? PrimaryTip(IReadOnlyList<GraphWorktree> worktrees, IReadOnlyList<GraphRef> refs, string? primaryBranch,
+        Func<string, bool>? loaded = null)
     {
         if (worktrees.FirstOrDefault(w => w.IsCurrent && w.Head is not null) is { } here)
+        {
+            if (here.Branch is { } b
+                && refs.FirstOrDefault(r => r.Kind == GraphRefKind.LocalBranch && r.Name == b) is { Upstream: { } up, UpstreamGone: false, Ahead: 0, Behind: > 0 }
+                && refs.FirstOrDefault(r => r.Kind == GraphRefKind.RemoteBranch && r.Name == up) is { } upstream
+                && (loaded?.Invoke(upstream.Target) ?? true))
+                return upstream.Target;
             return here.Changes > 0 ? here.WipHash : here.Head;
+        }
         if (primaryBranch is null)
             return null;
         return worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
@@ -261,12 +270,12 @@ internal sealed class GraphSnapshot
 
     /// <summary>
     /// Lays out <paramref name="log"/> (one page, topological order) under a WIP row per dirty worktree, the current
-    /// one first and the rest ordered by where their HEADs sit, then a row per stash made on a commit in the page, ordered the same way. Lane 0 follows
-    /// <see cref="PrimaryTip"/>'s first-parent chain.
+    /// one first and the rest ordered by where their HEADs sit, with a row per stash made on a commit in the page woven
+    /// in by time (<see cref="WithStashes"/>). Lane 0 follows <see cref="PrimaryTip"/>'s first-parent chain.
     /// </summary>
     public static GraphSnapshot Build(string root, GraphScope scope, GraphLogQuery query, IReadOnlyList<GraphCommit> log,
         IReadOnlyList<GraphRef> refs, IReadOnlyList<GraphWorktree> worktrees, string? primaryBranch,
-        IReadOnlyDictionary<string, int>? hints, int pageSize, ScopeContext? context = null,
+        int pageSize, ScopeContext? context = null,
         IReadOnlyList<GraphStash>? stashes = null)
     {
         stashes ??= [];
@@ -280,27 +289,63 @@ internal sealed class GraphSnapshot
             .OrderBy(w => w.IsCurrent ? -1 : logRow.TryGetValue(w.Head!, out var r) ? r : int.MaxValue)
             .Select(w => new GraphCommit(w.WipHash, [w.Head!], "", "", 0, $"{w.Changes} uncommitted"))
             .ToList();
-        // A stash whose commit isn't in the page has nowhere to hang its line; the rail still lists it.
-        pseudo.AddRange(stashes
-            .Where(st => logRow.ContainsKey(st.Base))
-            .OrderBy(st => logRow[st.Base])
-            .Select(st => new GraphCommit(st.RowHash, [st.Base], "", "", st.UnixTime, st.Message)));
         refs = stashes.Count == 0 ? refs : [.. refs, .. stashes.Select(st => st.AsRef())];
 
-        string? primaryTip = PrimaryTip(worktrees, refs, primaryBranch);
+        string? primaryTip = PrimaryTip(worktrees, refs, primaryBranch, logRow.ContainsKey);
 
-        var commits = new GraphCommit[pseudo.Count + log.Count];
+        var woven = WithStashes(log, stashes);
+        var commits = new GraphCommit[pseudo.Count + woven.Count];
         pseudo.CopyTo(commits);
-        for (int i = 0; i < log.Count; i++)
-            commits[pseudo.Count + i] = log[i];
+        woven.CopyTo(commits, pseudo.Count);
         var rowOf = new Dictionary<string, int>(commits.Length, StringComparer.Ordinal);
         for (int i = 0; i < commits.Length; i++)
             rowOf[commits[i].Hash] = i;
 
-        var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip, hints));
+        var lanes = new LaneAllocator(new LaneAllocator.Options(primaryTip));
         lanes.Add(commits);
         return new GraphSnapshot(root, scope, query, commits, log.Count, log.Count >= pageSize, refs, worktrees, stashes,
             primaryTip, lanes, rowOf, context ?? ScopeContext.None);
+    }
+
+    /// <summary>
+    /// <paramref name="page"/> with a row for each stash made on one of its commits, placed by time: just above the first
+    /// commit that's no newer than the stash, so an old stash sits down among the history it was made in and a fresh one
+    /// near the top. A stash never goes below its own commit (the layout needs it above its parent), which also covers a
+    /// clock or rebase that put the commits' times out of order. Stashes sharing a spot go newest first. One made on a
+    /// commit outside the page gets no row here; the rail still lists it.
+    /// </summary>
+    internal static List<GraphCommit> WithStashes(IReadOnlyList<GraphCommit> page, IEnumerable<GraphStash> stashes)
+    {
+        var placed = new List<(int At, GraphStash Stash)>();
+        Dictionary<string, int>? rowOf = null;
+        foreach (var st in stashes)
+        {
+            if (rowOf is null)
+            {
+                rowOf = new Dictionary<string, int>(page.Count, StringComparer.Ordinal);
+                for (int i = 0; i < page.Count; i++) rowOf.TryAdd(page[i].Hash, i);
+            }
+            if (!rowOf.TryGetValue(st.Base, out var baseRow)) continue;
+            int at = baseRow;
+            for (int i = 0; i < baseRow; i++)
+                if (page[i].UnixTime <= st.UnixTime) { at = i; break; }
+            placed.Add((at, st));
+        }
+        if (placed.Count == 0) return [.. page];
+
+        placed.Sort((a, b) => a.At != b.At ? a.At.CompareTo(b.At) : b.Stash.UnixTime.CompareTo(a.Stash.UnixTime));
+        var woven = new List<GraphCommit>(page.Count + placed.Count);
+        int next = 0;
+        for (int i = 0; i < page.Count; i++)
+        {
+            for (; next < placed.Count && placed[next].At == i; next++)
+            {
+                var st = placed[next].Stash;
+                woven.Add(new GraphCommit(st.RowHash, [st.Base], "", "", st.UnixTime, st.Message));
+            }
+            woven.Add(page[i]);
+        }
+        return woven;
     }
 
     /// <summary>
@@ -313,16 +358,19 @@ internal sealed class GraphSnapshot
             throw new InvalidOperationException("This snapshot has already been appended to.");
         _handedOn = true;
 
-        var commits = new GraphCommit[Commits.Count + page.Count];
+        // Stashes made on a commit in this page get their rows now; older pages are already laid out, so one newer than
+        // the page's top commit sits at the top of the page.
+        var woven = WithStashes(page, Stashes.Where(st => !_rowOf.ContainsKey(st.RowHash)));
+        var commits = new GraphCommit[Commits.Count + woven.Count];
         for (int i = 0; i < Commits.Count; i++)
             commits[i] = Commits[i];
         var rowOf = new Dictionary<string, int>(_rowOf, StringComparer.Ordinal);
-        for (int i = 0; i < page.Count; i++)
+        for (int i = 0; i < woven.Count; i++)
         {
-            commits[Commits.Count + i] = page[i];
-            rowOf[page[i].Hash] = Commits.Count + i;
+            commits[Commits.Count + i] = woven[i];
+            rowOf[woven[i].Hash] = Commits.Count + i;
         }
-        _lanes.Add(page);
+        _lanes.Add(woven);
         return new GraphSnapshot(Root, Scope, Query, commits, RealCommitCount + page.Count, page.Count >= pageSize,
             Refs, Worktrees, Stashes, _primaryTip, _lanes, rowOf, Context);
     }

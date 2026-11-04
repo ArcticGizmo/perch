@@ -386,8 +386,9 @@ internal sealed class GraphCanvas : Control
         double graphW = GraphWidth;
         double subjX = _refsW + graphW + Gap;
         double whenX = size.Width - WhenW - Gap;
-        // In a narrow pane the subject matters more than the author, so the author column goes first.
-        double authorX = whenX - (size.Width < NarrowW ? 0 : AuthorW);
+        // The node's picture already says who, so the author column only shows with plain dots; in a narrow pane the
+        // subject matters more than the author, so it goes there too.
+        double authorX = whenX - (size.Width < NarrowW || _avatars is not null ? 0 : AuthorW);
         double subjW = Math.Max(40, authorX - Gap - subjX);
 
         // Rows scroll under the fixed column header.

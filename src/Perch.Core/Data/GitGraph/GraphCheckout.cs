@@ -72,23 +72,32 @@ internal static class GraphCheckout
     /// <c>check-ref-format --branch</c> rules, checked here so the dialog can answer as the name is typed instead of
     /// after git has run, plus a local branch of that name already existing.
     /// </summary>
-    public static string? BranchNameProblem(string name, IReadOnlyList<GraphRef> refs)
+    public static string? BranchNameProblem(string name, IReadOnlyList<GraphRef> refs) =>
+        RefNameProblem(name, "Branch")
+        ?? (refs.Any(r => r.Kind == GraphRefKind.LocalBranch && r.Name == name) ? $"{name} already exists." : null);
+
+    /// <summary>The same rules for a new tag, plus a tag of that name already existing.</summary>
+    public static string? TagNameProblem(string name, IReadOnlyList<GraphRef> refs) =>
+        RefNameProblem(name, "Tag")
+        ?? (refs.Any(r => r.Kind == GraphRefKind.Tag && r.Name == name) ? $"A tag called {name} already exists." : null);
+
+    private static string? RefNameProblem(string name, string what)
     {
+        string lower = what.ToLowerInvariant();
         if (name.Length == 0) return "Type a name.";
-        if (name.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))) return "Branch names can't contain spaces.";
-        if (name.IndexOfAny(['~', '^', ':', '?', '*', '[', '\\']) is var i and >= 0) return $"Branch names can't contain '{name[i]}'.";
-        if (name[0] == '-') return "Branch names can't start with '-'.";
-        if (name == "HEAD") return "HEAD can't be a branch name.";
-        if (name == "@" || name.Contains("@{", StringComparison.Ordinal)) return "Branch names can't be '@' or contain '@{'.";
-        if (name.Contains("..", StringComparison.Ordinal)) return "Branch names can't contain '..'.";
-        if (name.EndsWith('/') || name.EndsWith('.')) return $"Branch names can't end with '{name[^1]}'.";
+        if (name.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))) return $"{what} names can't contain spaces.";
+        if (name.IndexOfAny(['~', '^', ':', '?', '*', '[', '\\']) is var i and >= 0) return $"{what} names can't contain '{name[i]}'.";
+        if (name[0] == '-') return $"{what} names can't start with '-'.";
+        if (name == "HEAD") return $"HEAD can't be a {lower} name.";
+        if (name == "@" || name.Contains("@{", StringComparison.Ordinal)) return $"{what} names can't be '@' or contain '@{{'.";
+        if (name.Contains("..", StringComparison.Ordinal)) return $"{what} names can't contain '..'.";
+        if (name.EndsWith('/') || name.EndsWith('.')) return $"{what} names can't end with '{name[^1]}'.";
         foreach (var part in name.Split('/'))
         {
-            if (part.Length == 0) return "Branch names can't contain '//' or start with '/'.";
-            if (part[0] == '.') return "No part of a branch name can start with '.'.";
-            if (part.EndsWith(".lock", StringComparison.Ordinal)) return "No part of a branch name can end with '.lock'.";
+            if (part.Length == 0) return $"{what} names can't contain '//' or start with '/'.";
+            if (part[0] == '.') return $"No part of a {lower} name can start with '.'.";
+            if (part.EndsWith(".lock", StringComparison.Ordinal)) return $"No part of a {lower} name can end with '.lock'.";
         }
-        if (refs.Any(r => r.Kind == GraphRefKind.LocalBranch && r.Name == name)) return $"{name} already exists.";
         return null;
     }
 

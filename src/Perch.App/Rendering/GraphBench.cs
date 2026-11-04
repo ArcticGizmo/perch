@@ -31,9 +31,9 @@ internal static class GraphBench
         Console.WriteLine($"  {open.Commits.Count} rows, {open.Width} lanes, {open.Worktrees.Count} worktrees " +
                           $"({open.Tethers.Count} dirty), {open.Refs.Count} refs");
 
-        Console.WriteLine("\nRefresh (same scope, lane hints from the open):");
+        Console.WriteLine("\nRefresh (same scope, laid out again):");
         sw.Restart();
-        var refresh = GraphLoader.Load(root, GraphScope.All, open, Stage);
+        var refresh = GraphLoader.Load(root, GraphScope.All, timing: Stage);
         Line("total", sw.Elapsed);
         if (refresh is not null)
         {
@@ -67,11 +67,6 @@ internal static class GraphBench
         long after = GC.GetTotalMemory(forceFullCollection: true);
         Console.WriteLine($"  {log.Count:N0} commits, {lanes.Width} lanes, " +
                           $"{lanes.Rows.Sum(r => r.Up.Length):N0} edges, {(after - before) / 1024.0 / 1024.0:F1} MB held");
-
-        sw.Restart();
-        var relaid = new LaneAllocator(new LaneAllocator.Options(PrimaryTip(open), LaneAllocator.HintsFrom(log, lanes.Rows)));
-        relaid.Add(log);
-        Line("layout with hints", sw.Elapsed);
 
         if (log.Count > GraphLoader.PageSize)
         {

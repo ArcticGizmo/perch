@@ -31,6 +31,9 @@ internal sealed partial class GitTreeWindow
     private Func<string, string?>? _nameCheck;
     private Action<string, int>? _nameDone;
 
+    // Set while the modal is asking a yes/no question (no name box) rather than for a name.
+    private TaskCompletionSource<bool>? _confirm;
+
     private void BuildCheckoutUi()
     {
         BuildBusyCover();
@@ -65,10 +68,11 @@ internal sealed partial class GitTreeWindow
         BuildNameDialog();
     }
 
-    // ---- the name dialog (a new branch, a stash's new message) ----
+    // ---- the window's modal: a name (a new branch or tag, a stash's new message), or a yes/no ----
 
     // Over the whole window rather than a bar in the graph card: naming something is a step of its own, and a bar at the
-    // top of the graph was easy to miss and far from whatever asked for it.
+    // top of the graph was easy to miss and far from whatever asked for it. Confirmations use the same card instead of a
+    // separate window, which could open off-screen or behind this one.
     private void BuildNameDialog()
     {
         _nameTitle = new TextBlock { FontSize = 15, FontWeight = FontWeight.SemiBold };
@@ -119,6 +123,9 @@ internal sealed partial class GitTreeWindow
     private void OpenNameDialog(string title, string detail, string action, string initial, Func<string, string?> problem,
         Action<string, int> done, IReadOnlyList<string>? choices = null, string? warning = null)
     {
+        CancelConfirm();
+        _nameBox.IsVisible = true;
+        _nameCancel.Content = "Cancel";
         _nameTitle.Text = title;
         _nameDetail.Text = detail;
         _nameOk.Content = action;
@@ -148,8 +155,54 @@ internal sealed partial class GitTreeWindow
         _nameOk.IsEnabled = problem is null;
     }
 
+    /// <summary>
+    /// Asks a yes/no question in the window's own modal, centred over it. True only for <paramref name="confirm"/>; Esc,
+    /// <paramref name="cancel"/> or a click outside the card is false.
+    /// </summary>
+    private Task<bool> ConfirmAsync(string title, string message, string confirm, string cancel)
+    {
+        CancelConfirm();
+        _nameDone = null;
+        _nameCheck = null;
+        _nameBox.IsVisible = false;
+        _nameProblem.IsVisible = false;
+        _nameChoices.Children.Clear();
+        _nameChoices.IsVisible = false;
+        _nameWarning.IsVisible = false;
+        _nameTitle.Text = title;
+        _nameDetail.Text = message;
+        _nameOk.Content = confirm;
+        _nameOk.IsEnabled = true;
+        _nameCancel.Content = cancel;
+        _confirm = new TaskCompletionSource<bool>();
+        ApplyCheckoutPalette();
+        _nameDialog.IsVisible = true;
+        Dispatcher.UIThread.Post(() => _nameCancel.Focus());   // the safe answer is the one Enter or Space takes
+        return _confirm.Task;
+    }
+
+    // A question still open when another replaces it (or the dialog closes) is answered no.
+    private void CancelConfirm()
+    {
+        var open = _confirm;
+        _confirm = null;
+        open?.TrySetResult(false);
+    }
+
+    /// <summary>For the headless render: a destructive confirmation open in the modal (left unanswered).</summary>
+    internal void PreviewConfirm() =>
+        _ = ConfirmAsync("Drop stash", "Drop stash@{0} (On main: cowork feasibility) without applying it? Undo in the toast puts it back.",
+            "Drop", "Keep it");
+
     private void AcceptName()
     {
+        if (_confirm is { } ask)
+        {
+            _confirm = null;
+            CloseNameDialog();
+            ask.TrySetResult(true);
+            return;
+        }
         string name = _nameBox.Text?.Trim() ?? "";
         if (_nameDone is not { } done || _nameCheck?.Invoke(name) is not null) return;
         int choice = _nameChoices.Children.OfType<RadioButton>().ToList().FindIndex(r => r.IsChecked == true);
@@ -162,6 +215,7 @@ internal sealed partial class GitTreeWindow
         _nameDialog.IsVisible = false;
         _nameDone = null;
         _nameCheck = null;
+        CancelConfirm();
         _graph.Canvas.Focus();
     }
 

@@ -323,10 +323,12 @@ internal sealed partial class GitTreeWindow : Window
         _rail.WorktreeMenuRequested += ShowWorktreeMenu;
         _rail.VisibilityToggled += ToggleHidden;
         _rail.VisibilityMenuRequested += ShowVisibilityMenu;
+        _rail.GroupVisibilityToggled += SetGroupHidden;
+        _rail.SetTagGroups(settings.GitTreeTagGroups);
         _graph.Canvas.RefMenuRequested += ShowRefMenu;
         _graph.Canvas.RowMenuRequested += ShowRowMenu;
         _rail.RefMenuRequested += ShowRefMenu;
-        _railSeparator = new Border { Width = 1 };
+        _railSeparator = new Border { Width = 1, HorizontalAlignment = HorizontalAlignment.Center };
 
         // Ctrl+F (Ctrl+G) over the graph: find commits by message, author, hash, branch or tag. Matches are washed in
         // the graph; Enter / Shift+Enter walk them; with none in what's loaded, older history can be searched too.
@@ -352,9 +354,20 @@ internal sealed partial class GitTreeWindow : Window
             Child = new DockPanel { LastChildFill = true, Children = { gotoClose, gotoNext, gotoPrev, _findOlderBtn, _gotoLabel, _gotoBox } },
         };
 
-        var graphBody = new Grid { ColumnDefinitions = new ColumnDefinitions("210,Auto,*") };
+        var railColumn = new ColumnDefinition(new GridLength(settings.GitTreeRailWidth > 0 ? settings.GitTreeRailWidth : DefaultRailWidth, GridUnitType.Pixel))
+        {
+            MinWidth = 140, MaxWidth = 520,
+        };
+        var graphBody = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions
+            {
+                railColumn, new(GridLength.Auto), new(new GridLength(1, GridUnitType.Star)) { MinWidth = 240 },
+            },
+        };
         graphBody.Children.Add(WithColumn(_rail, 0));
         graphBody.Children.Add(WithColumn(_railSeparator, 1));
+        graphBody.Children.Add(WithColumn(RailSplitter(railColumn), 1));
         graphBody.Children.Add(WithColumn(_graph, 2));
         BuildCheckoutUi();
         BuildDragUi();
@@ -372,9 +385,12 @@ internal sealed partial class GitTreeWindow : Window
         _filesList.SelectionChanged += OnCommitFileSelected;
         _filesEmpty = EmptyHint("Select a node");
 
+        // Ctrl+click / Shift+click pick several files for the header button and the right-click menu.
         _unstagedList = MakeList(_unstagedRowTemplate);
+        _unstagedList.SelectionMode = SelectionMode.Multiple;
         _unstagedList.SelectionChanged += (_, _) => OnWipFileSelected(_unstagedList, staged: false);
         _stagedList = MakeList(_stagedRowTemplate);
+        _stagedList.SelectionMode = SelectionMode.Multiple;
         _stagedList.SelectionChanged += (_, _) => OnWipFileSelected(_stagedList, staged: true);
 
         _msgBox = new TextBox
@@ -419,9 +435,9 @@ internal sealed partial class GitTreeWindow : Window
         _unstagedLabel = GroupLabel("Changes");
         _stagedLabel = GroupLabel("Staged · pending commit");
         _stageAllBtn = HeaderActionButton("Stage all");
-        _stageAllBtn.Click += (_, _) => StageAll();
+        _stageAllBtn.Click += (_, _) => { if (Picked(_unstagedList) is { Count: > 1 } p) StagePaths(p, true); else StageAll(); };
         _unstageAllBtn = HeaderActionButton("Unstage all");
-        _unstageAllBtn.Click += (_, _) => UnstageAll();
+        _unstageAllBtn.Click += (_, _) => { if (Picked(_stagedList) is { Count: > 1 } p) StagePaths(p, false); else UnstageAll(); };
         var unstagedGroup = new DockPanel
         {
             LastChildFill = true, Children = { GroupHeader(_unstagedLabel, _stageAllBtn), _unstagedList },
@@ -679,6 +695,8 @@ internal sealed partial class GitTreeWindow : Window
     {
         list.Tapped += (_, e) =>
         {
+            // Ctrl/Shift+click is picking files, not opening one.
+            if ((e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift | KeyModifiers.Meta)) != 0) return;
             bool onRow = false;
             for (var v = e.Source as Visual; v is not null && v != list; v = v.GetVisualParent())
             {
@@ -755,6 +773,43 @@ internal sealed partial class GitTreeWindow : Window
         };
         _splitters.Add(s);
         return s;
+    }
+
+    private const double DefaultRailWidth = 210;
+    private GridSplitter? _railSplitter;
+
+    /// <summary>For the headless render: the middle of the rail's edge in window coordinates, and the rail's width now.</summary>
+    internal Point? PreviewRailEdge() =>
+        _railSplitter?.TranslatePoint(new Point(_railSplitter.Bounds.Width / 2, _railSplitter.Bounds.Height / 2), this);
+    internal double PreviewRailWidth => _rail.Bounds.Width;
+
+    // The rail's edge: the 1 px line stays the look, and this transparent strip over it is what the pointer grabs.
+    // Only the rail's width is kept; the graph takes whatever is left.
+    private GridSplitter RailSplitter(ColumnDefinition railColumn)
+    {
+        var s = new GridSplitter
+        {
+            Width = 6, Background = Brushes.Transparent,
+            ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        ToolTip.SetTip(s, "Drag to resize · double-click to reset");
+        ToolTip.SetShowDelay(s, 800);
+        _railSplitter = s;
+        s.DragCompleted += (_, _) => SaveRailWidth(railColumn.ActualWidth);
+        s.DoubleTapped += (_, e) =>
+        {
+            railColumn.Width = new GridLength(DefaultRailWidth, GridUnitType.Pixel);
+            SaveRailWidth(0);
+            e.Handled = true;
+        };
+        _splitters.Add(s);
+        return s;
+    }
+
+    private void SaveRailWidth(double width)
+    {
+        _settings.GitTreeRailWidth = width > 0 ? Math.Round(width) : 0;
+        _settings.Save();
     }
 
     // Wraps a pane's content in a rounded, bordered "card" on the page (the reading surface), recorded so the
@@ -961,7 +1016,7 @@ internal sealed partial class GitTreeWindow : Window
         var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
         System.Threading.Tasks.Task.Run(() =>
             {
-                var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
+                var snap = GraphLoader.Load(cwd, scope, baseOverride: baseOverride, hidden: hidden);
                 return (snap, invisible: ComputeInvisible(cwd, snap?.Context.CurrentStatus));
             })
             .ContinueWith(t =>
@@ -1356,6 +1411,7 @@ internal sealed partial class GitTreeWindow : Window
         _stageAllBtn.IsEnabled = unstaged.Count > 0;
         _unstageAllBtn.IsEnabled = staged.Count > 0;
         UpdateComposer();
+        UpdateMultiSelect();
 
         if (preferUnstagedTop)
         {
@@ -1419,12 +1475,16 @@ internal sealed partial class GitTreeWindow : Window
     // to the current content mode (Diff / Previous / Current).
     private void OnWipFileSelected(ListBox list, bool staged)
     {
+        UpdateMultiSelect();
         if (_suppressSelect || _cwd is not { } cwd) return;
         if (list.SelectedItem is not GitFileChange fc || fc.Path is null) return;
 
         _suppressSelect = true;
         (staged ? _unstagedList : _stagedList).SelectedIndex = -1;
         _suppressSelect = false;
+        UpdateMultiSelect();
+        // Several picked: they're for the header button and the menu; the diff keeps showing what it was.
+        if (Picked(list).Count > 1) return;
 
         _diffPlaceholder.IsVisible = false;
         _shownWip = (fc.Path, staged);
@@ -1660,7 +1720,7 @@ internal sealed partial class GitTreeWindow : Window
 
         if (req.Action == HunkStageAction.Discard)
         {
-            bool go = await ConfirmDialog.ShowAsync(this, "Discard hunk",
+            bool go = await ConfirmAsync("Discard hunk",
                 $"Discard this hunk's changes to {System.IO.Path.GetFileName(path)}? This can't be undone.",
                 "Discard", "Cancel");
             if (!go) return;
@@ -1689,7 +1749,7 @@ internal sealed partial class GitTreeWindow : Window
         if (req.Action == HunkStageAction.Discard)
         {
             string what = untracked ? "Delete" : "Discard changes to";
-            bool go = await ConfirmDialog.ShowAsync(this, "Discard file",
+            bool go = await ConfirmAsync("Discard file",
                 $"{what} {System.IO.Path.GetFileName(path)}? This can't be undone.",
                 untracked ? "Delete" : "Discard", "Cancel");
             if (!go) return;
@@ -1747,7 +1807,7 @@ internal sealed partial class GitTreeWindow : Window
         // Guard: committing while the session is live can race Claude's own edits/git in this same tree.
         if (_isActive)
         {
-            bool go = await ConfirmDialog.ShowAsync(this, "Session is active",
+            bool go = await ConfirmAsync("Session is active",
                 "Claude may be editing or running git in this working tree right now, so committing can race its writes. Commit anyway?",
                 "Commit anyway", "Wait");
             if (!go) { SetHint("Held off — session still active.", warn: false); return; }
@@ -1862,11 +1922,11 @@ internal sealed partial class GitTreeWindow : Window
         bool wipSelected = _selectedNode is { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
         var contentMode = _contentMode;
-        var (scope, previous, baseOverride, hidden) = (_scope, _snap, _baseOverride, HiddenSet());
+        var (scope, baseOverride, hidden) = (_scope, _baseOverride, HiddenSet());
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var snap = GraphLoader.Load(cwd, scope, previous, baseOverride: baseOverride, hidden: hidden);
+            var snap = GraphLoader.Load(cwd, scope, baseOverride: baseOverride, hidden: hidden);
             var status = snap?.Context.CurrentStatus;
             var invisible = ComputeInvisible(cwd, status);
             // The shown working-tree file's content in the active content mode, for the repaint-if-changed
@@ -2372,7 +2432,8 @@ internal sealed partial class GitTreeWindow : Window
             FontFamily = Mono, FontSize = 14, FontWeight = FontWeight.SemiBold,
             Padding = new Thickness(9, 0), MinWidth = 0,
             VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
-            Cursor = new Cursor(StandardCursorType.Hand),
+            Cursor = new Cursor(StandardCursorType.Hand), Tag = RowStageTag,
+            IsVisible = Picked(staged ? _stagedList : _unstagedList).Count <= 1,
         };
         ToolTip.SetTip(btn, staged ? "Unstage this file" : "Stage this file");
         btn.Click += (_, e) => { ToggleStage(path, !staged); e.Handled = true; };
@@ -2392,6 +2453,34 @@ internal sealed partial class GitTreeWindow : Window
         };
         row.ContextRequested += (_, e) => { ShowFileMenu(fc, staged, row); e.Handled = true; };
         return row;
+    }
+
+    private const string RowStageTag = "row-stage";
+
+    // The files picked in one of the two working-tree lists, in list order.
+    private static List<GitFileChange> Picked(ListBox? list) =>
+        list?.SelectedItems is { } items ? items.OfType<GitFileChange>().Where(f => f.Path is not null).ToList() : [];
+
+    // With several files picked in a list, its header button acts on them ("Stage (3)") and the rows' own +/− go,
+    // so there's one way to act on the selection.
+    private void UpdateMultiSelect()
+    {
+        if (_stageAllBtn is null || _unstageAllBtn is null) return;
+        int u = Picked(_unstagedList).Count, s = Picked(_stagedList).Count;
+        _stageAllBtn.Content = u > 1 ? $"Stage ({u})" : "Stage all";
+        _unstageAllBtn.Content = s > 1 ? $"Unstage ({s})" : "Unstage all";
+        ToolTip.SetTip(_stageAllBtn, u > 1 ? $"Stage the {u} selected files" : "Stage every change");
+        ToolTip.SetTip(_unstageAllBtn, s > 1 ? $"Unstage the {s} selected files" : "Unstage everything");
+        foreach (var (list, multi) in new[] { (_unstagedList, u > 1), (_stagedList, s > 1) })
+            foreach (var row in list.GetRealizedContainers())
+                foreach (var b in row.GetVisualDescendants().OfType<Button>().Where(b => Equals(b.Tag, RowStageTag)))
+                    b.IsVisible = !multi;
+    }
+
+    private void StagePaths(IReadOnlyList<GitFileChange> files, bool stage)
+    {
+        var paths = files.SelectMany(f => f.OrigPath is { } o && stage ? [o, f.Path!] : new[] { f.Path! }).Distinct().ToList();
+        RunWorkingTreeOp(cwd => stage ? _git.StagePaths(cwd, paths) : _git.UnstagePaths(cwd, paths));
     }
 
     private FuncDataTemplate<GitDiffFile> CommitFileTemplate() => new((gf, _) =>

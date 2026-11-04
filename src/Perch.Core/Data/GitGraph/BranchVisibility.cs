@@ -23,7 +23,8 @@ public sealed class GraphRepoPrefs
 internal static class BranchVisibility
 {
     /// <summary>The All scope's walk with <paramref name="hidden"/> left out: each <c>--exclude</c> applies to the next
-    /// <c>--branches</c>/<c>--remotes</c> only, and takes the name without its <c>refs/heads/</c> or <c>refs/remotes/</c>.</summary>
+    /// <c>--branches</c>/<c>--remotes</c>/<c>--tags</c> only, and takes the name without its <c>refs/heads/</c>,
+    /// <c>refs/remotes/</c> or <c>refs/tags/</c>.</summary>
     public static GraphLogQuery AllExcept(IReadOnlyCollection<string> hidden, IEnumerable<string> extraTips)
     {
         var tips = new List<string>();
@@ -32,7 +33,10 @@ internal static class BranchVisibility
         tips.Add("--branches");
         foreach (var h in hidden)
             if (h.StartsWith("refs/remotes/", StringComparison.Ordinal)) tips.Add("--exclude=" + h["refs/remotes/".Length..]);
-        tips.AddRange(["--remotes", "--tags", "HEAD", .. extraTips]);
+        tips.Add("--remotes");
+        foreach (var h in hidden)
+            if (h.StartsWith("refs/tags/", StringComparison.Ordinal)) tips.Add("--exclude=" + h["refs/tags/".Length..]);
+        tips.AddRange(["--tags", "HEAD", .. extraTips]);
         return new GraphLogQuery(tips, []);
     }
 
@@ -42,6 +46,20 @@ internal static class BranchVisibility
         var seen = new HashSet<string>(prefs.Seen ?? [], StringComparer.Ordinal);
         var hidden = new HashSet<string>(prefs.Hidden, StringComparer.Ordinal);
         return refs.Where(r => r.Kind == GraphRefKind.RemoteBranch && !seen.Contains(r.FullName) && !hidden.Contains(r.FullName)).ToList();
+    }
+
+    /// <summary>
+    /// The branches of <paramref name="kind"/> a bulk hide takes: not already hidden, and never the trunk or a branch a
+    /// worktree has checked out (hiding those would only make the graph lie, as a single hide refuses too).
+    /// </summary>
+    public static List<GraphRef> Hideable(IEnumerable<GraphRef> refs, GraphRefKind kind, IReadOnlySet<string> hidden,
+        IEnumerable<string?> checkedOut, IEnumerable<string> trunk)
+    {
+        var busy = checkedOut.OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var main = trunk.ToHashSet(StringComparer.Ordinal);
+        return refs.Where(r => r.Kind == kind && !hidden.Contains(r.FullName) && !main.Contains(r.FullName)
+                               && !(r.Kind == GraphRefKind.LocalBranch && busy.Contains(r.Name)))
+            .ToList();
     }
 
     /// <summary>Marks every current remote branch as seen (turning auto-hide on, or its first look at a repo).</summary>

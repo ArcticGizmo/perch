@@ -9,6 +9,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.3] - 2026-11-04
+
+- Git graph lines stay close to main (they'd been social distancing)
+- Remote holds the main line when you're only behind it
+- Stashes sit where they were made, not all at the top
+- Resizable branch panel
+- Hide all branches, or just the ones that aren't yours
+- Tidier branch list: here/worktree marks, aligned ahead/behind column
+- Tags can be hidden, and grouped by name into a tree
+- "Tag here…" and "Check out this commit" on commits
+- Author column drops out while pictures are on
+- Pull and Push spin while they work; the rest of the toolbar waits
+- Confirmations open inside the graph window, not off-screen
+- Ctrl/Shift+click several files to stage, discard, delete or stash them
+- Stash a single file from its right-click menu
+
+---
+
 ## [v0.6.2] - 2026-11-03
 
 - "View tree" grows up into a full git graph (it was a list; it had ambitions)

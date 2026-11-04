@@ -52,7 +52,8 @@ internal sealed partial class GitTreeWindow
     private string? WhyNotHide(GraphRef r)
     {
         if (_snap is null) return "";
-        if (_snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt) return $"{r.Name} is checked out in {wt.Name}.";
+        if (r.Kind == GraphRefKind.Tag) return null;
+        if (r.Kind == GraphRefKind.LocalBranch && _snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt) return $"{r.Name} is checked out in {wt.Name}.";
         if (BranchVisibility.TrunkRefs(_snap.Refs, GraphLoader.PrimaryBranch(_snap.Refs)).Contains(r.FullName))
             return $"{r.Name} is the main line of the graph.";
         return null;
@@ -76,17 +77,145 @@ internal sealed partial class GitTreeWindow
             SetHidden([r], true);
     }
 
-    // The rail's "⋯" on Local / Remotes: the auto-hide setting and a way back for everything hidden.
-    private void ShowVisibilityMenu(Control anchor)
+    // The rail's "⋯" on Local / Remotes / Tags: one-off hides and the way back for that section above the divider, and
+    // below it the section's standing setting (auto-hide on Remotes, grouping on Tags), drawn as a checkbox so it doesn't
+    // read as one more action.
+    private void ShowVisibilityMenu(Control anchor, GraphRefKind kind)
+    {
+        if (VisibilityMenuItems(kind) is { } items) ShowMenu(anchor, atPointer: true, items.ToArray());
+    }
+
+    /// <summary>For the headless render: a section's "⋯" menu as text, one line per item ("---" a divider, "[x]"/"[ ]"
+    /// a checkbox, "(off)" disabled).</summary>
+    internal string PreviewVisibilityMenu(GraphRefKind kind) =>
+        VisibilityMenuItems(kind) is not { } items ? "(no snapshot)" : string.Join(Environment.NewLine, items.Select(c => c switch
+        {
+            Separator => "---",
+            MenuItem m => (m.ToggleType == MenuItemToggleType.CheckBox ? m.IsChecked ? "[x] " : "[ ] " : "")
+                          + (m.Header is TextBlock t ? t.Text : m.Header?.ToString()) + (m.IsEnabled ? "" : "  (off)"),
+            _ => c.GetType().Name,
+        }));
+
+    private List<Control>? VisibilityMenuItems(GraphRefKind kind)
+    {
+        if (_snap is not { } snap) return null;
+        var hideable = Hideable(snap, kind);
+        var hidden = snap.Refs.Where(r => r.Kind == kind && snap.IsHidden(r)).ToList();
+        if (kind == GraphRefKind.Tag) return TagMenuItems(hideable, hidden);
+        var what = kind == GraphRefKind.RemoteBranch ? "remote" : "local";
+        var trunk = GraphLoader.PrimaryBranch(snap.Refs) is { } p ? GraphCheckout.LocalName(p) : "main";
+
+        var items = new List<Control>
+        {
+            Enabled(Item(hideable.Count > 0 ? $"Hide all {hideable.Count} {what} branch{Es(hideable.Count)}" : $"Hide all {what} branches",
+                () => HideAll(hideable)), hideable.Count > 0),
+            Enabled(Item($"Hide {what} branches that aren't mine", () => HideNotMine(snap, hideable)), hideable.Count > 0),
+        };
+        if (hidden.Count > 0)
+            items.Add(Item($"Show all {hidden.Count} hidden {what} branch{Es(hidden.Count)}", () => SetHidden(hidden, false)));
+        items.Add(new Separator());
+        if (kind == GraphRefKind.RemoteBranch)
+        {
+            var auto = new MenuItem
+            {
+                Header = MenuText("Hide new remote branches that aren't mine"),
+                ToggleType = MenuItemToggleType.CheckBox, IsChecked = _settings.GitTreeAutoHideOthers,
+            };
+            auto.Click += (_, _) => ToggleAutoHide();
+            items.Add(auto);
+        }
+        items.Add(Note($"Yours: it has a commit {trunk} doesn't, made with your git user.email or user.name. " +
+                       $"{trunk} and branches checked out in a worktree always stay."));
+        return items;
+    }
+
+    // Tags: hide or show them all, and (below the divider, as a setting) whether the rail groups them by name.
+    private List<Control> TagMenuItems(List<GraphRef> hideable, List<GraphRef> hidden)
     {
         var items = new List<Control>
         {
-            Item((_settings.GitTreeAutoHideOthers ? "✓  " : "     ") + "Hide new remote branches that aren't mine", ToggleAutoHide),
-            Note("Yours: it has a commit main doesn't, made with your git user.email or user.name"),
+            Enabled(Item(hideable.Count > 0 ? $"Hide all {hideable.Count} tag{S(hideable.Count)}" : "Hide all tags", () => HideAll(hideable)),
+                hideable.Count > 0),
         };
-        if (_snap is { } snap && snap.Refs.Where(snap.IsHidden).ToList() is { Count: > 0 } hidden)
-            items.Add(Item($"Show all {hidden.Count} hidden branch{(hidden.Count == 1 ? "" : "es")}", () => SetHidden(hidden, false)));
-        ShowMenu(anchor, atPointer: true, items.ToArray());
+        if (hidden.Count > 0)
+            items.Add(Item($"Show all {hidden.Count} hidden tag{S(hidden.Count)}", () => SetHidden(hidden, false)));
+        items.Add(new Separator());
+        var grouped = new MenuItem
+        {
+            Header = MenuText("Group tags by name"),
+            ToggleType = MenuItemToggleType.CheckBox, IsChecked = _settings.GitTreeTagGroups,
+        };
+        grouped.Click += (_, _) =>
+        {
+            _settings.GitTreeTagGroups = !_settings.GitTreeTagGroups;
+            _settings.Save();
+            _rail.SetTagGroups(_settings.GitTreeTagGroups);
+        };
+        items.Add(grouped);
+        items.Add(Note("Grouped: split at / . - _ into a tree, newest version first. Off: in graph order."));
+        return items;
+    }
+
+    private static string Es(int n) => n == 1 ? "" : "es";
+    private static string S(int n) => n == 1 ? "" : "s";
+
+    // A tag group's eye in the rail.
+    private void SetGroupHidden(IReadOnlyList<GraphRef> refs, bool hide)
+    {
+        var change = refs.Where(r => _snap?.IsHidden(r) != hide).ToList();
+        if (change.Count == 0) return;
+        SetHidden(change, hide);
+        if (hide) ShowToast($"Hid {change.Count} tag{S(change.Count)} from the graph", "", () => SetHidden(change, false));
+    }
+
+    private static MenuItem Enabled(MenuItem m, bool on)
+    {
+        m.IsEnabled = on;
+        return m;
+    }
+
+    private static List<GraphRef> Hideable(GraphSnapshot snap, GraphRefKind kind) =>
+        BranchVisibility.Hideable(snap.Refs, kind, snap.Refs.Where(snap.IsHidden).Select(r => r.FullName).ToHashSet(StringComparer.Ordinal),
+            snap.Worktrees.Select(w => w.Branch), BranchVisibility.TrunkRefs(snap.Refs, GraphLoader.PrimaryBranch(snap.Refs)));
+
+    private void HideAll(List<GraphRef> refs)
+    {
+        SetHidden(refs, true);
+        var noun = refs.All(r => r.Kind == GraphRefKind.Tag) ? $"tag{S(refs.Count)}" : $"branch{Es(refs.Count)}";
+        ShowToast($"Hid {refs.Count} {noun} from the graph", "", () => SetHidden(refs, false));
+    }
+
+    // Which of them are the user's needs a git log over them all, so it runs off the UI thread behind a busy toast.
+    private void HideNotMine(GraphSnapshot snap, List<GraphRef> candidates)
+    {
+        if (_autoHideRunning) return;
+        _autoHideRunning = true;
+        var key = _repoKey;
+        var root = snap.Root;
+        var trunk = BranchVisibility.TrunkRefs(snap.Refs, GraphLoader.PrimaryBranch(snap.Refs));
+        ShowToast($"Looking for your commits on {candidates.Count} branch{Es(candidates.Count)}…", "", null, busy: true);
+        System.Threading.Tasks.Task.Run(() => BranchVisibility.Mine(root, candidates, trunk)).ContinueWith(t =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                _autoHideRunning = false;
+                if (!IsVisible || key != _repoKey) return;
+                if (!t.IsCompletedSuccessfully)
+                {
+                    ShowToast("Couldn't tell which branches are yours", "", null, error: true);
+                    return;
+                }
+                var others = candidates.Where(r => !t.Result.Contains(r.FullName)).ToList();
+                if (others.Count == 0)
+                {
+                    ShowToast("Every one of them is yours: nothing hidden", "", null);
+                    return;
+                }
+                SetHidden(others, true);
+                ShowToast(others.Count == 1 ? $"Hid {others[0].Name}: it isn't yours" : $"Hid {others.Count} branches that aren't yours",
+                    "", () => SetHidden(others, false));
+            });
+        });
     }
 
     private void ToggleAutoHide()

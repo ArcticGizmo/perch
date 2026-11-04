@@ -18,7 +18,7 @@ internal static class GraphLoader
     /// <param name="baseOverride">For <see cref="GraphScope.Branch"/>: the base ref to scope against; null picks
     /// the best candidate, and an empty string shows HEAD's history unscoped.</param>
     /// <param name="hidden">Branches (full ref names) to leave out of the All scope's walk and the pills.</param>
-    public static GraphSnapshot? Load(string cwd, GraphScope scope, GraphSnapshot? previous = null,
+    public static GraphSnapshot? Load(string cwd, GraphScope scope,
         Action<string, TimeSpan>? timing = null, int pageSize = PageSize, string? baseOverride = null,
         IReadOnlySet<string>? hidden = null)
     {
@@ -44,14 +44,13 @@ internal static class GraphLoader
         var worktrees = Resolve(trees, statusTask.Result, refs);
         var log = logTask.Result is { } raw ? GraphLogReader.ParseLog(raw) : [];
         Mark("parse");
-        var hints = previous is not null && previous.Scope == scope ? previous.Hints() : null;
         int current = trees.ToList().FindIndex(t => t.IsCurrent);
         var context = new GraphSnapshot.ScopeContext(current >= 0 ? statusTask.Result[current] : null, baseRef, candidates)
         {
             InProgress = GitOps.InProgress(cwd),
             Hidden = hidden,
         };
-        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), hints, pageSize, context,
+        var snapshot = GraphSnapshot.Build(root, scope, query, log, refs, worktrees, PrimaryBranch(refs), pageSize, context,
             stashTask.Result);
         Mark("layout");
         return snapshot;
