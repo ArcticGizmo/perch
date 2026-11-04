@@ -28,7 +28,7 @@ internal sealed partial class GitTreeWindow
             items.Add(Item("Branch here…", () => AskBranchHere(r.Target, r.Name)));
             items.Add(Item(branch ? $"Create a worktree for {name}" : $"Create a worktree at {name}…", () => NewWorktreeFrom(DragSource.Of(r))));
         }
-        if (branch)
+        if (branch || r.Kind == GraphRefKind.Tag)
             items.Add(WhyNotHide(r) is { Length: > 0 } why ? Note($"Can't hide: {ShortNames(why)}") : Item($"Hide {name} from the graph", () => ToggleHidden(r, true)));
         if (r.Kind == GraphRefKind.LocalBranch)
         {
@@ -67,14 +67,18 @@ internal sealed partial class GitTreeWindow
         }
         else
         {
-            items.Add(Item("Branch here…", () => AskBranchHere(c.Hash, $"{c.ShortHash} · {c.Subject}")));
+            // Moving this worktree: onto a branch at this commit, or onto the commit itself.
             foreach (var b in snap.RefsAt(c.Hash).Where(x => x.Kind == GraphRefKind.LocalBranch).Take(4))
                 items.Add(Item($"Check out {ShortNames(b.Name)}", () => BeginCheckout(GraphCheckout.ForRef(snap, b), _graph.Canvas)));
             var detach = new CheckoutPlan(CheckoutAction.Detach, c.Hash, c.Hash);
-            items.Add(Item($"Check out {c.ShortHash} (detached)", () => ConfirmAndRun(detach, null, _graph.Canvas, atPointer: true)));
+            items.Add(Item($"Check out this commit ({c.ShortHash}, detached)", () => ConfirmAndRun(detach, null, _graph.Canvas, atPointer: true)));
+            items.Add(new Separator());
+            // Making something new that starts here.
+            items.Add(Item("Branch here…", () => AskBranchHere(c.Hash, $"{c.ShortHash} · {c.Subject}")));
+            items.Add(Item("Tag here…", () => AskTagHere(c.Hash, $"{c.ShortHash} · {c.Subject}")));
             items.Add(Item($"Create a worktree at {c.ShortHash}…", () => NewWorktreeFrom(DragSource.Of(c))));
             items.Add(new Separator());
-            items.Add(Item("Copy commit hash", () => Clipboard?.SetTextAsync(c.Hash)));
+            items.Add(Item("Copy commit SHA", () => Clipboard?.SetTextAsync(c.Hash)));
             items.Add(Item("Copy message", () => Clipboard?.SetTextAsync(c.Subject)));
         }
         ShowMenu(_graph.Canvas, atPointer: true, items.ToArray());
@@ -124,6 +128,19 @@ internal sealed partial class GitTreeWindow
         RefreshStatus(preserveSelection: true);
     }
 
+    // A lightweight tag; it stays local (Push doesn't send tags), and Undo deletes it again.
+    private void AskTagHere(string hash, string at) =>
+        OpenNameDialog("New tag", $"At {ShortNames(at)}. It stays in this clone until you push it.", "Create tag", "",
+            name => GraphCheckout.TagNameProblem(name, _snap?.Refs ?? []),
+            (name, _) =>
+            {
+                if (_snap is not { } snap) return;
+                var root = snap.Root;
+                RunRepoOp(root, $"Tagging {Short(hash)}…", repo => GitOps.CreateTag(repo, name, hash),
+                    done: $"Tagged {Short(hash)} as {name}",
+                    undo: () => RunRepoOp(root, $"Deleting tag {name}…", repo => GitOps.DeleteTag(repo, name)));
+            });
+
     // `git branch -d`; a branch with unmerged commits asks before `-D`. Undo puts the branch back at its commit.
     private async void DeleteBranch(GraphRef r)
     {
@@ -135,7 +152,7 @@ internal sealed partial class GitTreeWindow
         if (GitOps.IsUnmerged(result))
         {
             HideToast();
-            bool go = await ConfirmDialog.ShowAsync(this, "Delete branch",
+            bool go = await ConfirmAsync("Delete branch",
                 $"{name} has commits that aren't merged into another branch. Delete it anyway? It points at {Short(hash)}, and Undo brings it back.",
                 "Delete", "Keep it");
             if (!go || !IsVisible) return;

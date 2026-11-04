@@ -52,7 +52,8 @@ internal sealed partial class GitTreeWindow
     private string? WhyNotHide(GraphRef r)
     {
         if (_snap is null) return "";
-        if (_snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt) return $"{r.Name} is checked out in {wt.Name}.";
+        if (r.Kind == GraphRefKind.Tag) return null;
+        if (r.Kind == GraphRefKind.LocalBranch && _snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt) return $"{r.Name} is checked out in {wt.Name}.";
         if (BranchVisibility.TrunkRefs(_snap.Refs, GraphLoader.PrimaryBranch(_snap.Refs)).Contains(r.FullName))
             return $"{r.Name} is the main line of the graph.";
         return null;
@@ -76,8 +77,9 @@ internal sealed partial class GitTreeWindow
             SetHidden([r], true);
     }
 
-    // The rail's "⋯" on Local / Remotes: one-off hides and the way back for that section above the divider, and below
-    // it (Remotes only) the standing auto-hide setting, drawn as a checkbox so it doesn't read as one more action.
+    // The rail's "⋯" on Local / Remotes / Tags: one-off hides and the way back for that section above the divider, and
+    // below it the section's standing setting (auto-hide on Remotes, grouping on Tags), drawn as a checkbox so it doesn't
+    // read as one more action.
     private void ShowVisibilityMenu(Control anchor, GraphRefKind kind)
     {
         if (VisibilityMenuItems(kind) is { } items) ShowMenu(anchor, atPointer: true, items.ToArray());
@@ -97,9 +99,10 @@ internal sealed partial class GitTreeWindow
     private List<Control>? VisibilityMenuItems(GraphRefKind kind)
     {
         if (_snap is not { } snap) return null;
-        var what = kind == GraphRefKind.RemoteBranch ? "remote" : "local";
         var hideable = Hideable(snap, kind);
         var hidden = snap.Refs.Where(r => r.Kind == kind && snap.IsHidden(r)).ToList();
+        if (kind == GraphRefKind.Tag) return TagMenuItems(hideable, hidden);
+        var what = kind == GraphRefKind.RemoteBranch ? "remote" : "local";
         var trunk = GraphLoader.PrimaryBranch(snap.Refs) is { } p ? GraphCheckout.LocalName(p) : "main";
 
         var items = new List<Control>
@@ -126,7 +129,44 @@ internal sealed partial class GitTreeWindow
         return items;
     }
 
+    // Tags: hide or show them all, and (below the divider, as a setting) whether the rail groups them by name.
+    private List<Control> TagMenuItems(List<GraphRef> hideable, List<GraphRef> hidden)
+    {
+        var items = new List<Control>
+        {
+            Enabled(Item(hideable.Count > 0 ? $"Hide all {hideable.Count} tag{S(hideable.Count)}" : "Hide all tags", () => HideAll(hideable)),
+                hideable.Count > 0),
+        };
+        if (hidden.Count > 0)
+            items.Add(Item($"Show all {hidden.Count} hidden tag{S(hidden.Count)}", () => SetHidden(hidden, false)));
+        items.Add(new Separator());
+        var grouped = new MenuItem
+        {
+            Header = MenuText("Group tags by name"),
+            ToggleType = MenuItemToggleType.CheckBox, IsChecked = _settings.GitTreeTagGroups,
+        };
+        grouped.Click += (_, _) =>
+        {
+            _settings.GitTreeTagGroups = !_settings.GitTreeTagGroups;
+            _settings.Save();
+            _rail.SetTagGroups(_settings.GitTreeTagGroups);
+        };
+        items.Add(grouped);
+        items.Add(Note("Grouped: split at / . - _ into a tree, newest version first. Off: in graph order."));
+        return items;
+    }
+
     private static string Es(int n) => n == 1 ? "" : "es";
+    private static string S(int n) => n == 1 ? "" : "s";
+
+    // A tag group's eye in the rail.
+    private void SetGroupHidden(IReadOnlyList<GraphRef> refs, bool hide)
+    {
+        var change = refs.Where(r => _snap?.IsHidden(r) != hide).ToList();
+        if (change.Count == 0) return;
+        SetHidden(change, hide);
+        if (hide) ShowToast($"Hid {change.Count} tag{S(change.Count)} from the graph", "", () => SetHidden(change, false));
+    }
 
     private static MenuItem Enabled(MenuItem m, bool on)
     {
@@ -141,7 +181,8 @@ internal sealed partial class GitTreeWindow
     private void HideAll(List<GraphRef> refs)
     {
         SetHidden(refs, true);
-        ShowToast($"Hid {refs.Count} branch{Es(refs.Count)} from the graph", "", () => SetHidden(refs, false));
+        var noun = refs.All(r => r.Kind == GraphRefKind.Tag) ? $"tag{S(refs.Count)}" : $"branch{Es(refs.Count)}";
+        ShowToast($"Hid {refs.Count} {noun} from the graph", "", () => SetHidden(refs, false));
     }
 
     // Which of them are the user's needs a git log over them all, so it runs off the UI thread behind a busy toast.

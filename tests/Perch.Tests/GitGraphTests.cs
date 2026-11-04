@@ -459,6 +459,17 @@ public class GitGraphTests
     }
 
     [Fact]
+    public void TagNameProblem_SameRulesAndOnlyTagsClash()
+    {
+        GraphRef[] refs = [.. Refs, new("v1.0.0", "refs/tags/v1.0.0", GraphRefKind.Tag, "m1")];
+        Assert.Null(GraphCheckout.TagNameProblem("spa/v0.2.41", refs));
+        Assert.Null(GraphCheckout.TagNameProblem("feat", refs));   // a branch of that name doesn't stop a tag
+        Assert.Equal("A tag called v1.0.0 already exists.", GraphCheckout.TagNameProblem("v1.0.0", refs));
+        Assert.Equal("Tag names can't contain spaces.", GraphCheckout.TagNameProblem("v1 final", refs));
+        Assert.Equal("Branch names can't contain spaces.", GraphCheckout.BranchNameProblem("has space", refs));
+    }
+
+    [Fact]
     public void Snapshot_AppendResolvesATetherToAnUnloadedHead()
     {
         var detached = new GraphWorktree("C:/r--x", null, "m1", Changes: 2, IsCurrent: false);
@@ -697,8 +708,8 @@ public class GitGraphTests
     [Fact]
     public void Hidden_BranchesAreExcludedFromTheirOwnKindOfWalkAndLosePills()
     {
-        var q = BranchVisibility.AllExcept(["refs/heads/old", "refs/remotes/origin/spike"], ["d1"]);
-        Assert.Equal(["--exclude=old", "--branches", "--exclude=origin/spike", "--remotes", "--tags", "HEAD", "d1"], q.Tips);
+        var q = BranchVisibility.AllExcept(["refs/heads/old", "refs/remotes/origin/spike", "refs/tags/spa/v0.1"], ["d1"]);
+        Assert.Equal(["--exclude=old", "--branches", "--exclude=origin/spike", "--remotes", "--exclude=spa/v0.1", "--tags", "HEAD", "d1"], q.Tips);
 
         var s = GraphSnapshot.Build("C:/r", GraphScope.All, q, [C("m2", "m1"), C("m1")],
             [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2"), new("old", "refs/heads/old", GraphRefKind.LocalBranch, "m1")],
@@ -724,6 +735,29 @@ public class GitGraphTests
         Assert.Equal(["origin/b"], BranchVisibility.Unseen(refs, prefs).Select(r => r.Name));
         Assert.Equal(["refs/heads/main", "refs/remotes/origin/main"],
             BranchVisibility.TrunkRefs([refs[0], new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m"), refs[1]], "main"));
+    }
+
+    [Fact]
+    public void TagTree_GroupsBySharedPrefixWithoutSingleChildGroups()
+    {
+        GraphRef T(string name) => new(name, "refs/tags/" + name, GraphRefKind.Tag, "c");
+        var tree = TagTree.Build([T("spa/v0.2.39"), T("spa/v0.2.40"), T("spa/v0.3.0"), T("api/v1.0.0"), T("v0.5.9"), T("v0.5.10"), T("v0.6.0")]);
+
+        // api has one tag, so it's just that tag; spa/v0 holds two version groups; v0 holds the 0.6 tag and the 0.5 group.
+        string Shape(TagTree.Node n) => n.IsGroup ? $"{n.Label}[{string.Join(",", n.Children.Select(Shape))}]" : n.Label;
+        Assert.Equal(["api/v1.0.0", "spa/v0[spa/v0.3.0,spa/v0.2[spa/v0.2.40,spa/v0.2.39]]", "v0[v0.6.0,v0.5[v0.5.10,v0.5.9]]"],
+            tree.Select(Shape));
+        Assert.Equal(3, tree[1].Tags.Count());
+    }
+
+    [Fact]
+    public void TagTree_NaturalOrderPutsHigherNumbersFirstAndTextAToZ()
+    {
+        Assert.True(TagTree.Natural("10", "9") < 0);
+        Assert.True(TagTree.Natural("v10", "v9") < 0);
+        Assert.True(TagTree.Natural("api", "spa") < 0);
+        Assert.True(TagTree.Natural("rc2", "rc10") > 0);
+        Assert.Equal(0, TagTree.Natural("007", "7"));
     }
 
     [Fact]

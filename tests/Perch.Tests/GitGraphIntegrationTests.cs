@@ -459,6 +459,39 @@ public sealed class GitGraphIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void PickedFiles_StageTogetherAndStashAloneLeavingTheRest()
+    {
+        if (!_ready || !Commit("b.txt", "b")) return;
+        File.WriteAllText(Path.Combine(_repo, "a.txt"), "a wip\n");
+        File.WriteAllText(Path.Combine(_repo, "b.txt"), "b wip\n");
+        File.WriteAllText(Path.Combine(_repo, "new.txt"), "new\n");
+        var git = new Perch.Data.GitRepoService();
+
+        Assert.True(git.StagePaths(_repo, ["a.txt", "new.txt"]).Ok);
+        Assert.Equal([" M b.txt", "A  new.txt", "M  a.txt"],
+            Run("status", "--porcelain").stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal));
+        Assert.True(git.UnstagePaths(_repo, ["a.txt"]).Ok);
+
+        // Stash a.txt and the new file only: b.txt's change stays in the working tree.
+        Assert.True(GitOps.StashPushPaths(_repo, "WIP on main: 2 files", ["a.txt", "new.txt"]).Ok);
+        Assert.Equal([" M b.txt"], Run("status", "--porcelain").stdout.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.False(File.Exists(Path.Combine(_repo, "new.txt")));
+        Assert.True(GitOps.StashPopTop(_repo).Ok);
+        Assert.Equal("a wip", File.ReadAllText(Path.Combine(_repo, "a.txt")).Trim());
+        Assert.True(File.Exists(Path.Combine(_repo, "new.txt")));
+    }
+
+    [Fact]
+    public void PathBatches_SplitUnderTheLimitAndKeepEveryPath()
+    {
+        var paths = Enumerable.Range(0, 50).Select(i => $"dir/file{i:D3}.txt").ToList();   // 16 chars + 3 each
+        var batches = Perch.Data.GitRepoService.PathBatches(paths, 200).ToList();
+        Assert.All(batches, b => Assert.True(b.Sum(p => p.Length + 3) <= 200));
+        Assert.Equal(paths, batches.SelectMany(b => b));
+        Assert.Single(Perch.Data.GitRepoService.PathBatches(["one"], 200));
+    }
+
+    [Fact]
     public void StashThenPopTop_RoundTrips()
     {
         if (!_ready) return;

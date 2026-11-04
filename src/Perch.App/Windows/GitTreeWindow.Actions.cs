@@ -32,7 +32,13 @@ internal sealed partial class GitTreeWindow
     private readonly List<Border> _actionDividers = new();
     private readonly List<Shape> _actionIcons = new();
     private readonly Dictionary<Button, TextBlock> _actionLabels = new();
+    private readonly Dictionary<Button, (Shape Icon, string Data)> _actionIconOf = new();
     private readonly HashSet<Button> _actionOff = new();
+
+    // The toolbar button whose action is running: its icon spins and the rest of the toolbar is off until it's done.
+    private Button? _actionRunning;
+    private DispatcherTimer? _spinTimer;
+    private const string SpinnerIcon = "M7,1.5 A5.5,5.5 0 1 1 1.5,7";
 
     private Control BuildActionBar()
     {
@@ -72,9 +78,10 @@ internal sealed partial class GitTreeWindow
     private Button ActionButton(string label, string icon, Action act)
     {
         var text = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center };
+        var glyph = ActionIcon(icon, 14, 14);
         var b = new Button
         {
-            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { ActionIcon(icon, 14, 14), text } },
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { glyph, text } },
             Padding = new Thickness(10, 5), CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1),
             VerticalAlignment = VerticalAlignment.Center, Cursor = new Cursor(StandardCursorType.Hand),
         };
@@ -82,7 +89,41 @@ internal sealed partial class GitTreeWindow
         b.Click += (_, _) => { if (!_actionOff.Contains(b)) act(); };
         _actionButtons.Add(b);
         _actionLabels[b] = text;
+        _actionIconOf[b] = (glyph, icon);
         return b;
+    }
+
+    private void StartSpinner(Button b)
+    {
+        _actionRunning = b;
+        if (_actionIconOf.TryGetValue(b, out var icon))
+        {
+            icon.Icon.Data = Geometry.Parse(SpinnerIcon);
+            var turn = new RotateTransform();
+            icon.Icon.RenderTransform = turn;
+            if (!PlatformServices.MotionPreference.ReduceMotion)
+            {
+                _spinTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Render, (_, _) =>
+                {
+                    if (_actionRunning is { } run && _actionIconOf[run].Icon.RenderTransform is RotateTransform r)
+                        r.Angle = (r.Angle + 12) % 360;
+                });
+                _spinTimer.Start();
+            }
+        }
+        UpdateActionBar();
+    }
+
+    private void StopSpinner()
+    {
+        _spinTimer?.Stop();
+        if (_actionRunning is { } b && _actionIconOf.TryGetValue(b, out var icon))
+        {
+            icon.Icon.Data = Geometry.Parse(icon.Data);
+            icon.Icon.RenderTransform = null;
+        }
+        _actionRunning = null;
+        UpdateActionBar();
     }
 
     private Shape ActionIcon(string data, double w, double h)
@@ -159,6 +200,14 @@ internal sealed partial class GitTreeWindow
 
         SetAction(_popBtn, here is not null && stashes > 0, stashes > 1 ? $"Pop ({stashes})" : "Pop");
         ToolTip.SetTip(_popBtn, stashes > 0 ? "Apply the newest stash here and drop it  (git stash pop)" : "No stashes");
+
+        // One at a time: the running one stays at full strength with its spinner, the rest go off until it's done.
+        if (_actionRunning is { } running)
+            foreach (var b in _actionButtons.Append(_pullMenuBtn))
+            {
+                SetAction(b, false);
+                if (b == running) b.Opacity = 1;
+            }
     }
 
     private static string PullTip(PullMode mode, string? branch, bool hasUpstream, string? upstream) => mode switch
@@ -195,11 +244,12 @@ internal sealed partial class GitTreeWindow
         bool fetch = mode == PullMode.FetchAll;
         RunHereAction(fetch ? "Fetching…" : "Pulling…", cover: !fetch, cwd => GitOps.Pull(cwd, mode),
             r => fetch ? "Fetched" : r.Message.Contains("up to date", StringComparison.OrdinalIgnoreCase) ? "Already up to date" : "Pulled",
-            conflict: $"The pull's {(mode == PullMode.Rebase ? "rebase" : "merge")} stopped on conflicts: resolve them in Changes, stage them, then Continue.");
+            conflict: $"The pull's {(mode == PullMode.Rebase ? "rebase" : "merge")} stopped on conflicts: resolve them in Changes, stage them, then Continue.",
+            from: _pullBtn);
     }
 
     private void Push() =>
-        RunHereAction("Pushing…", cover: false, cwd => (GitOps.Push(cwd), null), _ => "Pushed", conflict: null);
+        RunHereAction("Pushing…", cover: false, cwd => (GitOps.Push(cwd), null), _ => "Pushed", conflict: null, from: _pushBtn);
 
     // This worktree's changes by default; another worktree's when stashed from its WIP row.
     private void Stash(GraphWorktree? where = null)
@@ -215,12 +265,12 @@ internal sealed partial class GitTreeWindow
             if (!r.Ok || GitOps.StashTop(cwd) is not { } made) return (r, null);
             return (r, () => GitOps.StashPop(cwd, made));
         }, _ => wt.IsCurrent ? $"Stashed {changes}" : $"Stashed {changes} in {wt.Name}", conflict: null,
-            worktree: wt.IsCurrent ? null : wt.Path);
+            worktree: wt.IsCurrent ? null : wt.Path, from: wt.IsCurrent ? _stashBtn : null);
     }
 
     private void Pop() =>
         RunHereAction("Popping the stash…", cover: true, cwd => (GitOps.StashPopTop(cwd), null), _ => "Stash applied and dropped",
-            conflict: StashConflict);
+            conflict: StashConflict, from: _popBtn);
 
     private const string StashConflict = "The stash conflicted with your changes: resolve them in Changes. It stays in the stash list until you drop it.";
 
@@ -265,7 +315,7 @@ internal sealed partial class GitTreeWindow
 
     private async void DropStash(GraphStash st)
     {
-        bool go = await ConfirmDialog.ShowAsync(this, "Drop stash",
+        bool go = await ConfirmAsync("Drop stash",
             $"Drop {st.Selector} ({st.Message}) without applying it? Undo in the toast puts it back.", "Drop", "Keep it");
         if (!go || !IsVisible) return;
         RunHereAction("Dropping the stash…", cover: true, cwd =>
@@ -278,16 +328,18 @@ internal sealed partial class GitTreeWindow
     // Runs one action off the UI thread, in this window's worktree unless <paramref name="worktree"/> names another, and
     // reports it in the toast. A pull that stops on conflicts leaves the in-progress banner to the refresh.
     private void RunHereAction(string busy, bool cover, Func<string, (GitOpResult Result, Func<GitOpResult>? Undo)> op,
-        Func<GitOpResult, string> done, string? conflict, string? worktree = null)
+        Func<GitOpResult, string> done, string? conflict, string? worktree = null, Button? from = null)
     {
         if (_cwd is not { } origin) return;
         string cwd = worktree ?? origin;
         ShowToast(busy, "", null, busy: true);
         if (cover) SetGraphBusy(busy);
+        if (from is not null) StartSpinner(from);
         System.Threading.Tasks.Task.Run(() => op(cwd)).ContinueWith(t =>
         {
             Dispatcher.UIThread.Post(() =>
             {
+                if (from is not null) StopSpinner();
                 if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); HideToast(); return; }
                 if (!IsVisible) return;
                 ClearBusyOnNextLoad();

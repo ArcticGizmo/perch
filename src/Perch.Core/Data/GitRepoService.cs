@@ -329,6 +329,44 @@ internal sealed class GitRepoService
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
+    /// <summary>Stages several paths in as few git calls as the command-line length allows.</summary>
+    public (bool Ok, string Error) StagePaths(string cwd, IReadOnlyList<string> paths) =>
+        RunForPaths(cwd, paths, ["add", "--"]);
+
+    /// <summary>Unstages several paths (<c>git restore --staged</c>), leaving their working-tree changes.</summary>
+    public (bool Ok, string Error) UnstagePaths(string cwd, IReadOnlyList<string> paths) =>
+        RunForPaths(cwd, paths, ["restore", "--staged", "--"]);
+
+    // Windows caps a command line at 32k characters, so a long selection goes in batches.
+    private (bool Ok, string Error) RunForPaths(string cwd, IReadOnlyList<string> paths, string[] head)
+    {
+        if (paths.Count == 0) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        foreach (var batch in PathBatches(paths, 24_000))
+        {
+            var r = RunGitCore(cwd, GitTimeoutMs, null, [.. head, .. batch]);
+            if (r.Exit != 0) return (false, ErrorText(r));
+        }
+        return (true, "");
+    }
+
+    internal static IEnumerable<List<string>> PathBatches(IReadOnlyList<string> paths, int maxChars)
+    {
+        var batch = new List<string>();
+        int length = 0;
+        foreach (var p in paths)
+        {
+            if (batch.Count > 0 && length + p.Length + 3 > maxChars)
+            {
+                yield return batch;
+                (batch, length) = (new List<string>(), 0);
+            }
+            batch.Add(p);
+            length += p.Length + 3;
+        }
+        if (batch.Count > 0) yield return batch;
+    }
+
     /// <summary>Stages everything (<c>git add -A</c>): all modifications, new files, and deletions across the
     /// working tree. Returns whether it succeeded and, on failure, git's error text.</summary>
     public (bool Ok, string Error) StageAll(string cwd)

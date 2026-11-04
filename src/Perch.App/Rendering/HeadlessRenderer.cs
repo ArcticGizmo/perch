@@ -787,6 +787,18 @@ internal static class HeadlessRenderer
             }
             else Console.WriteLine("git graph rail: no edge to drag");
 
+            // A confirmation (Drop stash) in the window's own modal, centred, rather than its own window. Taken before the
+            // drag probes below, whose menus stay open over everything after.
+            tw.PreviewConfirm();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (tw.CaptureRenderedFrame() is { } confirmFrame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "git_tree_confirm_1x.png"));
+                confirmFrame.Save(fs);
+            }
+            tw.PreviewCloseNameDialog();
+
             // A real drag through synthetic pointer input: press a branch pill, carry it over another, then over the
             // rail's New worktree zone, release (the drop menu opens). Nothing in the menu is clicked, so no git operation
             // runs on the repo.
@@ -883,6 +895,29 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, "git_tree_stash_row_1x.png"));
                 stashFrame.Save(fs);
             }
+
+            // The rail's Local rows (lead marks, ahead/behind column) over the tags grouped by name, one group open; the
+            // Tags ⋯ menu as text; Pull spinning with the rest of the toolbar off; a commit's right-click menu.
+            void Frame11(string name)
+            {
+                for (var until = DateTime.UtcNow.AddSeconds(0.6); DateTime.UtcNow < until; Thread.Sleep(50))
+                    Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                Dispatcher.UIThread.RunJobs();
+                if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
+            }
+            Console.WriteLine("git graph Tags ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.Tag).Replace("\n", "\n  "));
+            tw.PreviewTags();
+            tw.PreviewSpinner(true);
+            Frame11("git_tree_rail_tags_busy_1x.png");
+            tw.PreviewSpinner(false);
+            tw.PreviewCommitMenu();
+            Frame11("git_tree_commit_menu_1x.png");
+            // Three files picked in Changes: the header reads "Stage (3)", the rows lose their +, and the shared menu opens.
+            tw.PreviewSelectWip();
+            Frame11("git_tree_wip_selected_1x.png");
+            Console.WriteLine($"git graph multi-pick: {tw.PreviewPickFiles(3)}");
+            Frame11("git_tree_files_multi_1x.png");
             tw.Close();
         }
 

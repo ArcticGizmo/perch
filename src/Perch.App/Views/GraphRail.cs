@@ -11,8 +11,8 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// The Tree window's left rail: the repo's worktrees as cards (this window's first), then local branches, remote
-/// branches by remote, tags and stashes. A row's colour mark is its lane in the graph (muted when the graph hasn't
-/// loaded that commit). Clicking jumps the graph to the row, hovering highlights the lane, double-clicking raises
+/// branches by remote, tags (grouped by name, or in graph order) and stashes. A row's name is muted when the graph
+/// hasn't loaded its commit. Clicking jumps the graph to the row, hovering highlights the lane, double-clicking raises
 /// <see cref="WorktreeActivated"/> / <see cref="BranchActivated"/>. Every card and branch row carries a
 /// <see cref="RailItem"/> in its <c>Tag</c>, which is how a drag finds what it was dropped on.
 /// </summary>
@@ -102,6 +102,15 @@ internal sealed class GraphRail : UserControl
         Rebuild();
     }
 
+    /// <summary>For the headless render: Local and Tags open (the rest folded) with the first tag group expanded.</summary>
+    internal void PreviewTags()
+    {
+        (_worktreesOpen, _localOpen, _remotesOpen, _tagsOpen, _stashesOpen) = (false, true, false, true, false);
+        if (_tagGroups && _snap is { } s && TagTree.Build(s.Refs.Where(r => r.Kind == GraphRefKind.Tag)).FirstOrDefault(n => n.IsGroup) is { } g)
+            _tagGroupsOpen.Add(g.Label);
+        Rebuild();
+    }
+
     /// <summary>While a drag is on, the rail offers a "New worktree" drop zone under the worktree cards.</summary>
     public void SetDragging(bool dragging)
     {
@@ -176,7 +185,7 @@ internal sealed class GraphRail : UserControl
             hidden: locals.Count(s.IsHidden), menu: GraphRefKind.LocalBranch));
         if (_localOpen)
             foreach (var r in locals)
-                _stack.Children.Add(RefRow(s, r, r.Name, s.Worktrees.Any(w => w.Branch == r.Name)));
+                _stack.Children.Add(RefRow(s, r, r.Name));
 
         var remotes = s.Refs.Where(r => r.Kind == GraphRefKind.RemoteBranch).ToList();
         if (remotes.Count > 0)
@@ -188,18 +197,20 @@ internal sealed class GraphRail : UserControl
                 {
                     _stack.Children.Add(SubHeader(g.Key));
                     foreach (var r in g)
-                        _stack.Children.Add(RefRow(s, r, r.Name[(g.Key.Length + 1)..], false, indent: 12));
+                        _stack.Children.Add(RefRow(s, r, r.Name[(g.Key.Length + 1)..], indent: 12));
                 }
         }
 
-        var tags = s.Refs.Where(r => r.Kind == GraphRefKind.Tag)
-            .OrderBy(r => s.RowOf(r.Target) is var row and >= 0 ? row : int.MaxValue).ToList();
+        var tags = s.Refs.Where(r => r.Kind == GraphRefKind.Tag).ToList();
         if (tags.Count > 0)
         {
-            _stack.Children.Add(Header("Tags", tags.Count, _tagsOpen, () => _tagsOpen = !_tagsOpen));
-            if (_tagsOpen)
-                foreach (var r in tags.Take(200))
-                    _stack.Children.Add(RefRow(s, r, r.Name, false));
+            _stack.Children.Add(Header("Tags", tags.Count, _tagsOpen, () => _tagsOpen = !_tagsOpen,
+                hidden: tags.Count(s.IsHidden), menu: GraphRefKind.Tag));
+            if (_tagsOpen && _tagGroups)
+                AddTagNodes(s, TagTree.Build(tags), 0);
+            else if (_tagsOpen)
+                foreach (var r in tags.OrderBy(r => s.RowOf(r.Target) is var row and >= 0 ? row : int.MaxValue).Take(200))
+                    _stack.Children.Add(RefRow(s, r, r.Name));
         }
 
         if (s.Stashes.Count > 0)
@@ -207,8 +218,83 @@ internal sealed class GraphRail : UserControl
             _stack.Children.Add(Header("Stashes", s.Stashes.Count, _stashesOpen, () => _stashesOpen = !_stashesOpen));
             if (_stashesOpen)
                 foreach (var st in s.Stashes)
-                    _stack.Children.Add(RefRow(s, st.AsRef(), st.Message, false));
+                    _stack.Children.Add(RefRow(s, st.AsRef(), st.Message));
         }
+    }
+
+    // ---- tags as a tree ----
+
+    private bool _tagGroups = true;
+    private readonly HashSet<string> _tagGroupsOpen = new(StringComparer.Ordinal);
+
+    /// <summary>Tags grouped by name (true) or listed in graph order.</summary>
+    public void SetTagGroups(bool grouped)
+    {
+        if (_tagGroups == grouped) return;
+        _tagGroups = grouped;
+        Rebuild();
+    }
+
+    /// <summary>A tag group's eye was clicked: hide every tag in it (true) or show them all again.</summary>
+    public event Action<IReadOnlyList<GraphRef>, bool>? GroupVisibilityToggled;
+
+    private void AddTagNodes(GraphSnapshot s, IReadOnlyList<TagTree.Node> nodes, int depth)
+    {
+        foreach (var n in nodes)
+        {
+            if (n.Tag is { } tag)
+            {
+                _stack.Children.Add(RefRow(s, tag, tag.Name, indent: depth * 12));
+                continue;
+            }
+            bool open = _tagGroupsOpen.Contains(n.Label);
+            _stack.Children.Add(TagGroupRow(s, n, open, depth));
+            if (open) AddTagNodes(s, n.Children, depth + 1);
+        }
+    }
+
+    // A group's row: chevron and shared prefix, how many tags (and how many hidden), and an eye for the whole group.
+    private Control TagGroupRow(GraphSnapshot s, TagTree.Node g, bool open, int depth)
+    {
+        var tags = g.Tags.ToList();
+        int hiddenCount = tags.Count(s.IsHidden);
+        bool allHidden = hiddenCount == tags.Count;
+        var dock = new DockPanel { LastChildFill = true };
+        var eye = Eye(allHidden);
+        eye.Opacity = allHidden ? 1 : 0;
+        ToolTip.SetTip(eye, allHidden ? $"Show all {tags.Count} in the graph" : $"Hide all {tags.Count} from the graph");
+        eye.PointerPressed += (_, e) => { GroupVisibilityToggled?.Invoke(tags, !allHidden); e.Handled = true; };
+        dock.Children.Add(eye);
+        dock.Children.Add(new TextBlock
+        {
+            Text = hiddenCount > 0 && !allHidden ? $"{tags.Count} · {hiddenCount} hidden" : tags.Count.ToString(),
+            FontSize = 10.5, Foreground = Ink(_c.Muted), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        });
+        dock.Children.Add(new TextBlock
+        {
+            Text = (open ? "▾ " : "▸ ") + g.Label, FontSize = 12, Foreground = Ink(allHidden ? _c.Muted : _c.Text, allHidden ? 0.7 : 1),
+            FontStyle = allHidden ? FontStyle.Italic : FontStyle.Normal, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var row = new Border
+        {
+            Padding = new Thickness(6 + depth * 12, 3, 6, 3), CornerRadius = new CornerRadius(5), Background = Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = dock,
+        };
+        if (!allHidden)
+        {
+            row.PointerEntered += (_, _) => eye.Opacity = 1;
+            row.PointerExited += (_, _) => eye.Opacity = 0;
+        }
+        row.PointerPressed += (_, e) =>
+        {
+            if (!_tagGroupsOpen.Remove(g.Label)) _tagGroupsOpen.Add(g.Label);
+            Rebuild();
+            e.Handled = true;
+        };
+        Hover(row, -1);
+        return row;
     }
 
     private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, GraphRefKind? menu = null)
@@ -331,41 +417,44 @@ internal sealed class GraphRail : UserControl
         return card;
     }
 
-    private Control RefRow(GraphSnapshot s, GraphRef r, string label, bool checkedOut, double indent = 0)
+    // Fixed widths, so every local row's marks line up in columns whatever the name's length.
+    private const double LeadW = 18, TrackW = 40, EyeW = 22;
+
+    // A row: for a local branch, a lead mark (⌂ checked out in this window, a tree in another worktree), then the name,
+    // how far it is from its upstream, and the eye. Branches and tags can be hidden; one checked out can't, but its eye
+    // column is still kept so the columns don't step.
+    private Control RefRow(GraphSnapshot s, GraphRef r, string label, double indent = 0)
     {
         int lane = s.LaneOf(r.Target);
-        var color = lane >= 0 ? _c.Lanes[lane % _c.Lanes.Length] : _c.Muted;
         var dock = new DockPanel { LastChildFill = true };
-        dock.Children.Add(new Border
-        {
-            Width = 8, Height = 8, CornerRadius = new CornerRadius(2), Background = Ink(color, lane >= 0 ? 1 : 0.5),
-            Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center,
-        });
         bool hidden = s.IsHidden(r);
+        var holder = r.Kind == GraphRefKind.LocalBranch ? s.Worktrees.FirstOrDefault(w => w.Branch == r.Name) : null;
         Control? eye = null;
-        if (checkedOut)
+        if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch or GraphRefKind.Tag)
         {
-            var f = Folder(color, new Thickness(6, 0, 0, 0));
-            f.SetValue(DockPanel.DockProperty, Dock.Right);
-            dock.Children.Add(f);
-        }
-        else if (r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)
-        {
-            // Shown on hover, and always on a hidden row so the way back is visible.
-            eye = Eye(hidden);
-            eye.Opacity = hidden ? 1 : 0;
-            ToolTip.SetTip(eye, hidden ? "Show in the graph" : "Hide from the graph");
-            eye.PointerPressed += (_, e) => { VisibilityToggled?.Invoke(r, !hidden); e.Handled = true; };
-            dock.Children.Add(eye);
-        }
-        // The same remote mark the pill carries: ● in step with its upstream, ↑/↓ apart, ⊘ upstream gone.
-        if (r.Kind == GraphRefKind.LocalBranch && r.Upstream is not null)
-            dock.Children.Add(new TextBlock
+            if (holder is null)
             {
-                Text = r.UpstreamGone ? "⊘" : r.InSync ? "●" : GraphCanvas.TrackText(r),
-                FontSize = r.InSync ? 8 : 10.5, Foreground = Ink(_c.Muted), Margin = new Thickness(6, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
-            });
+                // Shown on hover, and always on a hidden row so the way back is visible.
+                eye = Eye(hidden);
+                eye.Opacity = hidden ? 1 : 0;
+                ToolTip.SetTip(eye, hidden ? "Show in the graph" : "Hide from the graph");
+                eye.PointerPressed += (_, e) => { VisibilityToggled?.Invoke(r, !hidden); e.Handled = true; };
+                dock.Children.Add(eye);
+            }
+            else
+                dock.Children.Add(new Border { Width = EyeW, [DockPanel.DockProperty] = Dock.Right });
+        }
+        if (r.Kind == GraphRefKind.LocalBranch)
+        {
+            var track = new TextBlock
+            {
+                Text = TrackCell(r), Width = TrackW, TextAlignment = TextAlignment.Right, FontSize = 11,
+                Foreground = Ink(_c.Muted), VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
+            };
+            ToolTip.SetTip(track, TrackTip(r));
+            dock.Children.Add(track);
+            dock.Children.Add(LeadMark(holder));
+        }
         dock.Children.Add(new TextBlock
         {
             Text = label, FontSize = 12, Foreground = Ink(lane >= 0 && !hidden ? _c.Text : _c.Muted, hidden ? 0.7 : 1),
@@ -411,13 +500,43 @@ internal sealed class GraphRail : UserControl
             c.Children.Add(new Line { StartPoint = new Point(1, 9.5), EndPoint = new Point(13, 0.5), Stroke = ink, StrokeThickness = 1.4 });
         return new Border
         {
-            Child = c, Padding = new Thickness(3, 2), Margin = new Thickness(6, 0, 0, 0), Background = Brushes.Transparent,
+            // EyeW wide in all (margin + padding + the 14 px drawing), so a row without an eye keeps the same column.
+            Child = c, Padding = new Thickness(3, 2), Margin = new Thickness(2, 0, 0, 0), Background = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
             [DockPanel.DockProperty] = Dock.Right,
         };
     }
 
-    // A small folder outline: the branch is checked out in a worktree (or this is a worktree card).
+    // ↑ commits to push, ↓ commits to pull, ✓ level with its upstream; blank when it has none (or it's gone).
+    internal static string TrackCell(GraphRef r) =>
+        r.Upstream is null || r.UpstreamGone ? "" : r.InSync ? "✓" : GraphCanvas.TrackText(r);
+
+    private static string? TrackTip(GraphRef r) => r.Upstream is null ? null
+        : r.UpstreamGone ? $"Tracked {r.Upstream}, which is gone from the remote"
+        : r.InSync ? $"Level with {r.Upstream}"
+        : $"{(r.Ahead > 0 ? $"{r.Ahead} to push" : "")}{(r.Ahead > 0 && r.Behind > 0 ? ", " : "")}{(r.Behind > 0 ? $"{r.Behind} to pull" : "")} ({r.Upstream})";
+
+    // Stroke icons on a 12 px box, drawn because Inter has neither glyph.
+    private const string HouseIcon = "M1.5,6.2 L6,2 L10.5,6.2 M3,5 V10.5 H9 V5 M5,10.5 V7.8 H7 V10.5";
+    private const string TreeIcon = "M6,1.2 L10,7.8 H2 Z M6,7.8 V11";
+
+    // Where a local branch is checked out: ⌂ in this window's worktree, a tree in another; an empty slot otherwise.
+    private Control LeadMark(GraphWorktree? holder)
+    {
+        var slot = new Border { Width = LeadW, VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Left };
+        if (holder is null) return slot;
+        slot.Child = new global::Avalonia.Controls.Shapes.Path
+        {
+            Data = Geometry.Parse(holder.IsCurrent ? HouseIcon : TreeIcon), Width = 12, Height = 12,
+            Stroke = Ink(holder.IsCurrent ? _c.Text : _c.Muted), StrokeThickness = 1.3,
+            StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round, HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        slot.Background = Brushes.Transparent;
+        ToolTip.SetTip(slot, holder.IsCurrent ? "Checked out in this window" : $"Checked out in the {holder.Name} worktree");
+        return slot;
+    }
+
+    // A small folder outline: this is a worktree card.
     private Control Folder(Color color, Thickness margin) => new Border
     {
         Width = 10, Height = 8, BorderThickness = new Thickness(1.2), CornerRadius = new CornerRadius(1.5),

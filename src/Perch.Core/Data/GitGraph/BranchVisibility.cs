@@ -23,7 +23,8 @@ public sealed class GraphRepoPrefs
 internal static class BranchVisibility
 {
     /// <summary>The All scope's walk with <paramref name="hidden"/> left out: each <c>--exclude</c> applies to the next
-    /// <c>--branches</c>/<c>--remotes</c> only, and takes the name without its <c>refs/heads/</c> or <c>refs/remotes/</c>.</summary>
+    /// <c>--branches</c>/<c>--remotes</c>/<c>--tags</c> only, and takes the name without its <c>refs/heads/</c>,
+    /// <c>refs/remotes/</c> or <c>refs/tags/</c>.</summary>
     public static GraphLogQuery AllExcept(IReadOnlyCollection<string> hidden, IEnumerable<string> extraTips)
     {
         var tips = new List<string>();
@@ -32,7 +33,10 @@ internal static class BranchVisibility
         tips.Add("--branches");
         foreach (var h in hidden)
             if (h.StartsWith("refs/remotes/", StringComparison.Ordinal)) tips.Add("--exclude=" + h["refs/remotes/".Length..]);
-        tips.AddRange(["--remotes", "--tags", "HEAD", .. extraTips]);
+        tips.Add("--remotes");
+        foreach (var h in hidden)
+            if (h.StartsWith("refs/tags/", StringComparison.Ordinal)) tips.Add("--exclude=" + h["refs/tags/".Length..]);
+        tips.AddRange(["--tags", "HEAD", .. extraTips]);
         return new GraphLogQuery(tips, []);
     }
 

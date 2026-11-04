@@ -84,6 +84,12 @@ internal static class GitOps
     /// <summary>Stashes every change including untracked files, labelled so it can be found in the rail.</summary>
     public static GitOpResult StashPush(string worktree, string message) => Run(worktree, "stash", "push", "-u", "-m", message);
 
+    /// <summary>Stashes only <paramref name="paths"/> (staged and unstaged changes to them, new files included), leaving
+    /// every other change where it is. One stash entry, so it can't be split into batches like staging can.</summary>
+    public static GitOpResult StashPushPaths(string worktree, string message, IReadOnlyList<string> paths) =>
+        paths.Count == 0 ? new GitOpResult(false, "Nothing selected to stash.", "")
+            : Run(worktree, ["stash", "push", "-u", "-m", message, "--", .. paths]);
+
     /// <summary>The newest stash entry's commit, so an Undo can pop exactly the entry a checkout made.</summary>
     public static string? StashTop(string worktree)
     {
@@ -432,6 +438,13 @@ internal static class GitOps
     /// refuses one with commits merged nowhere, which <see cref="IsUnmerged"/> spots so the caller can ask first.</summary>
     public static GitOpResult DeleteBranch(string repo, string branch, bool force) =>
         Refuse(branch) ?? Run(repo, "branch", force ? "-D" : "-d", branch);
+
+    /// <summary>A lightweight tag at a commit (<c>git tag name commit</c>); it stays local until pushed.</summary>
+    public static GitOpResult CreateTag(string repo, string name, string at) =>
+        Refuse(name, at) ?? Run(repo, "tag", name, at);
+
+    public static GitOpResult DeleteTag(string repo, string name) =>
+        Refuse(name) ?? Run(repo, "tag", "-d", name);
 
     /// <summary>The refusal <c>git branch -d</c> gives for a branch whose commits aren't merged anywhere.</summary>
     public static bool IsUnmerged(GitOpResult r) => !r.Ok && r.Message.Contains("not fully merged", StringComparison.OrdinalIgnoreCase);

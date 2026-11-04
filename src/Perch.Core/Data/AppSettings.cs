@@ -481,6 +481,10 @@ internal sealed class AppSettings
     public Dictionary<string, GitGraph.GraphRepoPrefs> GitTreeRepos { get; set; } = new();
     public bool GitTreeAutoHideOthers { get; set; }
 
+    // Whether the git graph rail lists tags grouped by name (a tree split at / . - _) rather than in graph order. Set
+    // from the Tags "⋯" menu, not a Settings control (see SettingsRegistryTests.NotSettings). On by default.
+    public bool GitTreeTagGroups { get; set; } = true;
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

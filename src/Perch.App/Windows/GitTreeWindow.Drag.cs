@@ -378,7 +378,7 @@ internal sealed partial class GitTreeWindow
             var why = wt.Changes > 0
                 ? $"{wt.Name} has {wt.Changes} uncommitted change{(wt.Changes == 1 ? "" : "s")}, which removing it deletes for good."
                 : $"A Claude session ({s!.DisplayName}) is working in {wt.Name}.";
-            bool go = await ConfirmDialog.ShowAsync(this, "Remove worktree", $"{why} Remove {wt.Path} anyway? Its branch stays.",
+            bool go = await ConfirmAsync("Remove worktree", $"{why} Remove {wt.Path} anyway? Its branch stays.",
                 "Remove", "Keep it");
             if (!go || !IsVisible) return;
         }
@@ -386,7 +386,7 @@ internal sealed partial class GitTreeWindow
         RunRepoOp(root, $"Removing {wt.Name}…", r => GitOps.WorktreeRemove(r, wt.Path, force));
     }
 
-    private void RunRepoOp(string root, string busy, Func<string, GitOpResult> op)
+    private void RunRepoOp(string root, string busy, Func<string, GitOpResult> op, string done = "Done", Action? undo = null)
     {
         ShowToast(busy, "", null, busy: true);
         System.Threading.Tasks.Task.Run(() => op(root)).ContinueWith(t =>
@@ -396,7 +396,7 @@ internal sealed partial class GitTreeWindow
             {
                 if (!IsVisible) return;
                 var r = t.Result;
-                if (r.Ok) ShowToast("Done", r.Command, null);
+                if (r.Ok) ShowToast(done, r.Command, undo);
                 else ShowToast(r.Message, r.Command, null, error: true);
                 RefreshStatus(preserveSelection: true);
             });
