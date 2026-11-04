@@ -224,7 +224,8 @@ internal sealed partial class SessionThreadView : ScrollViewer
         // cards, buttons and empty space behave as before.
         _selection = new BlockSelection(this, _p.Selection, startInGaps: false) { Root = _stack };
         // The sticky card headers float topmost, over the selection wash too (see SessionThreadView.Sticky.cs).
-        Content = _content = new Panel { Children = { _stack, _highlightLayer, _selection.Layer, _stickyLayer } };
+        Content = _content = new Panel { Children = { _stack, _highlightLayer, _rewindLayer, _selection.Layer, _stickyLayer } };
+        InitRewind();
 
         // Follow the tail only while the user is at (or near) the bottom; scrolling up pins the view. Only a
         // change the *user* made (offset moved, extent unchanged) re-evaluates — content growing pushes the
@@ -288,6 +289,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         UpdateActivity();
         _stickToBottom = true;
         ScrollToEndSoon();
+        if (InRewindMode) ApplyRewindVisuals();
     }
 
     /// <summary>Stops following the bound conversation and drops the column. The session outlives its window
@@ -590,6 +592,8 @@ internal sealed partial class SessionThreadView : ScrollViewer
             if (item is UserMessageItem) _userWraps.Add(wrap);
         }
         else _stack.Children.Insert(at, wrap);
+        // Anything appended in rewind mode lands below the rewind point; a prepended (older) item is above it.
+        if (InRewindMode) ApplyRewindVisual(wrap, item, dropped: at < 0 && _rewindSelected is not null);
         QueueRealize();
         return wrap;
     }
@@ -956,29 +960,54 @@ internal sealed partial class SessionThreadView : ScrollViewer
                 ? new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Children = { bubble, tray } }
                 : tray;
         }
-        return Row(WithCopy(middle, () => u.Text, userSide: true), left: null, right: who);
+        var rewindable = CanRewind && !SlashCommandCatalog.LooksLikeCommand(u.Text) ? u : null;
+        return Row(WithCopy(middle, () => u.Text, userSide: true, rewindable), left: null, right: who);
     }
 
-    // Wraps a message bubble so a hover-revealed "copy" button floats at its interior top corner (the user's
-    // is top-left, Claude's top-right, each away from that side's avatar). The text is read lazily on click,
-    // so a still-streaming assistant bubble copies whatever it holds at that moment.
-    private Control WithCopy(Control content, Func<string?> text, bool userSide)
+    // Wraps a message bubble so a hover-revealed "copy" button shows beside it. The user's bubble is right-aligned
+    // and often short, so its buttons sit outside it, in the empty space to its left, where they can't cover a
+    // one-word prompt; the panel grows leftward, so the bubble doesn't move when they appear. Claude's bubble spans
+    // the column, so its button floats at the interior top-right. The text is read lazily on click, so a
+    // still-streaming assistant bubble copies whatever it holds at that moment. A prompt that can anchor a rewind
+    // gets a "rewind to here" button beside the copy button.
+    private Control WithCopy(Control content, Func<string?> text, bool userSide, UserMessageItem? rewind = null)
     {
-        var btn = new CopyButton(_p, text)
+        var btn = new CopyButton(_p, text);
+        var buttons = new StackPanel
         {
+            Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Top,
             HorizontalAlignment = userSide ? HorizontalAlignment.Left : HorizontalAlignment.Right,
-            Margin = userSide ? new Thickness(9, 9, 0, 0) : new Thickness(0, 9, 9, 0),
+            Margin = userSide ? new Thickness(0, 6, 8, 0) : new Thickness(0, 9, 9, 0),
+            Children = { btn },
         };
-        var grid = new Grid
+        Border? rewindBtn = rewind is null ? null : RewindButton(rewind);
+        if (rewindBtn is not null) buttons.Children.Insert(0, rewindBtn);   // copy stays nearest the bubble
+        Panel host;
+        if (userSide)
         {
-            Background = Brushes.Transparent,
-            HorizontalAlignment = userSide ? HorizontalAlignment.Right : HorizontalAlignment.Stretch,
-        };
-        grid.Children.Add(content);
-        grid.Children.Add(btn);
-        grid.PointerEntered += (_, _) => btn.Reveal(true);
-        grid.PointerExited += (_, _) => btn.Reveal(false);
-        return grid;
+            DockPanel.SetDock(buttons, Dock.Left);
+            host = new DockPanel
+            {
+                Background = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Right,
+                LastChildFill = true, Children = { buttons, content },
+            };
+        }
+        else
+        {
+            host = new Grid { Background = Brushes.Transparent, HorizontalAlignment = HorizontalAlignment.Stretch };
+            host.Children.Add(content);
+            host.Children.Add(buttons);
+        }
+        host.PointerEntered += (_, _) => Reveal(true);
+        host.PointerExited += (_, _) => Reveal(false);
+        return host;
+
+        // In rewind mode the prompts are the targets themselves, so their buttons stay out of the way.
+        void Reveal(bool shown)
+        {
+            btn.Reveal(shown && !InRewindMode);
+            if (rewindBtn is not null) rewindBtn.IsVisible = shown && !InRewindMode;
+        }
     }
 
     // The plain text of an assistant turn (its rendered prose blocks, joined) for the copy button.

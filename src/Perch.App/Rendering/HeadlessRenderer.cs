@@ -2765,6 +2765,70 @@ internal static class HeadlessRenderer
         CaptureUsage(Theming.SessionPalette.For(dark: true), "session_usage_1x.png", usage);
         CaptureUsage(Theming.SessionPalette.For(dark: false), "session_usage_light_1x.png", usage);
 
+        // Rewind mode (docs/session-rewind-plan.md, R3): two later turns, the middle prompt picked, so the line sits
+        // above it and the last turn is dimmed; the bar shows a dry-run code preview. Then one where code can't rewind.
+        var rewindTurns = new List<(string, IReadOnlyList<Perch.Data.Control.SessionEvent>)>
+        {
+            ("Now add a test for the empty transcript case", new Perch.Data.Control.SessionEvent[]
+            {
+                new Perch.Data.Control.TurnResultEvent(false, "success", 0.01, InputTokens: 10, OutputTokens: 5, DurationMs: 100),
+                new Perch.Data.Control.AssistantTextEvent("Added `ActiveLines_EmptyFile_KeepsNothing` beside the other chain tests."),
+                new Perch.Data.Control.TurnResultEvent(false, "success", 0.02, InputTokens: 10, OutputTokens: 5, DurationMs: 100),
+            }),
+            ("Rename the helper to ReadLink and update the callers", new Perch.Data.Control.SessionEvent[]
+            {
+                new Perch.Data.Control.AssistantTextEvent("Renamed it and updated the three callers."),
+                new Perch.Data.Control.TurnResultEvent(false, "success", 0.02, InputTokens: 10, OutputTokens: 5, DurationMs: 100),
+            }),
+        };
+        CaptureRewind(Theming.SessionPalette.For(dark: true), "session_rewind_1x.png",
+            new Perch.Data.Control.RewindFilesEvent("r", true, null, [@"C:\src\perch\src\Perch.Core\Data\TranscriptChain.cs", @"C:\src\perch\tests\Perch.Tests\TranscriptChainTests.cs"], 24, 6));
+        CaptureRewind(Theming.SessionPalette.For(dark: false), "session_rewind_light_1x.png",
+            new Perch.Data.Control.RewindFilesEvent("r", false, "No file checkpoint found for this message."));
+
+        // A one-word prompt hovered: its copy and rewind buttons must sit outside the bubble, not over the word.
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 600 };
+            w.FeedSampleForRender(cwd, "again", [new Perch.Data.Control.AssistantTextEvent("Running it again now.")]);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var word = global::Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(w)
+                .OfType<SelectableTextBlock>().FirstOrDefault(t => t.Text == "again");
+            if (word?.TranslatePoint(new Point(word.Bounds.Width / 2, word.Bounds.Height / 2), w) is { } at)
+            {
+                global::Avalonia.Headless.HeadlessWindowExtensions.MouseMove(w, at, global::Avalonia.Input.RawInputModifiers.None);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "session_prompt_hover_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureRewind(Theming.SessionPalette palette, string file, Perch.Data.Control.RewindFilesEvent preview)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.ShowRewindForRender(rewindTurns, preview, selectFromEnd: 1);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         // The /resume overlay: this project's sessions, one resumable under two accounts (its row carries the account
         // chip), then the same with every project shown.
         var resumeNow = DateTime.Now;

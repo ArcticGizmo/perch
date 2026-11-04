@@ -108,6 +108,18 @@ internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 /// when the CLI refused (e.g. Remote Control unavailable on the account).</summary>
 internal sealed record RemoteControlEvent(string? SessionUrl, string? BridgeSessionId, string? Error = null) : SessionEvent;
 
+/// <summary>The CLI's answer to Perch's <c>rewind_files</c> control request, matched to it by
+/// <paramref name="RequestId"/>. A dry run reports what would change (<paramref name="FilesChanged"/>, line
+/// counts); a real one just confirms. <paramref name="CanRewind"/> is false, with <paramref name="Error"/> set,
+/// when no checkpoint covers the message (checkpointing was off when it ran, or the id is unknown).</summary>
+internal sealed record RewindFilesEvent(
+    string RequestId,
+    bool CanRewind,
+    string? Error = null,
+    IReadOnlyList<string>? FilesChanged = null,
+    int Insertions = 0,
+    int Deletions = 0) : SessionEvent;
+
 /// <summary>A <c>system</c>/<c>subtype:"status"</c> progress record. The CLI emits these while a long
 /// operation runs — notably <c>/compact</c>, which shows a live "Compacting conversation… (18s) … 18%"
 /// readout. <paramref name="Percent"/> is the completion percentage when one could be read (else null, so

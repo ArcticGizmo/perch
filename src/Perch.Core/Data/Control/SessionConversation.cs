@@ -14,6 +14,10 @@ internal sealed class UserMessageItem(string text, IReadOnlyList<MessageAttachme
     /// <summary>Files/images the user attached to this message (empty when none). Display-only — the file
     /// paths and image content blocks are already on their way to the CLI by the time this is recorded.</summary>
     public IReadOnlyList<MessageAttachment> Attachments { get; } = attachments ?? [];
+
+    /// <summary>The transcript record's uuid, when known: set for prompts loaded from a transcript, and for live
+    /// ones once a rewind has placed them (<see cref="RewindPoints"/>). The anchor a rewind or fork names.</summary>
+    public string? Uuid { get; set; }
 }
 
 internal enum NoteKind { Info, Error }
@@ -618,7 +622,7 @@ internal sealed class SessionConversation
     /// the result on the UI thread with <see cref="AppendParsedTranscriptLine"/>. Review fixes CP24.
     /// </summary>
     internal sealed record ParsedTranscriptLine(string? Prompt, IReadOnlyList<MessageAttachment>? Images,
-        IReadOnlyList<SessionEvent> Events);
+        IReadOnlyList<SessionEvent> Events, string? Uuid = null);
 
     /// <summary>Decodes one transcript line (see <see cref="ParsedTranscriptLine"/>); null for a line that adds
     /// nothing (blank, malformed, or a sub-agent's). <paramref name="sessionId"/> is the image-cache id, as for
@@ -637,7 +641,8 @@ internal sealed class SessionConversation
                 // placeholder is kept in the text (it gives context, and the view makes the token itself hover/click
                 // to the image) — the k-th token pairs with the k-th image attachment.
                 var images = TranscriptImages.Extract(TranscriptJson.ContentArray(root), prompt, sessionId);
-                return new ParsedTranscriptLine(prompt, images.Count > 0 ? images : null, []);
+                return new ParsedTranscriptLine(prompt, images.Count > 0 ? images : null, [],
+                    TranscriptJson.AsString(root["uuid"]));
             }
             var events = StreamJsonParser.Parse(line);
             return events.Count > 0 ? new ParsedTranscriptLine(null, null, events) : null;
@@ -664,7 +669,7 @@ internal sealed class SessionConversation
     {
         if (parsed.Prompt is { } prompt)
         {
-            Append(new UserMessageItem(prompt, parsed.Images));
+            Append(new UserMessageItem(prompt, parsed.Images) { Uuid = parsed.Uuid });
             return;
         }
         foreach (var ev in parsed.Events) Apply(ev);
@@ -796,6 +801,40 @@ internal sealed class SessionConversation
         _activeCompaction = null;
         _items.Add(new NoteItem("conversation cleared"));
         Reset?.Invoke();
+    }
+
+    /// <summary>The prompts a rewind or fork can anchor on, oldest first: every user prompt in the thread (a
+    /// <c>/clear</c> already dropped the earlier conversation's), minus slash commands, which the transcript
+    /// records as command echoes rather than prompts.</summary>
+    public IReadOnlyList<UserMessageItem> RewindCandidates() =>
+        _items.OfType<UserMessageItem>().Where(u => !SlashCommandCatalog.LooksLikeCommand(u.Text)).ToList();
+
+    /// <summary>A conversation rewind landed: drop <paramref name="prompt"/> and everything after it, with the
+    /// per-turn bookkeeping that went with them, leaving a marker. Called once the truncating restart is up, so
+    /// the restart's own notes (which follow the prompt) go too. No-op for a prompt not in the thread.</summary>
+    public void TruncateFrom(UserMessageItem prompt)
+    {
+        int at = _items.IndexOf(prompt);
+        if (at < 0) return;
+        _items.RemoveRange(at, _items.Count - at);
+        _toolCalls.Clear();
+        _launchCards.Clear();
+        _endNotices.Clear();
+        PendingPermission = null;
+        TurnActive = false;
+        QueuedPrompts = 0;
+        MayHaveQueuedTurn = false;
+        _activeCompaction = null;
+        _items.Add(new NoteItem($"rewound to before “{Preview(prompt.Text)}”"));
+        Reset?.Invoke();
+        StateChanged?.Invoke();
+    }
+
+    /// <summary>A prompt cut to one short line, for notes and the rewind bar.</summary>
+    internal static string Preview(string text, int max = 60)
+    {
+        var line = text.ReplaceLineEndings(" ").Trim();
+        return line.Length <= max ? line : line[..(max - 1)].TrimEnd() + "…";
     }
 
     /// <summary>Marks the pending permission answered (the controller already replied to the CLI).</summary>

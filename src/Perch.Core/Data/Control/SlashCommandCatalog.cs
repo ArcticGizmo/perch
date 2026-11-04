@@ -74,6 +74,8 @@ internal static class SlashCommandCatalog
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),
         new("autocompact",   "",              "Auto-compaction settings",                      SlashCommandTier.Native),
         new("resume",        "[id or search]", "Resume another session",                       SlashCommandTier.Native),
+        new("rewind",        "",              "Go back to an earlier prompt (conversation, code, or both)", SlashCommandTier.Native),
+        new("fork",          "",              "Branch this session into a new one",            SlashCommandTier.Native),
         new("login",         "",              "Sign in (opens a terminal)",                    SlashCommandTier.Native),
         new("logout",        "",              "Sign out (opens a terminal)",                   SlashCommandTier.Native),
         new("exit",          "",              "End this session",                               SlashCommandTier.Native),

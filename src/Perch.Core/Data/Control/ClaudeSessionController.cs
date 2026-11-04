@@ -50,13 +50,19 @@ internal sealed class ClaudeSessionController : IDisposable
     /// <paramref name="configDir"/> pins the account: when set it is injected as <c>CLAUDE_CONFIG_DIR</c> on the
     /// child's environment (not the command line), so the CLI reads that dir's <c>.credentials.json</c> and runs
     /// under that account. <c>null</c> inherits Perch's own environment (the historical behaviour).</summary>
+    /// <remarks><paramref name="resumeAt"/> (with a resume) keeps the conversation only up to that transcript entry,
+    /// the CLI's hidden <c>--resume-session-at</c>: how a conversation rewind restarts. <paramref name="fork"/> (with
+    /// a resume) writes the resumed conversation to a new session, <paramref name="newSessionId"/> or a fresh one, and
+    /// leaves the source transcript and its lock alone.</remarks>
     public void Start(string cwd, string? model = null, string? permissionMode = null, string? resumeSessionId = null,
-        string? newSessionId = null, string? effort = null, string? configDir = null)
+        string? newSessionId = null, string? effort = null, string? configDir = null, string? resumeAt = null,
+        bool fork = false)
     {
         if (IsRunning) throw new InvalidOperationException("Session already running.");
 
         bool resume = IsSafeToken(resumeSessionId);
-        var id = resume ? resumeSessionId! : (IsSafeToken(newSessionId) ? newSessionId! : Guid.NewGuid().ToString());
+        fork &= resume;
+        var id = resume && !fork ? resumeSessionId! : (IsSafeToken(newSessionId) ? newSessionId! : Guid.NewGuid().ToString());
 
         // The lock lives in the session's own config dir. Another live Perch holding it (dev beside release) means two
         // writers on one transcript, so that refuses the launch before anything else happens (review fixes CP13). A
@@ -67,7 +73,10 @@ internal sealed class ClaudeSessionController : IDisposable
 
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
                    " --include-partial-messages --permission-prompt-tool stdio";
-        args += resume ? $" --resume {id}" : $" --session-id {id}";
+        args += fork ? $" --resume {resumeSessionId} --fork-session --session-id {id}"
+              : resume ? $" --resume {id}"
+              : $" --session-id {id}";
+        if (resume && IsSafeToken(resumeAt)) args += $" --resume-session-at {resumeAt}";
         if (IsSafeToken(model)) args += $" --model {model}";
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
         if (IsEffortLevel(effort)) args += $" --effort {effort}";
@@ -95,6 +104,8 @@ internal sealed class ClaudeSessionController : IDisposable
         // Have the CLI report its own turn state (system/session_state_changed), so a turn a Remote Control client
         // started or answered still reads right here. Undocumented; an older CLI ignores it and Perch infers as before.
         psi.Environment["CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"] = "1";
+        // Print mode records no file checkpoints unless asked, and without them `rewind_files` has nothing to restore.
+        psi.Environment["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1";
         // Where the publish-artifact skill finds `perch artifact publish` (PerchSessionPlugin).
         if (Environment.ProcessPath is { } perchExe) psi.Environment[PerchSessionPlugin.ExeEnvVar] = perchExe;
         psi.Environment[PerchSessionPlugin.SessionEnvVar] = id;
@@ -283,6 +294,29 @@ internal sealed class ClaudeSessionController : IDisposable
         ["request_id"] = RemoteControlRequestId,
         ["request"] = new JsonObject { ["subtype"] = "remote_control", ["enabled"] = enabled },
     });
+
+    /// <summary>The prefix of the request id on a <c>rewind_files</c> request, so its ack is recognised
+    /// (<see cref="StreamJsonParser"/>) and matched back to the caller by the full id.</summary>
+    public const string RewindFilesRequestPrefix = "perch-rewind-";
+
+    /// <summary>Restores the files the file tools changed since <paramref name="userMessageId"/> (a transcript prompt
+    /// uuid) to how they stood before it: the Agent SDK's <c>rewind_files</c> control request. A
+    /// <paramref name="dryRun"/> only reports what would change. Returns the request id the ack will carry, or null
+    /// when the id isn't a safe token (nothing is sent).</summary>
+    public string? RewindFiles(string userMessageId, bool dryRun)
+    {
+        if (!IsSafeToken(userMessageId)) return null;
+        var requestId = RewindFilesRequestPrefix + Interlocked.Increment(ref _requestCounter);
+        var request = new JsonObject { ["subtype"] = "rewind_files", ["user_message_id"] = userMessageId };
+        if (dryRun) request["dry_run"] = true;
+        WriteLine(new JsonObject
+        {
+            ["type"] = "control_request",
+            ["request_id"] = requestId,
+            ["request"] = request,
+        });
+        return requestId;
+    }
 
     /// <summary>Switches the model mid-session — the Agent SDK's <c>setModel</c> control request.</summary>
     public void SetModel(string model)

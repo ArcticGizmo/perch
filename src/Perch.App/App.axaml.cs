@@ -2527,6 +2527,7 @@ public partial class App : Application
         w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
         w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
         w.ComposerOverflowRequested += anchor => ShowComposerOverflowMenu(anchor, w);   // "…" activate menu
+        w.ForkRequested += OpenForkedSession;
         // A background session needing a decision (permission / question / plan) raises a desktop toast.
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
         w.RoostView = RoostView;   // …unless the Roost already has it on screen
@@ -2758,6 +2759,17 @@ public partial class App : Application
             menu.Items.Add(rc);
         }
 
+        // Rewind and fork (docs/session-rewind-plan.md): any session Perch holds, live or dormant.
+        if (s is { HasEnded: false })
+        {
+            var rewind = new MenuItem { Header = "Rewind…" };
+            rewind.Click += (_, _) => w.OpenRewind();
+            menu.Items.Add(rewind);
+            var fork = new MenuItem { Header = "Fork into a new session" };
+            fork.Click += (_, _) => w.ForkSession();
+            menu.Items.Add(fork);
+        }
+
         // External notifications for this session — the per-session opt-in when the feature is on globally,
         // else a jump to set it up.
         if (scan is { } sc && _appSettings?.ExternalNotificationsEnabled == true)
@@ -2814,6 +2826,25 @@ public partial class App : Application
         HoldSession(session);   // in the ledger, so it comes back dormant if Perch closes first
         _monitorHost?.Rescan();
         return session;
+    }
+
+    // A fork (docs/session-rewind-plan.md, R5) runs as a new session in a window of its own, beside the original.
+    // The fork claims a fresh id up front, so the source session and its lock are never touched.
+    private void OpenForkedSession(Services.SessionLaunchOptions options, string? prefill,
+        IReadOnlyList<Perch.Data.Control.MessageAttachment>? attachments)
+    {
+        Services.PerchSession session;
+        try { session = StartPerchSession(options); }
+        catch (Exception ex)
+        {
+            _notifier?.Show("Couldn't fork the session", ex.Message, ToastLevel.Warning, null, null);
+            return;
+        }
+        var w = NewSessionWindow();
+        w.Show();
+        w.Attach(session);
+        if (prefill is { Length: > 0 }) w.PrefillComposer(prefill, attachments);
+        BringToFront(w);
     }
 
     private HashSet<string> ActiveSessionIds() => new(_lastSessions.Select(s => s.SessionId));

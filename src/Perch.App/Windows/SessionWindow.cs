@@ -762,7 +762,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         {
             Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(22, 14, 22, 16), [DockPanel.DockProperty] = Dock.Bottom, IsVisible = false,
-            Child = new StackPanel { Children = { _agentChipsRow, _composerFrame, _agentFooter } },
+            Child = new StackPanel { Children = { _agentChipsRow, _composerFrame, _agentFooter, BuildRewindBar() } },
         };
 
         // ── Centre ───────────────────────────────────────────────────────────────
@@ -773,6 +773,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _thread.OpenFileRequested += p => OpenFileInViewerRequested?.Invoke(p);
         _thread.StopTaskRequested += t => _session?.StopTask(t);
         _thread.ViewDiffRequested += p => ViewFileDiffRequested?.Invoke(p);
+        _thread.RewindRequested += u => OpenRewind(u);
         // Live theme swap: the shared palette's brushes are re-tinted in place (so chrome and text follow with
         // no work here), but the thread's markdown baked its code-syntax for the old light/dark side — rebuild it.
         ThemeService.Changed += OnThemeChanged;
@@ -925,6 +926,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
+        _thread.CanRewind = true;
         session.Woke += OnSessionWoke;
         session.Restarted += OnSessionRestarted;
         session.ProcessAuthChanged += RefreshAuthBanner;
@@ -957,6 +959,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         StopAuthBannerTimer();
         _authBanner.IsVisible = false;
         _sendAfterWake = false;
+        if (RewindOpen) CloseRewind();
         // The session outlives this window by design: without this its conversation keeps the whole chat tree
         // subscribed (and rendering deltas) after the window closes.
         _thread.Unbind();
@@ -2069,6 +2072,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
             case "autocompact": ShowAutoCompactOverlay(); return true;
             case "usage":  ShowUsageOverlay(); return true;
+            case "rewind": OpenRewind(); return true;
+            case "fork":   ForkSession(); return true;
             case "remote-control":
             case "rc":     ToggleRemoteControl(); return true;
             case "exit":
@@ -3380,6 +3385,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
 
     private void RefreshBar()
     {
+        MaybeCloseRewindOnState();
         var project = _cwd.Length > 0 ? (System.IO.Path.GetFileName(_cwd.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : _cwd) : "Perch";
         var label = _cwd.Length > 0 ? project : "New session";
         // The heading mirrors the session rows: project name, with the /rename custom title appended inline.
@@ -4059,6 +4065,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     // composer's, so the palette guard must live here too.)
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key != Key.Escape && e.KeyModifiers == KeyModifiers.None && HandleRewindKey(e)) { e.Handled = true; return; }
         if (e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
         {
             if (HasTextSelection()) return;   // let the copy happen
@@ -4079,11 +4086,13 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         if (_usageOverlay.IsVisible) { CloseUsageOverlay(); e.Handled = true; return; }
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
+        if (RewindOpen) { CloseRewind(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (MentionOpen) { CloseMention(); e.Handled = true; return; }
         if (AgentViewOpen) { CloseAgentView(); e.Handled = true; return; }   // back to the session, never an interrupt
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
+        else if (MaybeDoubleEscRewind()) e.Handled = true;
     }
 
     // Whether the focused control holds a live text selection (so Ctrl+C should copy rather than interrupt).

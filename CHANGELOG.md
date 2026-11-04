@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.6] - 2026-11-04
+
+- Rewind a session to an earlier prompt: conversation, code, or both
+- Pick the rewind point by scrolling the chat itself, or ↺ on a prompt
+- `/rewind`, or Esc Esc, as in the terminal
+- Fork a session into a new window, from the end or any prompt
+- Rewound sessions reopen without the turns you threw away (they never happened)
+- Remote Control stays on across a session restart
+- Copy button no longer sits on top of one-word prompts
+
+---
+
 ## [v0.6.5] - 2026-11-04
 
 - Something new to find in the trophy cabinet (we've said too much already)
