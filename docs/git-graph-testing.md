@@ -153,6 +153,7 @@ Use a throwaway clone. Make four changes: edit two tracked files (`a`, `b`), add
    - **Stash** makes one stash of only the picked files (staged and unstaged changes, new files included); everything else stays in the working tree. The toast offers Undo, which pops it back. It shows up in the graph and rail as "WIP on <branch>: N files".
    - In Staged, the menu says **Unstage N files**, and **Discard all changes to N files…** puts each back to the last commit (both sides), as the single-file version does.
 4. **Right-click an unpicked row** while others are picked: the usual single-file menu for that row only.
+5. **Stash one file.** Right-click any single file (in Changes or Staged) → **Stash <name>**, under Discard/Delete. Only that file's changes (staged and unstaged; a new file included) go into a stash named "WIP on <branch>: <name>"; every other change stays. The toast reads "Stashed <name>" with Undo, which pops it back. *Before:* stashing took every change.
 
 ## Feedback round 11: rail columns, tags, commit menu, busy toolbar
 

@@ -9,8 +9,8 @@ using Perch.Data.GitGraph;
 
 namespace Perch.Avalonia.Windows;
 
-// Right-click on a file in Changes or Staged: stage/unstage, discard its changes, delete it, open or reveal it, copy
-// its path. Discarding and deleting can't be undone, so both ask first.
+// Right-click on a file in Changes or Staged: stage/unstage, discard its changes, delete it, stash just it, open or
+// reveal it, copy its path. Discarding and deleting can't be undone, so both ask first.
 internal sealed partial class GitTreeWindow
 {
     private void ShowFileMenu(GitFileChange fc, bool staged, Control anchor)
@@ -36,6 +36,7 @@ internal sealed partial class GitTreeWindow
             items.Add(Item($"Discard changes to {name}…", () => OnFileStage(new FileStageRequest(HunkStageAction.Discard, path))));
         if (exists)
             items.Add(Item($"Delete {name}…", () => DeleteFile(fc)));
+        items.Add(Item($"Stash {name}", () => StashFiles([fc])));
         items.Add(new Separator());
         if (exists)
         {
@@ -120,17 +121,18 @@ internal sealed partial class GitTreeWindow
         return (true, "");
     }
 
-    // A partial stash: just these files, staged and unstaged, new ones included. Undo pops it back.
+    // A partial stash: just these files (or this one), staged and unstaged, new ones included. Undo pops it back.
     private void StashFiles(List<GitFileChange> files)
     {
         var paths = files.SelectMany(f => f.OrigPath is { } o ? [o, f.Path!] : new[] { f.Path! }).Distinct().ToList();
-        string label = $"WIP on {_snap?.Current?.Branch ?? "detached HEAD"}: {files.Count} files";
-        RunHereAction($"Stashing {files.Count} files…", cover: true, cwd =>
+        string what = files.Count == 1 ? System.IO.Path.GetFileName(files[0].Path!.TrimEnd('/')) : $"{files.Count} files";
+        string label = $"WIP on {_snap?.Current?.Branch ?? "detached HEAD"}: {what}";
+        RunHereAction($"Stashing {what}…", cover: true, cwd =>
         {
             var r = GitOps.StashPushPaths(cwd, label, paths);
             if (!r.Ok || GitOps.StashTop(cwd) is not { } made) return (r, null);
             return (r, () => GitOps.StashPop(cwd, made));
-        }, _ => $"Stashed {files.Count} files", conflict: null);
+        }, _ => $"Stashed {what}", conflict: null);
     }
 
     // Back to the last commit, both sides: a file the commit doesn't have goes, a rename comes back under its old name.
