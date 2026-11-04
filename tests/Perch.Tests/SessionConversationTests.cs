@@ -88,6 +88,41 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void TruncateFrom_DropsThePromptAndEverythingAfter()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("first");
+        conv.Apply(new AssistantTextEvent("one"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, InputTokens: 10, OutputTokens: 5, DurationMs: 100));
+        conv.AddUserPrompt("/compact");
+        conv.AddUserPrompt("second");
+        conv.Apply(new AssistantTextEvent("two"));
+
+        var candidates = conv.RewindCandidates();
+        Assert.Equal(["first", "second"], candidates.Select(c => c.Text));   // slash commands aren't anchors
+
+        bool reset = false;
+        conv.Reset += () => reset = true;
+        conv.TruncateFrom(candidates[1]);
+
+        Assert.True(reset);
+        Assert.False(conv.TurnActive);
+        Assert.DoesNotContain(conv.Items, i => i is UserMessageItem { Text: "second" });
+        Assert.Contains(conv.Items, i => i is UserMessageItem { Text: "first" });
+        var marker = Assert.IsType<NoteItem>(conv.Items[^1]);
+        Assert.Equal("rewound to before “second”", marker.Text);
+    }
+
+    [Fact]
+    public void LoadHistory_SetsPromptUuids()
+    {
+        var (conv, _) = Make();
+        conv.LoadHistory(["""{"type":"user","uuid":"u-1","parentUuid":null,"message":{"role":"user","content":"hello"}}"""]);
+        Assert.Equal("u-1", Assert.IsType<UserMessageItem>(Assert.Single(conv.Items)).Uuid);
+    }
+
+    [Fact]
     public void FirstInit_MatchingSeededId_DoesNotClear()
     {
         var (conv, _) = Make();

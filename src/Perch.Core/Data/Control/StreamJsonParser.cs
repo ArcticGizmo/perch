@@ -382,6 +382,25 @@ internal static class StreamJsonParser
             return [new RemoteControlEvent(null, null, TranscriptJson.AsString(response?["error"]) ?? "remote control failed")];
         }
 
+        if (TranscriptJson.AsString(response?["request_id"]) is { } rewindId
+            && rewindId.StartsWith(ClaudeSessionController.RewindFilesRequestPrefix, StringComparison.Ordinal))
+        {
+            if (TranscriptJson.AsString(response?["subtype"]) != "success")
+                return [new RewindFilesEvent(rewindId, false, TranscriptJson.AsString(response?["error"]) ?? "rewind failed")];
+            var inner = response?["response"];
+            var files = (inner?["filesChanged"] as JsonArray)?
+                .Select(f => TranscriptJson.AsString(f))
+                .Where(f => !string.IsNullOrEmpty(f))
+                .Select(f => f!)
+                .ToList();
+            return [new RewindFilesEvent(rewindId,
+                inner?["canRewind"]?.GetValueKind() == System.Text.Json.JsonValueKind.True,
+                TranscriptJson.AsString(inner?["error"]),
+                files,
+                (int)TranscriptJson.AsLong(inner?["insertions"]),
+                (int)TranscriptJson.AsLong(inner?["deletions"]))];
+        }
+
         // Only the set_permission_mode ack carries information the UI shows; other acks are ignored.
         var mode = TranscriptJson.AsString(response?["response"]?["mode"]);
         return mode is { Length: > 0 } ? [new ModeChangedEvent(mode)] : [];

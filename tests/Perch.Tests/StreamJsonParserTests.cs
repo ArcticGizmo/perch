@@ -204,6 +204,35 @@ public class StreamJsonParserTests
     }
 
     [Fact]
+    public void ControlResponse_RewindFilesAck_YieldsRewindFilesEvent()
+    {
+        // Shapes captured live from claude 2.1.318 (docs/session-rewind-plan.md): a dry run lists the files, a real
+        // rewind only confirms, an unknown message is canRewind:false with an error.
+        var dry = """{"type":"control_response","response":{"subtype":"success","request_id":"perch-rewind-7","response":{"canRewind":true,"filesChanged":["C:\\p\\hello.txt"],"insertions":1,"deletions":1}}}""";
+        var preview = Assert.IsType<RewindFilesEvent>(Assert.Single(StreamJsonParser.Parse(dry)));
+        Assert.Equal("perch-rewind-7", preview.RequestId);
+        Assert.True(preview.CanRewind);
+        Assert.Equal(["C:\\p\\hello.txt"], preview.FilesChanged);
+        Assert.Equal(1, preview.Insertions);
+        Assert.Equal(1, preview.Deletions);
+
+        var real = """{"type":"control_response","response":{"subtype":"success","request_id":"perch-rewind-8","response":{"canRewind":true,"skippedLinks":0}}}""";
+        var applied = Assert.IsType<RewindFilesEvent>(Assert.Single(StreamJsonParser.Parse(real)));
+        Assert.True(applied.CanRewind);
+        Assert.Null(applied.Error);
+
+        var none = """{"type":"control_response","response":{"subtype":"success","request_id":"perch-rewind-9","response":{"canRewind":false,"error":"No file checkpoint found for this message."}}}""";
+        var refused = Assert.IsType<RewindFilesEvent>(Assert.Single(StreamJsonParser.Parse(none)));
+        Assert.False(refused.CanRewind);
+        Assert.Equal("No file checkpoint found for this message.", refused.Error);
+
+        var err = """{"type":"control_response","response":{"subtype":"error","request_id":"perch-rewind-10","error":"boom"}}""";
+        var failed = Assert.IsType<RewindFilesEvent>(Assert.Single(StreamJsonParser.Parse(err)));
+        Assert.False(failed.CanRewind);
+        Assert.Equal("boom", failed.Error);
+    }
+
+    [Fact]
     public void Result_YieldsTurnResult()
     {
         var line = """{"type":"result","subtype":"success","is_error":false,"duration_ms":2318,"num_turns":1,"session_id":"s","total_cost_usd":0.062387,"usage":{"input_tokens":10,"output_tokens":47},"result":"hello"}""";

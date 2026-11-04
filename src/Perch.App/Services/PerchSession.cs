@@ -112,9 +112,14 @@ internal sealed class PerchSession : IDisposable
         session.Launch(o);
         if (o.ResumeId is { } resumeId)
         {
-            session.Conversation.AddNote($"resumed session {Shorten(resumeId)}");
-            session.LoadHistoryAsync(resumeId);
+            session.Conversation.AddNote(o.Fork
+                ? $"forked from session {Shorten(resumeId)}"
+                : $"resumed session {Shorten(resumeId)}");
+            // A fork's history is the source's, up to the fork point; its own transcript has nothing until the first send.
+            session.LoadHistoryAsync(resumeId, o.ResumeAt);
         }
+        // A truncated resume writes nothing until the next prompt, so a restart before then must truncate again.
+        if (!o.Fork) session._resumeAt = o.ResumeAt;
         return session;
     }
 
@@ -137,7 +142,7 @@ internal sealed class PerchSession : IDisposable
     public void Wake(SessionLaunchOptions o)
     {
         if (!IsDormant) return;
-        Launch(o with { ResumeId = SessionId });
+        Launch(o with { ResumeId = SessionId, ResumeAt = _resumeAt, Fork = false });
         IsDormant = false;
         Model = o.Model;
         PermissionMode = o.PermissionMode;
@@ -156,12 +161,14 @@ internal sealed class PerchSession : IDisposable
             // Remote-control acks aren't conversation items — route them to the session's own signal (which
             // still drops a note); everything else folds into the conversation model.
             if (ev is RemoteControlEvent rc) OnRemoteControl(rc);
+            else if (ev is RewindFilesEvent rf) OnRewindFiles(rf);
             else Conversation.Apply(ev);
         });
         controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => OnExited(code, err));
         try
         {
-            controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir);
+            controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir,
+                resumeAt: o.ResumeAt, fork: o.Fork);
         }
         catch
         {
@@ -213,8 +220,10 @@ internal sealed class PerchSession : IDisposable
     private const int MaxHistoryLines = 4000;
 
     // `--resume` replays nothing on the wire (only init), so the past conversation comes from the transcript
-    // on disk, read off the UI thread and inserted in front of the live items (Conversation.Reset).
-    private void LoadHistoryAsync(string sessionId)
+    // on disk, read off the UI thread and inserted in front of the live items (Conversation.Reset). Only the
+    // transcript's active branch is shown (TranscriptChain); `leafUuid` names it when a rewind or fork point hasn't
+    // been written past yet.
+    private void LoadHistoryAsync(string sessionId, string? leafUuid = null)
     {
         var path = TranscriptLocator.Resolve(sessionId, Cwd);
         if (path is null)
@@ -224,15 +233,14 @@ internal sealed class PerchSession : IDisposable
         }
         Task.Run(() =>
         {
-            List<string> lines;
-            bool clipped;
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var reader = new StreamReader(fs))
-                (lines, clipped) = TranscriptScan.LastLines(ReadAll(reader), MaxHistoryLines);
+            var (lines, clipped) = TranscriptScan.LastLines(
+                TranscriptChain.ActiveLines(() => ReadAll(path), leafUuid), MaxHistoryLines);
 
-            static IEnumerable<string> ReadAll(StreamReader r)
+            static IEnumerable<string> ReadAll(string p)
             {
-                while (r.ReadLine() is { } line) yield return line;
+                using var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(fs);
+                while (reader.ReadLine() is { } line) yield return line;
             }
             // The CLI replays no usage on --resume, so seed the context gauge from the transcript's last
             // prompt size — the same figure the resume estimate showed on the launcher.
@@ -292,7 +300,7 @@ internal sealed class PerchSession : IDisposable
     public void Restart(string? configDir)
     {
         if (!IsRunning || SessionId is not { Length: > 0 } id) return;
-        _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, configDir);
+        _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, configDir, ResumeAt: _resumeAt);
         Conversation.AddNote($"restarting session {Shorten(id)}…");
         Restarted?.Invoke(this);
         _controller!.Stop();
@@ -318,12 +326,21 @@ internal sealed class PerchSession : IDisposable
         {
             Conversation.AddNote($"couldn't restart claude: {ex.Message}", NoteKind.Error);
             _restartWith = null;
+            _rewindingFrom = null;
             HasEnded = true;
             ExitCode = code;
             Ended?.Invoke(this);
             return true;
         }
         _restartWith = null;
+        if (_rewindingFrom is { } prompt)
+        {
+            _rewindingFrom = null;
+            Conversation.TruncateFrom(prompt);
+        }
+        // Remote Control belongs to a process, so the new one starts without it. Asking again keeps claude.ai on the
+        // session (the ack's note says if the link changed).
+        if (RemoteControlEnabled) _controller?.RequestRemoteControl(true);
         Restarted?.Invoke(this);
         ProcessAuthChanged?.Invoke();   // the new process's clocks are being read; drop the old process's banner now
         return true;
@@ -367,6 +384,7 @@ internal sealed class PerchSession : IDisposable
     {
         if (_controller is not { IsRunning: true } c) return;
         c.SendPrompt(text, BuildImageContents(attachments));
+        _resumeAt = null;   // the CLI writes this prompt onto the kept branch, so the file's own leaf is right again
         Conversation.AddUserPrompt(text, attachments);
         // Optimistically reflect a /rename in the title (the CLI writes the custom-title record to the transcript).
         if (RenameArg(text) is { } title) SetTitle(title);
@@ -509,6 +527,66 @@ internal sealed class PerchSession : IDisposable
         RemoteControlChanged?.Invoke(ev);
     }
 
+    // The entry a truncated resume keeps until a new prompt is written past it (see Start); null otherwise.
+    private string? _resumeAt;
+
+    /// <summary>The transcript entry the conversation currently ends at when a rewind hasn't been written past yet
+    /// (the file's own last record is still the dropped branch's); null when the file's leaf is right.</summary>
+    public string? ResumeAt => _resumeAt;
+    // The prompt a conversation rewind drops from, once its restart lands.
+    private UserMessageItem? _rewindingFrom;
+    private readonly Dictionary<string, TaskCompletionSource<RewindFilesEvent>> _rewindWaiters = new(StringComparer.Ordinal);
+
+    // How long a rewind_files request may go unanswered: it touches only the files the session edited.
+    private static readonly TimeSpan RewindFilesTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Asks the running process to restore (or, on a <paramref name="dryRun"/>, only to report) the files changed
+    /// since <paramref name="userMessageUuid"/>. Never throws: no process, a bad id or no answer comes back as a result
+    /// with <see cref="RewindFilesEvent.CanRewind"/> false and an error. Completes on the UI thread.</summary>
+    public async Task<RewindFilesEvent> RewindFilesAsync(string userMessageUuid, bool dryRun)
+    {
+        if (_controller is not { IsRunning: true } c)
+            return new RewindFilesEvent("", false, "start the session to rewind code");
+        if (c.RewindFiles(userMessageUuid, dryRun) is not { } requestId)
+            return new RewindFilesEvent("", false, "this prompt has no usable id");
+        var tcs = new TaskCompletionSource<RewindFilesEvent>();
+        _rewindWaiters[requestId] = tcs;
+        var done = await Task.WhenAny(tcs.Task, Task.Delay(RewindFilesTimeout));
+        _rewindWaiters.Remove(requestId);
+        return done == tcs.Task ? tcs.Task.Result : new RewindFilesEvent(requestId, false, "claude didn't answer");
+    }
+
+    private void OnRewindFiles(RewindFilesEvent ev)
+    {
+        if (_rewindWaiters.TryGetValue(ev.RequestId, out var tcs)) tcs.TrySetResult(ev);
+    }
+
+    /// <summary>
+    /// Rewinds the conversation to before <paramref name="prompt"/>, keeping the transcript only up to
+    /// <paramref name="keepUuid"/> (the prompt's parent entry). A live session restarts in place with a truncated
+    /// resume, and the thread drops the prompt and what followed once the new process is up. A dormant one just
+    /// remembers the point, and its first send wakes it truncated. Returns false when there's nothing to rewind with.
+    /// </summary>
+    public bool RewindConversation(UserMessageItem prompt, string keepUuid)
+    {
+        if (HasEnded || IsRestarting || string.IsNullOrEmpty(keepUuid)) return false;
+        _resumeAt = keepUuid;
+        if (IsDormant)
+        {
+            Conversation.TruncateFrom(prompt);
+            return true;
+        }
+        if (!IsRunning) return false;
+        _rewindingFrom = prompt;
+        Restart(ConfigDir);
+        return true;
+    }
+
+    /// <summary>The launch settings for a fork of this session from <paramref name="atUuid"/> (null = its end): same
+    /// folder, model, mode, effort and account, written to a new session id.</summary>
+    public SessionLaunchOptions ForkOptions(string? atUuid) =>
+        new(Cwd, Model, PermissionMode, Effort, SessionId, ConfigDir, ResumeAt: atUuid ?? _resumeAt, Fork: true);
+
     /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows. Perch's own exits
     /// call this too, and those sessions come back dormant on the next start; <see cref="EndByUser"/> is the user
     /// being done with it.</summary>
@@ -563,4 +641,6 @@ internal sealed record SessionLaunchOptions(
     string? PermissionMode = null,
     string? Effort = null,
     string? ResumeId = null,
-    string? ConfigDir = null);
+    string? ConfigDir = null,
+    string? ResumeAt = null,
+    bool Fork = false);

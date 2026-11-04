@@ -414,7 +414,8 @@ internal sealed class HistoryWindow : Window
         // The record's own "uuid" key, written compactly by the CLI — a child's "parentUuid" never matches it.
         string? marker = string.IsNullOrEmpty(hitUuid) ? null : $"\"uuid\":\"{hitUuid}\"";
         ConversationItem? hitItem = null;
-        foreach (var line in lines)
+        // Only the active branch: turns a rewind dropped are still in the file but never happened.
+        foreach (var line in TranscriptChain.ActiveLines(lines))
         {
             conv.AppendTranscriptLine(line);
             if (marker is not null && hitItem is null && line.Contains(marker, StringComparison.Ordinal))
