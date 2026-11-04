@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Clicking a session in Windows Terminal now opens its own tab, not just the window
+
 ---
 
 ## [v0.6.7] - 2026-11-05
