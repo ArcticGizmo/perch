@@ -134,6 +134,10 @@ public partial class App : Application
     private DateTime _lastAchievementCheck = DateTime.MinValue;
     private bool _achievementCheckInFlight;
     private static readonly TimeSpan AchievementCheckInterval = TimeSpan.FromMinutes(3);
+    // AchievementMoments waiting to reach the store. They're handed to the next check's background task, so the
+    // store stays owned by that single-flighted task; a moment arriving mid-check queues one more check.
+    private readonly HashSet<string> _pendingMoments = new(StringComparer.Ordinal);
+    private bool _achievementRecheck;
     // Above this many new unlocks in one check (a first run, a store migration, a long-away return), we
     // collapse to a single "you've earned N achievements" toast instead of stacking that many.
     private const int AchievementToastMax = 3;
@@ -410,6 +414,8 @@ public partial class App : Application
             {
                 if (_appSettings is { } s) { s.CompactSessionRows = compact; s.Save(); }
             };
+            _overlay.Canvas.RowsOverflowed += () =>
+                Dispatcher.UIThread.Post(() => RecordAchievementMoment(AchievementMoments.SessionListOverflowed));
 
             // Media transport buttons on the now-playing strip → the system media session.
             _overlay.Canvas.MediaPlayPauseRequested += () => _mediaHost?.Controller.TogglePlayPause();
@@ -1395,8 +1401,13 @@ public partial class App : Application
     // re-celebrate on a later check; only genuinely new unlocks pop from then on.
     private void CheckAchievements(bool force, bool present = true)
     {
-        if (_achievements is not { } svc || _appSettings is not { } settings || _achievementCheckInFlight)
+        if (_achievements is not { } svc || _appSettings is not { } settings)
             return;
+        if (_achievementCheckInFlight)
+        {
+            if (_pendingMoments.Count > 0) _achievementRecheck = true;
+            return;
+        }
         var now = DateTime.Now;
         if (!force && now - _lastAchievementCheck < AchievementCheckInterval)
             return;
@@ -1405,17 +1416,34 @@ public partial class App : Application
 
         bool includeCost = settings.ShowEstimatedCost;
         var today = DateOnly.FromDateTime(now);
+        var moments = _pendingMoments.ToArray();
+        _pendingMoments.Clear();
         Task.Run(() =>
         {
+            foreach (var m in moments) svc.RecordMoment(m);
             var range = SessionStatsService.ReportAllTime(today);
             return svc.Sync(range.Totals, range, includeCost);
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             _achievementCheckInFlight = false;
+            if (_achievementRecheck)
+            {
+                _achievementRecheck = false;
+                CheckAchievements(force: true, present: _appSettings?.FirstRunComplete ?? false);
+            }
             if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
                 return;
             if (present) PresentAchievementUnlocks(t.Result);   // else: recorded silently (first-run load)
         }));
+    }
+
+    // Something happened in Perch itself that a badge watches for. A replay's sessions are someone else's
+    // recording, so nothing it does counts.
+    private void RecordAchievementMoment(string id)
+    {
+        if (Services.Replay.ReplaySession.Current is not null) return;
+        _pendingMoments.Add(id);
+        CheckAchievements(force: true, present: _appSettings?.FirstRunComplete ?? false);
     }
 
     // Announces a batch of freshly-crossed rungs through two independent channels, each with its own gate:

@@ -50,6 +50,11 @@ public sealed partial class OverlayCanvas
     /// <summary>The density toggle flipped the rows: true = compact (one line each), false = roomy.</summary>
     internal event Action<bool>? CompactRowsChanged;
 
+    /// <summary>The session rows ran past the panel's budget and became a scroller. Raised at most once per
+    /// canvas, from the measure pass, so handlers must defer any real work.</summary>
+    internal event Action? RowsOverflowed;
+    private bool _rowsOverflowRaised;
+
     private double RowsViewportHeight => Math.Min(_rowsContent, _rowsViewport);
     private bool RowsScrollable => _rowsContent > _rowsViewport + 0.5;
     private double MaxRowsScroll => Math.Max(0, _rowsContent - RowsViewportHeight);
@@ -113,6 +118,12 @@ public sealed partial class OverlayCanvas
             {
                 _rowsViewport = Math.Max(Math.Min(_rowsContent, MinRowsViewport), _rowsContent - over);
                 body = LayoutSections();
+                // A render's pinned budget is staged, not a real monitor running out of room.
+                if (RowsScrollable && !_panelBudgetPinned && !_rowsOverflowRaised)
+                {
+                    _rowsOverflowRaised = true;
+                    RowsOverflowed?.Invoke();
+                }
             }
         }
         _rowsScroll = Math.Clamp(_rowsScroll, 0, MaxRowsScroll);

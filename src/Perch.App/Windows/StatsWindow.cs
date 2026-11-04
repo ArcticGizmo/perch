@@ -132,15 +132,16 @@ internal sealed class StatsWindow : Window
 
         var today = DateOnly.FromDateTime(DateTime.Now);
         var scope = _scope;
-        System.Threading.Tasks.Task.Run(() => LoadScope(scope, today)).ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() => (loaded: LoadScope(scope, today), moments: AchievementStore.Load().Moments)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible) return;
-                _report = t.Result.report;
-                _range = t.Result.range;
-                _dashboard.SetReport(t.Result.report, t.Result.range);
+                var (loaded, moments) = t.Result;
+                _report = loaded.report;
+                _range = loaded.range;
+                _dashboard.SetReport(loaded.report, loaded.range, moments);
                 _wrappedButton.Enabled = _report.SessionCount > 0;
             });
         });

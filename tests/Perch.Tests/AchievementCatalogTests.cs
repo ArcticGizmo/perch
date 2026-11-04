@@ -267,6 +267,7 @@ public class AchievementCatalogTests
     [InlineData("indecisive", "Whoops")]
     [InlineData("elite", "Special")]
     [InlineData("completionist", "Special")]
+    [InlineData("standing-room-only", "Special")]
     public void Badge_IsInExpectedGroup(string id, string group) =>
         Assert.Equal(group, Fam(Eval(Report()), id).Group);
 
@@ -277,5 +278,21 @@ public class AchievementCatalogTests
         Assert.True(completionist.Secret);
         Assert.False(completionist.Earned);
         Assert.Equal("There is nothing left to prove.", completionist.Description);
+    }
+
+    [Fact]
+    public void StandingRoomOnly_StaysMaskedUntilTheListOverflows()
+    {
+        // However big the history, transcripts alone can't earn it — only the recorded moment does.
+        var locked = Fam(Eval(Report(sessions: 5_000, prompts: 100_000)), "standing-room-only");
+        Assert.True(locked.Secret);
+        Assert.False(locked.Earned);
+        Assert.Equal("Some of you will have to stand.", locked.Description);
+
+        var moments = new HashSet<string> { AchievementMoments.SessionListOverflowed };
+        var earned = Fam(AchievementCatalog.Evaluate(Report(), null, true, moments), "standing-room-only");
+        Assert.True(earned.Earned);
+        Assert.Equal("Standing Room Only", earned.Name);
+        Assert.Equal(AchievementTier.Gold, earned.Tier);
     }
 }

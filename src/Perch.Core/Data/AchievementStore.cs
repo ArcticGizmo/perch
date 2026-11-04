@@ -21,15 +21,21 @@ internal sealed class AchievementStore
 
     private readonly string _path;
     private readonly HashSet<string> _unlocked;
+    private readonly HashSet<string> _moments;
 
     /// <summary>True when a store file already existed on disk at load — false on the very first run. Lets
     /// the caller seed silently the first time rather than firing a toast for every badge earned to date.</summary>
     public bool Existed { get; }
 
-    private AchievementStore(string path, HashSet<string> unlocked, bool existed)
+    /// <summary>The <see cref="AchievementMoments"/> that have happened at least once. Transcripts can't
+    /// reconstruct them, so these are the badges' only record.</summary>
+    public IReadOnlySet<string> Moments => _moments;
+
+    private AchievementStore(string path, HashSet<string> unlocked, HashSet<string> moments, bool existed)
     {
         _path = path;
         _unlocked = unlocked;
+        _moments = moments;
         Existed = existed;
     }
 
@@ -44,11 +50,14 @@ internal sealed class AchievementStore
             {
                 var model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path));
                 var ids = model?.Unlocked ?? [];
-                return new AchievementStore(path, new HashSet<string>(ids, StringComparer.Ordinal), existed: true);
+                var moments = model?.Moments ?? [];
+                return new AchievementStore(path, new HashSet<string>(ids, StringComparer.Ordinal),
+                    new HashSet<string>(moments, StringComparer.Ordinal), existed: true);
             }
         }
         catch { }
-        return new AchievementStore(path, new HashSet<string>(StringComparer.Ordinal), existed: false);
+        return new AchievementStore(path, new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.Ordinal), existed: false);
     }
 
     public bool Contains(string id) => _unlocked.Contains(id);
@@ -56,11 +65,18 @@ internal sealed class AchievementStore
     /// <summary>Records an id as unlocked; returns true if it was newly added (false if already present).</summary>
     public bool Add(string id) => _unlocked.Add(id);
 
+    /// <summary>Records that a moment has happened; returns true if this is the first time.</summary>
+    public bool AddMoment(string id) => _moments.Add(id);
+
     public void Save()
     {
         try
         {
-            var model = new Model { Unlocked = _unlocked.OrderBy(x => x, StringComparer.Ordinal).ToList() };
+            var model = new Model
+            {
+                Unlocked = _unlocked.OrderBy(x => x, StringComparer.Ordinal).ToList(),
+                Moments = _moments.OrderBy(x => x, StringComparer.Ordinal).ToList(),
+            };
             AtomicFile.Write(_path, JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
@@ -69,5 +85,6 @@ internal sealed class AchievementStore
     private sealed class Model
     {
         public List<string> Unlocked { get; set; } = [];
+        public List<string>? Moments { get; set; }
     }
 }
