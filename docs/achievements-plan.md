@@ -87,3 +87,20 @@ or UI code:
 exclusion), and `AchievementCatalogTests` (`Whoops_LevelsUpThroughTheLadder`,
 `Indecisive_IsSecretAndEarnedAtFiveWhoopsInOneSession`, group placement). Eyeballed via
 `render <dir>` → `achievements_*.png`.
+
+## Moment badges — things that happen in Perch, not in a transcript
+
+Some badges are earned by something Perch itself does, which no stats scan can find afterwards. These are **moments**, the one exception to "every badge is retroactive".
+
+- **Ids** live in `Perch.Core/Data/AchievementMoments`. The first badge is `SessionListOverflowed`.
+- **Storage.** `AchievementStore` keeps a second list, `Moments`, in `achievements.json` beside `Unlocked`. An older file without it loads with none.
+- **Recording.** The App calls `RecordAchievementMoment(id)`, which queues the id and forces an achievement check. The check's background task runs `AchievementService.RecordMoment` (adds the id and saves at once) before `Sync`, so the store keeps a single owner. A moment that arrives during a check queues one more check. A replay never records one.
+- **Evaluation.** `AchievementCatalog.Evaluate` takes the moments as an optional set, and a family reads one with `Ctx.Moment(id)`. The Achievements and Stats windows load the set off the UI thread with their report, so an earned moment badge shows unmasked there.
+
+**Adding one:** add an id to `AchievementMoments`, a `Family.Hidden` (or `Conditional`) reading `c.Moment(id)`, and a call to `RecordAchievementMoment` where it happens. If it comes from a paint or measure pass, post it to the dispatcher first.
+
+| Id | Emoji | Name | Earned when |
+|----|:-----:|------|-------------|
+| `standing-room-only.standing-room-only` | 🚇 | Standing Room Only (secret, Gold) | The live overlay's session list first overflows its monitor budget and becomes a scroller (`OverlayCanvas.RowsOverflowed`) |
+
+It's Gold, so it gets the full-screen reveal when "achievement cards" are on. The hint on the masked tile is "Some of you will have to stand." Tests: `AchievementCatalogTests.StandingRoomOnly_StaysMaskedUntilTheListOverflows` and `AchievementServiceTests.RecordedMoment_PersistsAndUnlocksItsBadgeOnce` / `StoreWrittenBeforeMoments_LoadsWithNone`. Manual check: `docs/session-list-scroll-testing.md` §8.

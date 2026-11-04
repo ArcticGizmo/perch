@@ -89,6 +89,20 @@ Drag the panel so its bottom sits near the taskbar, then start another session (
 | Docked: an overflowing list | Rows stop above the bottom collapse handle and scroll; the handle never covers a row |
 | Change resolution / scaling while overflowing | Budget follows the new work area after the display change |
 
+## 8. Secret achievement: Standing Room Only
+
+The first time the live overlay's rows overflow and become a scroller, Perch records a moment that unlocks a secret Gold badge (see `docs/achievements-plan.md`, "Moment badges"). To retest from scratch, quit the tray and remove `"session-list-overflowed"` from `Moments` and `"standing-room-only.standing-room-only"` from `Unlocked` in `%APPDATA%\Perch\achievements.json` (`%APPDATA%\Perch (Dev)\` for a dev-profile run).
+
+| | Before | After |
+|---|---|---|
+| Achievements window, Special group, before overflowing | — | A masked "???" tile with the hint "Some of you will have to stand." |
+| Add sessions until the thumb appears (§1) | Nothing | Within a moment, the full-screen reveal for 🚇 Standing Room Only (with "achievement cards" on), plus a toast if achievement toasts are on |
+| `achievements.json` | — | `"Moments": ["session-list-overflowed"]` and the badge's id in `Unlocked` |
+| Achievements window / Stats → All time | — | The tile is unmasked: "So many sessions the overlay's list had to scroll" |
+| Close sessions, then overflow again (or restart and overflow) | — | No second reveal |
+| Settings preview with many sample rows, and `render <dir>` | — | Never unlocks it (only the live overlay counts, and a render's budget is pinned) |
+| Very first launch (Quick Start showing) while overflowing | — | Recorded silently, like the rest of the first-run backlog; the tile shows earned |
+
 ## Not covered
 
 - **A panel dragged partly off the bottom by hand.** The budget is the monitor's height, not the room under wherever the panel was dropped, and a manual drag is never clamped.

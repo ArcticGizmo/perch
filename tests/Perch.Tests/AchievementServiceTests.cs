@@ -126,6 +126,41 @@ public class AchievementServiceTests
     }
 
     [Fact]
+    public void RecordedMoment_PersistsAndUnlocksItsBadgeOnce()
+    {
+        var path = TempPath();
+        try
+        {
+            AchievementStore.LoadFrom(path).Save();
+            var svc = new AchievementService(AchievementStore.LoadFrom(path));
+            Assert.True(svc.RecordMoment(AchievementMoments.SessionListOverflowed));
+            Assert.False(svc.RecordMoment(AchievementMoments.SessionListOverflowed));
+
+            // Saved before any sync, so a crash between the two can't lose it.
+            Assert.Contains(AchievementMoments.SessionListOverflowed, AchievementStore.LoadFrom(path).Moments);
+
+            Assert.Contains(svc.Sync(Report(), null, includeCost: true), u => u.Name == "Standing Room Only");
+            var reloaded = new AchievementService(AchievementStore.LoadFrom(path));
+            Assert.Empty(reloaded.Sync(Report(), null, includeCost: true));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void StoreWrittenBeforeMoments_LoadsWithNone()
+    {
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, """{ "Unlocked": ["sessions.firstflight"] }""");
+            var store = AchievementStore.LoadFrom(path);
+            Assert.True(store.Contains("sessions.firstflight"));
+            Assert.Empty(store.Moments);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void SameReportTwice_AnnouncesOnce()
     {
         var path = TempPath();

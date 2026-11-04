@@ -27,10 +27,11 @@ internal sealed record Achievement(
     bool Secret = false, string Group = "");
 
 /// <summary>
-/// The Perch achievement catalogue — collectible tray trophies derived from lifetime stats. Every badge is
-/// computable from an all-time <see cref="StatsReport"/> (+ the <see cref="RangeReport"/> for streak/record
+/// The Perch achievement catalogue — collectible tray trophies derived from lifetime stats. Almost every badge
+/// is computable from an all-time <see cref="StatsReport"/> (+ the <see cref="RangeReport"/> for streak/record
 /// extras), so unlocks are <b>retroactive</b> and need no persisted state of their own — a pure, testable
-/// function (mirror <see cref="WrappedSummary"/> and its tests).
+/// function (mirror <see cref="WrappedSummary"/> and its tests). The exception is the few badges for things
+/// that happen in Perch itself (<see cref="AchievementMoments"/>), which the caller passes in from the store.
 ///
 /// Two shapes fold into the one <see cref="Achievement"/> tile: a <b>levelled</b> family (a metric with an
 /// ordered set of rungs, e.g. tokens 1M→10M→…→10B) that levels up in place, and a <b>one-off</b> (a single
@@ -43,10 +44,13 @@ internal static class AchievementCatalog
 
     /// <summary>Evaluates every family against the lifetime stats, one <see cref="Achievement"/> tile each.
     /// <paramref name="range"/> supplies streak/records (null → those read as unearned). With
-    /// <paramref name="includeCost"/> false the spend family drops out rather than leak a figure.</summary>
-    public static IReadOnlyList<Achievement> Evaluate(StatsReport report, RangeReport? range, bool includeCost)
+    /// <paramref name="includeCost"/> false the spend family drops out rather than leak a figure.
+    /// <paramref name="moments"/> is the store's record of <see cref="AchievementMoments"/> (null → none
+    /// have happened).</summary>
+    public static IReadOnlyList<Achievement> Evaluate(StatsReport report, RangeReport? range, bool includeCost,
+        IReadOnlySet<string>? moments = null)
     {
-        var ctx = new Ctx(report, range);
+        var ctx = new Ctx(report, range, moments);
         var list = new List<Achievement>(Families.Count + 1);
         foreach (var fam in Families)
         {
@@ -253,14 +257,19 @@ internal static class AchievementCatalog
                 "Five whoops, one session. Everything's fine.", "Cancel and re-type 5 prompts in one session",
                 AchievementTier.Silver, c => c.MaxSessionWhoops >= 5));
 
-        // ── Special: the number-nerd secrets and the capstone (Completionist is appended in Evaluate) ──
+        // ── Special: the number-nerd secrets, the overlay's own secrets, and the capstone (Completionist is
+        // appended in Evaluate) ──
         Group("Special",
             Family.Hidden("elite", "Elite", "🔢",
                 "1337.", "1,337 prompts",
                 AchievementTier.Silver, c => c.Prompts >= 1337),
             Family.Hidden("the-answer", "The Answer", "🌌",
                 "Life, the universe, and everything.", "42 active days",
-                AchievementTier.Gold, c => c.ActiveDays >= 42));
+                AchievementTier.Gold, c => c.ActiveDays >= 42),
+            // Gold so it earns the full-screen reveal: the joke lands best mid-juggle.
+            Family.Hidden("standing-room-only", "Standing Room Only", "🚇",
+                "Some of you will have to stand.", "So many sessions the overlay's list had to scroll",
+                AchievementTier.Gold, c => c.Moment(AchievementMoments.SessionListOverflowed)));
 
         return families;
     }
@@ -358,10 +367,12 @@ internal static class AchievementCatalog
     {
         private readonly StatsReport _r;
         private readonly Dictionary<string, int> _tools;
+        private readonly IReadOnlySet<string>? _moments;
 
-        public Ctx(StatsReport r, RangeReport? range)
+        public Ctx(StatsReport r, RangeReport? range, IReadOnlySet<string>? moments)
         {
             _r = r;
+            _moments = moments;
             _tools = r.Tools.ToDictionary(t => t.Tool, t => t.Count, StringComparer.Ordinal);
 
             int peak = -1; long max = 0;
@@ -429,6 +440,7 @@ internal static class AchievementCatalog
         public int MaxSessionWhoops { get; }
 
         public int Tool(string name) => _tools.GetValueOrDefault(name);
+        public bool Moment(string id) => _moments?.Contains(id) == true;
         public bool HourActive(int hour) => hour >= 0 && hour < _r.HourlyActiveSeconds.Length && _r.HourlyActiveSeconds[hour] > 0;
 
         // True when some Monday→Sunday calendar week has activity on all seven days. Distinct from a 7-day

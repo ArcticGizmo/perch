@@ -108,7 +108,7 @@ internal sealed class AchievementsWindow : Window
         System.Threading.Tasks.Task.Run(() =>
         {
             var range = SessionStatsService.ReportAllTime(today);
-            var badges = AchievementCatalog.Evaluate(range.Totals, range, showCost);
+            var badges = AchievementCatalog.Evaluate(range.Totals, range, showCost, AchievementStore.Load().Moments);
             return (badges, range.FirstActiveDay);
         }).ContinueWith(t =>
         {

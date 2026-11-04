@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.5] - 2026-11-04
+
+- Something new to find in the trophy cabinet (we've said too much already)
+
+---
+
 ## [v0.6.4] - 2026-11-04
 
 - Long session lists scroll instead of wandering off the bottom of the screen

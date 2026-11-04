@@ -33,6 +33,7 @@ internal sealed class StatsDashboard : Control
     private readonly bool _showCost;
     private StatsReport? _report;
     private RangeReport? _range;
+    private IReadOnlySet<string>? _moments;
     private bool _loading = true;
 
     public StatsDashboard(bool showCost) => _showCost = showCost;
@@ -44,10 +45,11 @@ internal sealed class StatsDashboard : Control
         InvalidateVisual();
     }
 
-    public void SetReport(StatsReport report, RangeReport? range)
+    public void SetReport(StatsReport report, RangeReport? range, IReadOnlySet<string>? moments = null)
     {
         _report = report;
         _range = range;
+        _moments = moments;
         _loading = false;
         InvalidateMeasure();
         InvalidateVisual();
@@ -140,9 +142,10 @@ internal sealed class StatsDashboard : Control
         }
 
         // Achievements — lifetime trophies, so only on the all-time scope (the one scope that loads
-        // all-time totals + streak/record extras). Evaluated retroactively from the report; no storage.
+        // all-time totals + streak/record extras). Evaluated retroactively from the report, plus the moments
+        // loaded alongside it.
         if (IsAllTime)
-            y = BadgesSection(ctx, AchievementCatalog.Evaluate(report, _range, _showCost), x, y, innerW);
+            y = BadgesSection(ctx, AchievementCatalog.Evaluate(report, _range, _showCost, _moments), x, y, innerW);
 
         // Daily trend (range scopes only).
         if (_range is { } rng2 && rng2.Trend.Count > 1)

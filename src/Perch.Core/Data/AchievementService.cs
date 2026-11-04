@@ -26,12 +26,21 @@ internal sealed class AchievementService
 
     public AchievementService(AchievementStore store) => _store = store;
 
+    /// <summary>Records one of the <see cref="AchievementMoments"/>, saving straight away so it outlives a crash
+    /// before the next <see cref="Sync"/>. Returns true the first time.</summary>
+    public bool RecordMoment(string id)
+    {
+        if (!_store.AddMoment(id)) return false;
+        _store.Save();
+        return true;
+    }
+
     /// <summary>Evaluates the families, commits newly-reached levels to the store, and returns the rungs
     /// crossed since the last sync (empty when nothing is new).</summary>
     public IReadOnlyList<AchievementUnlock> Sync(StatsReport report, RangeReport? range, bool includeCost)
     {
         var newlyUnlocked = new List<AchievementUnlock>();
-        foreach (var fam in AchievementCatalog.Evaluate(report, range, includeCost))
+        foreach (var fam in AchievementCatalog.Evaluate(report, range, includeCost, _store.Moments))
         {
             for (int i = 0; i < fam.Levels.Count; i++)
             {
