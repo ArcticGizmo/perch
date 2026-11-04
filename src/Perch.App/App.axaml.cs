@@ -407,6 +407,11 @@ public partial class App : Application
             _overlay.Canvas.RoostRequested += OpenRoost;                // …its split-panes button → the Roost
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
             _overlay.Canvas.DaemonListRequested += OpenDaemonList;
+            _overlay.Canvas.SetCompactRows(settings.CompactSessionRows);
+            _overlay.Canvas.CompactRowsChanged += compact =>
+            {
+                if (_appSettings is { } s) { s.CompactSessionRows = compact; s.Save(); }
+            };
 
             // Media transport buttons on the now-playing strip → the system media session.
             _overlay.Canvas.MediaPlayPauseRequested += () => _mediaHost?.Controller.TogglePlayPause();

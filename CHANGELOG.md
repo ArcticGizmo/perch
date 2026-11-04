@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- A long session list scrolls instead of wandering off the bottom of the screen
+- "2 above" / "1 below" cues for sessions waiting on you that are scrolled out of view
+- Compact rows: one line per session, from a button on the "+ New session" row
+
 ---
 
 ## [v0.6.3] - 2026-11-04

@@ -510,6 +510,7 @@ public sealed partial class OverlayCanvas
     protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
     {
         base.OnPointerCaptureLost(e);
+        EndThumbDrag();
         if (_drag is not null) { CancelSessionDrag(); Cursor = Cursor.Default; }
     }
 

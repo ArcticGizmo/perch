@@ -272,6 +272,30 @@ internal static class HeadlessRenderer
         workProbe.ShowGroupingHint();
         RenderControl(workProbe, Path.Combine(outDir, "overlay_work_items_hint_1.5x.png"), 144);
 
+        // A roster too long for its monitor (docs/session-list-scroll-testing.md): the rows become a scrolling
+        // viewport with a thumb, and cues count the sessions waiting on you that are scrolled out of view.
+        var manySessions = SampleData.Sessions().Concat(Enumerable.Range(1, 18).Select(i =>
+            new ClaudeSession($"9{i:000}", $"many-{i}",
+                i == 15 ? SessionStatus.AwaitingInput : i % 4 == 0 ? SessionStatus.Running : SessionStatus.Idle,
+                $@"C:\src\proj-{i:00}", $"project-{i:00}", DateTime.Now))).ToList();
+        var scrollProbe = new OverlayCanvas();
+        scrollProbe.SetPanelMaxHeightForRender(560);
+        scrollProbe.Update(manySessions);
+        scrollProbe.ScrollRowsForRender(toEnd: false);
+        RenderControl(scrollProbe, Path.Combine(outDir, "overlay_scroll_top_1x.png"), 96);
+        RenderControl(scrollProbe, Path.Combine(outDir, "overlay_scroll_top_1.5x.png"), 144);
+        scrollProbe.ScrollRowsForRender(toEnd: true);
+        RenderControl(scrollProbe, Path.Combine(outDir, "overlay_scroll_end_1x.png"), 96);
+        // Compact rows: one line per session, so far more of the same roster fits before it scrolls.
+        scrollProbe.SetCompactRows(true);
+        scrollProbe.ScrollRowsForRender(toEnd: false);
+        RenderControl(scrollProbe, Path.Combine(outDir, "overlay_scroll_compact_1x.png"), 96);
+        RenderControl(scrollProbe, Path.Combine(outDir, "overlay_scroll_compact_1.5x.png"), 144);
+        var compactFew = new OverlayCanvas();
+        compactFew.SetCompactRows(true);
+        compactFew.Update(SampleData.Sessions());
+        RenderControl(compactFew, Path.Combine(outDir, "overlay_compact_rows_1.5x.png"), 144);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);
