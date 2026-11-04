@@ -459,8 +459,6 @@ static void LaunchPerch()
     try
     {
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
-        // Nor this session's work item: a tray carrying PERCH_WORK would pass it to every session it starts.
-        Environment.SetEnvironmentVariable("PERCH_WORK", null);
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
         // Never the bare name: this hook runs with the session's project folder as its current directory, and

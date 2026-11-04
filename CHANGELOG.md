@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.4] - 2026-11-04
+
+- Long session lists scroll instead of wandering off the bottom of the screen
+- "2 above" / "1 below" cues for scrolled-away sessions that need you
+- Compact rows: one line per session, from the "+ New session" row
+- Work items retired (very organised, very alone); `perch work` and `--work` go too
+
+---
+
 ## [v0.6.3] - 2026-11-04
 
 - Git graph lines stay close to main (they'd been social distancing)

@@ -77,13 +77,13 @@ public sealed partial class OverlayCanvas
     // The "+ New session" launcher row, the session rows, and the daemon-worker strip that rides directly
     // beneath them, plus the 2px trailing gap the old PanelBodyHeight added after the block — kept as one
     // movable unit. The launcher row is always present (even with an empty roster — it's how you start
-    // your first session), so it's an unconditional constant here and in RowsTop.
+    // your first session), so it's an unconditional constant here and in RowsTop. The rows contribute their viewport,
+    // which is all of them unless the panel had to fit its monitor (OverlayCanvas.Scroll.cs).
     private double SessionsSectionHeight
     {
         get
         {
-            double h = NewSessionRowHeight;
-            foreach (var r in _rows) h += HeightOf(r);
+            double h = NewSessionRowHeight + RowsViewportHeight;
             if (DaemonStripVisible) h += DaemonStripHeight;
             return h + 2;
         }
@@ -142,33 +142,15 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // The Sessions unit: the "+ New session" launcher row, then one line per display row, then the
-    // daemon-worker strip directly beneath.
+    // The Sessions unit: the "+ New session" launcher row, then the rows' viewport, then the daemon-worker strip
+    // directly beneath.
     private void PaintSessions(DrawingContext ctx, double width, double top)
     {
         _autonomousHeaderRect = default; // re-armed below only when the section is actually drawn
         DrawNewSessionRow(ctx, width, top);
-        double y = top + NewSessionRowHeight;   // must match RowsTop
-        for (int i = 0; i < _rows.Count; i++)
-        {
-            var r = _rows[i];
-            switch (r.Header)
-            {
-                case RowHeader.Autonomous: DrawSectionHeaderRow(ctx, r, y, width); break;
-                case RowHeader.WorkItem: DrawWorkHeaderRow(ctx, i, r, y, width); break;
-                case RowHeader.Loose: DrawLooseHeaderRow(ctx, i, r, y, width); break;
-                case RowHeader.WorkEnded: DrawWorkEndedRow(ctx, i, r, y, width); break;
-                case RowHeader.WorkMore: DrawWorkMoreRow(ctx, i, r, y, width); break;
-                default:
-                    if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
-                    else DrawSessionRow(ctx, i, r.Session!, y, width);
-                    break;
-            }
-            y += HeightOf(r);
-        }
+        double y = PaintRows(ctx, width, top + NewSessionRowHeight);   // must match RowsTop
 
         if (DaemonStripVisible) DrawDaemonStrip(ctx, width, y);
-        DrawDragGhost(ctx, width);   // a session being dragged onto a work item, over everything
     }
 
     // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
@@ -176,9 +158,8 @@ public sealed partial class OverlayCanvas
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
     // split-panes glyph, with its own hover and hit rect (_roostRect). The buttons fill ~18px boxes from the right,
-    // each that's on taking the next box in: the work-item grouping toggle (OverlayCanvas.Work.cs, once there's an
-    // item), the Roost, Recent (OverlayCanvas.Recent.cs), then the Work items briefcase. A divider above the row
-    // keeps it from running into the section over it.
+    // each that's on taking the next box in: the row-density toggle (OverlayCanvas.Scroll.cs), the Roost, then Recent
+    // (OverlayCanvas.Recent.cs). A divider above the row keeps it from running into the section over it.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
         ctx.DrawLine(SepPen, new Point(HorizPad, top + 0.5), new Point(width - HorizPad, top + 0.5));
@@ -194,10 +175,9 @@ public sealed partial class OverlayCanvas
             bandRight = r.Left;
             return r;
         }
-        var group = _groupToggleRect = Slot(GroupToggleVisible);
+        var density = _compactToggleRect = Slot(CompactToggleVisible);
         var roost = _roostRect = Slot(_showRoostButton && !RearrangeMode);
         var recent = _recentRect = Slot(RecentButtonVisible);
-        var work = _workButtonRect = Slot(WorkButtonVisible);
 
         var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
@@ -220,8 +200,7 @@ public sealed partial class OverlayCanvas
             if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(roostCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
         if (recent.Width > 0) DrawRecentButton(ctx, recent);
-        if (work.Width > 0) DrawWorkButton(ctx, work);
-        if (group.Width > 0) DrawGroupToggle(ctx, group);
+        if (density.Width > 0) DrawCompactToggle(ctx, density);
     }
 
     // A small status dot at a glyph's corner, inside a cut-out ring so it reads on the glyph's stroke.

@@ -294,7 +294,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
             return;
         }
-        _denseCtl.OnScreensChanged(); RestoreOrEnsureFloating(); BringWindowToTop();
+        RefreshPanelBudget();
+        _denseCtl.OnScreensChanged(); RemeasurePanel(); RestoreOrEnsureFloating(); BringWindowToTop();
     }
 
     public void DisposeDense() => _denseCtl.Dispose();
@@ -445,6 +446,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void RelayoutWindow()
     {
         if (HostWindow is not { } w) return;
+        RefreshPanelBudget();
         if (_denseCtl.IsDense) _denseCtl.ApplyGeometry();
         else SizeFloatingToContent();
         InvalidateMeasure();
@@ -726,11 +728,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void SizeFloatingToContent()
     {
         if (_denseCtl.IsDense || _docked || HostWindow is not { } w) return;
+        RefreshPanelBudget();
         double targetW = CurrentFloatingWidth;
         double h = Draw(null, targetW); // content height in DIPs, honouring the current expand/collapse state
         if (w.SizeToContent != SizeToContent.Manual) w.SizeToContent = SizeToContent.Manual;
         if (Math.Abs(w.Width - targetW) > 0.5) w.Width = targetW;
+        bool grew = double.IsNaN(w.Height) || h > w.Height + 0.5;
         if (double.IsNaN(w.Height) || Math.Abs(w.Height - h) > 0.5) w.Height = h;
+        if (grew && !_headerDragged) KeepFloatingBottomOnScreen(w, h);
     }
 
     // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
@@ -740,9 +745,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Everything the open panel shows below the header: the strips, one line per display row, then the
     // trailing mic/now-playing strips. An empty roster simply contributes no rows — the strips stand on
     // their own, since the limits, quick links and Hypertree branches say nothing about the session list.
-    // Draw() calls this for its own measure, so the measured window height and the painted layout can
-    // never drift.
-    private double PanelBodyHeight()
+    // Draw() reaches this through PanelBodyHeight (OverlayCanvas.Scroll.cs) for its own measure, so the measured
+    // window height and the painted layout can never drift.
+    private double LayoutSections()
     {
         // Walk the movable sections in the user's chosen order, recording each visible section's absolute top
         // so the paint pass and every hit-test read the same geometry. Returns the total body height (below
@@ -1017,13 +1022,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Mirrors the painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
     private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions) + NewSessionRowHeight;
 
-    // The top of a given display row.
-    private double RowTop(int index)
-    {
-        double top = RowsTop;
-        for (int i = 0; i < index && i < _rows.Count; i++) top += HeightOf(_rows[i]);
-        return top;
-    }
 
     // ── Daemon strip ──────────────────────────────────────────────────────────
     // The Claude Code background daemon's headless worker sessions (from ~/.claude/daemon/roster.json),
@@ -1063,7 +1061,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             : HypertreeCaptionHeight + (DaemonLineCount * HypertreeLineHeight) + 6;
 
     // The strip sits directly under the last display row (and above the mic/media strips).
-    private double DaemonTop => RowTop(_rows.Count);
+    private double DaemonTop => RowsTop + RowsViewportHeight;
 
     /// <summary>Replaces the daemon strip's contents. Called on the UI thread by
     /// <c>DaemonMonitorHost</c>. Roster membership also decides which sessions render as normal rows
@@ -1712,23 +1710,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Work, Group, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
     private OverlayTooltip? _tooltip;
 
-    // Which group header a row is, if any (OverlayCanvas.Work.cs adds the work-item groups, and the ended / "N more"
-    // lines under an item, which carry no live session so they ride the header path too).
-    private enum RowHeader { None, Autonomous, WorkItem, Loose, WorkEnded, WorkMore }
+    // Which group header a row is, if any.
+    private enum RowHeader { None, Autonomous }
 
-    // A flat render row: a parent session, one of its sub-agents, or a group header ("Autonomous", a work item,
-    // "Not in a work item"). Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's
-    // own child, …), driving its indent in the tree; 0 for session and header rows. Work is the item a header names,
-    // or the item a session/sub-agent row is listed under (what a drag moves it out of); SectionCount is a header's count (and
-    // the hidden count on a "N more" line); Ended is the member an ended line shows.
+    // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" group header. Depth is the
+    // sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's own child, …), driving its indent in
+    // the tree; 0 for session and header rows. SectionCount is a header's count.
     private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0,
-        RowHeader Header = RowHeader.None, OverlayWorkItem? Work = null, OverlayEndedMember? Ended = null)
+        RowHeader Header = RowHeader.None)
     {
         public bool IsSubAgent => Sub != null;
         public bool IsSectionHeader => Header != RowHeader.None;
@@ -1770,23 +1765,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
         var rows = new List<DisplayRow>();
-        if (WorkGrouping)
-        {
-            // Grouped by work item (OverlayCanvas.Work.cs); with no items the list below is unchanged.
-            AddWorkGroupedRows(rows, interactive, background);
-        }
-        else
-        {
-            foreach (var s in interactive) AddSessionRows(rows, s);
+        foreach (var s in interactive) AddSessionRows(rows, s);
 
-            if (background.Count > 0)
-            {
-                rows.Add(new DisplayRow(null, null, background.Count, Header: RowHeader.Autonomous));
-                if (_autonomousExpanded)
-                    foreach (var s in background) AddSessionRows(rows, s);
-            }
-            else _autonomousExpanded = false;
+        if (background.Count > 0)
+        {
+            rows.Add(new DisplayRow(null, null, background.Count, Header: RowHeader.Autonomous));
+            if (_autonomousExpanded)
+                foreach (var s in background) AddSessionRows(rows, s);
         }
+        else _autonomousExpanded = false;
 
         _rows = rows;
         // Deliberately *not* collapsing when the session list empties. The panel keeps its strips at zero
@@ -1806,10 +1793,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // A session's row plus its running sub-agent / teammate subtree, walked depth-first in draw order so
     // each parent is immediately followed by its (indented) children.
-    private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session, OverlayWorkItem? work = null)
+    private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session)
     {
-        rows.Add(new DisplayRow(session, null, Work: work));
-        AddSubTree(rows, session, session.SubAgents, 1, work);
+        rows.Add(new DisplayRow(session, null));
+        AddSubTree(rows, session, session.SubAgents, 1);
         // PR checks are surfaced only in the glyph's aggregate dot, hover tooltip, and click flyout — never
         // as overlay child rows.
     }
@@ -1817,8 +1804,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Appends one level of the sub-agent tree, then recurses into each node's children unless the node is
     // collapsed. Ordering per level matches the flat layout it replaces: teammates first, working before
     // idle, then by name.
-    private void AddSubTree(List<DisplayRow> rows, ClaudeSession session, IReadOnlyList<SubAgent> subs, int depth,
-        OverlayWorkItem? work = null)
+    private void AddSubTree(List<DisplayRow> rows, ClaudeSession session, IReadOnlyList<SubAgent> subs, int depth)
     {
         var ordered = subs
             .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
@@ -1827,9 +1813,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
         foreach (var sub in ordered)
         {
-            rows.Add(new DisplayRow(session, sub, Depth: depth, Work: work));
+            rows.Add(new DisplayRow(session, sub, Depth: depth));
             if (sub.Children.Count > 0 && !_collapsedAgents.Contains(sub.AgentId))
-                AddSubTree(rows, session, sub.Children, depth + 1, work);
+                AddSubTree(rows, session, sub.Children, depth + 1);
         }
     }
 
@@ -1847,14 +1833,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     private double HeightOf(DisplayRow row) =>
-        row.Header is RowHeader.WorkEnded or RowHeader.WorkMore ? EndedRowHeight :
         row.IsSectionHeader ? SectionRowHeight :
         row.IsSubAgent ? SubRowHeight :
         SessionRowHeight(row.Session!);
 
     // A session row is a fixed RowHeight: the name plus one optional sub-line (activity/elapsed). A note is
-    // shown only as a glyph (hover for the text), so it no longer adds a line or grows the row.
-    private double SessionRowHeight(ClaudeSession s) => RowHeight;
+    // shown only as a glyph (hover for the text), so it no longer adds a line or grows the row. Compact rows have
+    // no sub-line, so they're one line high.
+    private double SessionRowHeight(ClaudeSession s) => _compactRows ? CompactRowHeight : RowHeight;
 
     // The live second-line content (activity phrase + elapsed timer) for a session, or (null, null) when
     // it has none. Single source of truth so the measured row height and the painted layout can't drift.
@@ -1974,7 +1960,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _jiraRects.Clear();
                 _dirRects.Clear();
                 _subChevronRects.Clear();
-                _workPlusRects.Clear();
 
                 // Paint every visible section at the top recorded by the preceding measure pass, in the user's
                 // chosen order. _sectionTop was populated by PanelBodyHeight() above. See OverlayCanvas.Sections.cs.
@@ -2745,8 +2730,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
     private int HitTestRow(Point p)
     {
-        if (!(ShowFullPanel && _rows.Count > 0) || p.Y < RowsTop) return -1;
-        double y = RowsTop;
+        if (!InRowsViewport(p)) return -1;
+        double y = RowsTop - _rowsScroll;
         for (int i = 0; i < _rows.Count; i++)
         {
             double h = HeightOf(_rows[i]);
@@ -2819,7 +2804,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void DrawSessionRow(DrawingContext ctx, int rowIndex, ClaudeSession session, double top, double width)
     {
         double rowH = SessionRowHeight(session);
-        double left = HorizPad + RowIndent;
+        double left = HorizPad;
         ctx.DrawLine(SepPen, new Point(left, top), new Point(width - HorizPad, top));
 
         // Account guardrail (Layer 2, M2): is this session signed into an org its directory rule forbids?
@@ -2856,6 +2841,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var (activity, elapsed) = SecondLineContent(session);
         // A mismatch commandeers the second line: the wrong-account warning is the headline, not the activity.
         if (mismatch) { activity = mismatchText; elapsed = ""; }
+        // Compact rows are one line; a mismatch still shows through the row's red wash and outline.
+        if (_compactRows) activity = elapsed = null;
         bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
         // The "Session notes" indicator toggle (off by default) gates the note glyph on the row. The note's
@@ -3019,7 +3006,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showDir = dirLabel is not null;
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
-        double nameMax = width - HorizPad * 3 - RowIndent - 8 - statusW - badgeW - rcW - originW - mailW
+        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
                          - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
@@ -3325,8 +3312,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Tree connector: one SubIndent step of indent per nesting level, with the branch dropping from
         // the row above at the parent's marker column and turning in to this node's marker.
-        double branchX = HorizPad + RowIndent + SubIndent * (depth - 1) + 4;
-        double markerX = HorizPad + RowIndent + SubIndent * depth;
+        double branchX = HorizPad + SubIndent * (depth - 1) + 4;
+        double markerX = HorizPad + SubIndent * depth;
         ctx.DrawLine(TreeLinePen, new Point(branchX, top - SubRowHeight / 2), new Point(branchX, midY));
 
         bool hasChildren = sub.Children.Count > 0;
@@ -4080,9 +4067,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         var p = e.GetPosition(this);
 
-        // A session row being dragged onto a work item (OverlayCanvas.Work.cs) owns the pointer once it's past the
-        // threshold: no hover, no tooltips, just the drop target.
-        if (_leftPressed && UpdateSessionDrag(p)) { base.OnPointerMoved(e); return; }
+        if (_thumbDragging) { DragThumbTo(p); base.OnPointerMoved(e); return; }
 
         // A brand long-press only counts while the pointer stays put — the first real movement means it's
         // becoming a header drag, so cancel the pending arcade summon.
@@ -4203,10 +4188,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (overRoost != _hoveredRoost) { _hoveredRoost = overRoost; InvalidateVisual(); }
         bool overRecent = OverRecentButton(p);
         if (overRecent != _hoveredRecent) { _hoveredRecent = overRecent; InvalidateVisual(); }
-        bool overWork = OverWorkButton(p);
-        if (overWork != _hoveredWorkButton) { _hoveredWorkButton = overWork; InvalidateVisual(); }
-        bool overGroup = OverGroupToggle(p);
-        if (overGroup != _hoveredGroupToggle) { _hoveredGroupToggle = overGroup; InvalidateVisual(); }
+        bool overCompact = OverCompactToggle(p);
+        if (overCompact != _hoveredCompactToggle) { _hoveredCompactToggle = overCompact; InvalidateVisual(); }
+        bool overScroll = UpdateScrollHover(p);
 
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
@@ -4225,9 +4209,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool autoHeader = _autonomousHeaderRect.Width > 0 && _autonomousHeaderRect.Contains(p);
         if (autoHeader != _hoveredAutonomousHeader) { _hoveredAutonomousHeader = autoHeader; InvalidateVisual(); }
 
-        // A work item header's "+" box (OverlayCanvas.Work.cs) has its own hover over the header's.
-        int workPlus = HitTestWorkPlus(p);
-        if (workPlus != _hoveredWorkPlus) { _hoveredWorkPlus = workPlus; InvalidateVisual(); }
 
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
@@ -4282,7 +4263,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The resize grips: a faint handle hint on the hovered edge (painted in Draw) + the horizontal-resize
         // cursor, which takes priority over the hand/default below.
-        ResizeEdge overResizeEdge = HitResizeEdge(p);
+        ResizeEdge overResizeEdge = _hoveredThumb ? ResizeEdge.None : HitResizeEdge(p);
         if (overResizeEdge != _hoverResizeEdge) { _hoverResizeEdge = overResizeEdge; InvalidateVisual(); }
         bool overResize = overResizeEdge != ResizeEdge.None;
 
@@ -4295,7 +4276,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overWork || overGroup || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds || workPlus >= 0)
+               || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4328,8 +4309,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ShowFullPanel && _roostRect.Width > 0
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             OverRecentButton(p)                       ? (TipKind.Recent, -1) :
-            OverWorkButton(p)                         ? (TipKind.Work, -1) :
-            OverGroupToggle(p)                        ? (TipKind.Group, -1) :
+            OverCompactToggle(p)                      ? (TipKind.Compact, -1) :
             HitTestGitHub(p)                          ? (TipKind.GitHub, -1) :
             HitTestTodos(p)                           ? (TipKind.Todos, -1) :
             HitTestFeedHead(p) is var fh && fh >= 0   ? (TipKind.FeedHead, fh) :
@@ -4382,8 +4362,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.Roost:   ShowRoostTooltip();          break;
             case TipKind.Recent:  ShowRecentTooltip();         break;
-            case TipKind.Work:    ShowWorkButtonTooltip();     break;
-            case TipKind.Group:   ShowGroupToggleTooltip();    break;
+            case TipKind.Compact: ShowCompactToggleTooltip();  break;
             case TipKind.GitHub:  ShowGitHubTooltip();         break;
             case TipKind.Todos:   ShowTodosTooltip();          break;
             case TipKind.FeedHead: ShowFeedHeadTooltip(_tipRow); break;
@@ -4438,9 +4417,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredSocial = false;
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
-        if (_hoveredWorkButton) { _hoveredWorkButton = false; changed = true; }
-        if (_hoveredGroupToggle) { _hoveredGroupToggle = false; changed = true; }
-        if (_hoveredWorkPlus != -1) { _hoveredWorkPlus = -1; changed = true; }
+        changed |= ClearScrollHover();
         _hoveredNewSession = false;
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
@@ -4462,7 +4439,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Leaving the open dense popup starts the countdown to collapse it back to the strip — but not
         // mid-drag, where the pointer legitimately roams to another monitor's drop lane.
-        if (_denseCtl.IsDense && _denseCtl.IsOpen && !_denseWasDrag && !_dragging)
+        if (_denseCtl.IsDense && _denseCtl.IsOpen && !_denseWasDrag)
             _denseCtl.SchedulePopupClose();
 
         base.OnPointerExited(e);
@@ -4512,6 +4489,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
 
         var p = e.GetPosition(this);
+
+        // The session list's scroll thumb, which rides over the rows and the right-hand resize grip.
+        if (TryBeginThumbDrag(p))
+        {
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
         _leftPressed = true;
         _headerArmed = false;
         _headerDragged = false;
@@ -4522,7 +4509,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _dockWasDrag = false;
         _resizeEdge = ResizeEdge.None;
         _resized = false;
-        ArmSessionDrag(p);   // a press on a session row may become a drag onto a work item (OverlayCanvas.Work.cs)
 
         // Docked: dragging the header (expanded) or the strip's top band (collapsed) re-docks the column to
         // another monitor edge; a press that never moves falls through to RouteClick (collapse/expand) on
@@ -4610,14 +4596,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (RearrangeMode) { HandleRearrangeReleased(e); return; }
 
+        if (_thumbDragging)
+        {
+            EndThumbDrag();
+            e.Pointer.Capture(null);
+            base.OnPointerReleased(e);
+            return;
+        }
+
         if (!_leftPressed) { base.OnPointerReleased(e); return; }
         _leftPressed = false;
 
-        // A session dragged onto a work item drops there instead of clicking. Settled before the capture is let go,
-        // since losing the capture cancels a drag.
-        bool droppedSession = FinishSessionDrag(e.GetPosition(this));
         e.Pointer.Capture(null);
-        if (droppedSession) { base.OnPointerReleased(e); return; }
 
         // A brand long-press that completed already summoned the arcade — swallow this release so it doesn't
         // also toggle the header. A release before the hold fires just cancels the pending timer (an ordinary
@@ -4765,6 +4755,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The Social region (roster): header toggle, reaction chips/+, compose row, "manage friends" overflow.
         if (RouteSocialRegionClick(p)) return;
 
+        // The "N above / below" cues ride over the rows, so they're tested before anything on a row.
+        if (RouteCueClick(p)) return;
+
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
@@ -4835,17 +4828,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // The Work items button beside that: the window.
-        if (OverWorkButton(p))
+        // The row-density toggle at the far right: roomy ⇄ compact rows.
+        if (OverCompactToggle(p))
         {
-            WorkItemOpenRequested?.Invoke(null);
-            return;
-        }
-
-        // The grouping button at the far right: grouped by work item ⇄ flat list.
-        if (OverGroupToggle(p))
-        {
-            ToggleGroupByWork();
+            ToggleCompactRows();
             return;
         }
 
@@ -4859,11 +4845,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int row = HitTestRow(p);
         if (row >= 0)
         {
-            if (IsWorkRow(_rows[row].Header))
-            {
-                RouteWorkRowClick(row, p);   // OverlayCanvas.Work.cs
-            }
-            else if (_rows[row].IsSectionHeader)
+            if (_rows[row].IsSectionHeader)
             {
                 _autonomousExpanded = !_autonomousExpanded;
                 Update(_sessions); // rebuild the render list under the new section state
@@ -5034,19 +5016,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         int row = HitTestRow(p);
 
-        // A work item's header has its own menu (open, new session, log, pause/resume, done).
-        if (!RearrangeMode && row >= 0 && _rows[row] is { Header: RowHeader.WorkItem, Work: { } headerItem })
-        {
-            ShowFlyout(WorkHeaderMenu(headerItem));
-            return;
-        }
-        // An ended member under an item: the same menu its click opens.
-        if (!RearrangeMode && row >= 0 && _rows[row] is { Header: RowHeader.WorkEnded, Work: { } endedIn, Ended: { } ended })
-        {
-            ShowFlyout(EndedMenu(endedIn, ended));
-            return;
-        }
-
         // The "Autonomous" divider carries no session, so none of the per-session items apply to it.
         bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
         bool subRow = sessionRow && _rows[row].IsSubAgent;
@@ -5059,7 +5028,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 [
                     MenuItem("Open", () => SessionActivated?.Invoke(dormant)),
                     MenuItem("View history", () => HistoryRequested?.Invoke(dormant.SessionId)),
-                    WorkItemsSubmenu(dormant),
                 ],
                 [MenuItem("Resume in terminal", () => DormantTerminalRequested?.Invoke(dormant))],
                 [MenuItem("End session", () => DormantEndRequested?.Invoke(dormant))],
@@ -5111,10 +5079,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // reach it — the same window the tray's "Todos…" and the overlay strip open.
             actions.Add(MenuItem("Todos…", () => TodosRequested?.Invoke()));
 
-            // Work items (docs/work-items-plan.md): tick the items this session belongs to, or start one from it.
-            // A sub-agent row works on its parent session, which is the thing that belongs to an item.
-            actions.Insert(0, WorkItemsSubmenu(s));
-            // The git graph leads the group, above work items.
+            // The git graph leads the group.
             if (isRepo)
                 actions.Insert(0, MenuItem("Git graph…", () => ViewTreeRequested?.Invoke(s)));
 
@@ -5646,6 +5611,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         _cycleHighlightId = sessionId;
+        ScrollSessionIntoView(sessionId);
         _cycleHighlightStart = DateTime.Now;
         (_cycleTimer ??= CreateCycleTimer()).Stop();
         _cycleTimer.Start();
@@ -5711,6 +5677,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         _prBannerId = sessionId;
+        ScrollSessionIntoView(sessionId);
         _prBannerText = text;
         _prBannerColor = kind switch
         {

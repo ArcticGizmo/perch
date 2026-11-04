@@ -285,6 +285,7 @@ public sealed partial class OverlayCanvas
 
         double dipW = _dockCollapsed ? DockCollapsedWidth : DockExpandedWidth;
         double dipH = Math.Max(1, waH / renderScale);
+        SetDockedPanelBudget(dipH);
         int physW = Math.Max(1, (int)(dipW * renderScale));
         int x = _dockSide == HAnchor.Left ? bx : bx + bw - physW;
 

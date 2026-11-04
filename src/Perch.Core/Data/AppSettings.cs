@@ -750,18 +750,9 @@ internal sealed class AppSettings
     // Toggled by the region's own chevron and persisted here so it survives a restart. Expanded by default.
     public bool SocialRegionExpanded { get; set; } = true;
 
-    // The work-item groups collapsed in the overlay's session list: item ids, plus "~loose" for the "Not in a work
-    // item" group (docs/work-items-plan.md). Absent = expanded. Toggled by each group's own header on the overlay.
-    public List<string> CollapsedWorkItems { get; set; } = [];
-
-    // Whether the overlay's session list is grouped by work item (true) or a flat list as before work items (false).
-    // Toggled by the grouping button on the "+ New session" row, shown once there's an item. Off by default so work
-    // items are something you find and opt into, not a reshaped list the moment one exists.
-    public bool GroupByWorkItem { get; set; }
-
-    // Whether the one-time hint on the grouping button (offered once a first work item exists while the list is flat)
-    // has been seen, or made moot by turning grouping on. Once true it's never offered again.
-    public bool WorkGroupingHintSeen { get; set; }
+    // Whether the overlay's session rows are compact (one line each, no activity/elapsed line) or roomy. Toggled by
+    // the density button on the "+ New session" row. Roomy by default, the layout everyone already knows.
+    public bool CompactSessionRows { get; set; }
 
     // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
     // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
