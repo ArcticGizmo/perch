@@ -10,6 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A long session list scrolls instead of wandering off the bottom of the screen
 - "2 above" / "1 below" cues for sessions waiting on you that are scrolled out of view
 - Compact rows: one line per session, from a button on the "+ New session" row
+- Work items have been retired (they were very organised, and very alone): the overlay grouping, window, `perch work` and `--work` are gone
 
 ---
 

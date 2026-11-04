@@ -271,18 +271,9 @@ public sealed partial class OverlayCanvas
 
     private void PaintRow(DrawingContext ctx, double width, int i, DisplayRow r, double y)
     {
-        switch (r.Header)
-        {
-            case RowHeader.Autonomous: DrawSectionHeaderRow(ctx, r, y, width); break;
-            case RowHeader.WorkItem: DrawWorkHeaderRow(ctx, i, r, y, width); break;
-            case RowHeader.Loose: DrawLooseHeaderRow(ctx, i, r, y, width); break;
-            case RowHeader.WorkEnded: DrawWorkEndedRow(ctx, i, r, y, width); break;
-            case RowHeader.WorkMore: DrawWorkMoreRow(ctx, i, r, y, width); break;
-            default:
-                if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
-                else DrawSessionRow(ctx, i, r.Session!, y, width);
-                break;
-        }
+        if (r.Header == RowHeader.Autonomous) DrawSectionHeaderRow(ctx, r, y, width);
+        else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, y, width);
+        else DrawSessionRow(ctx, i, r.Session!, y, width);
     }
 
     // A glyph on a row half out of the viewport was painted but clipped. Its rect would still catch the pointer over
@@ -291,7 +282,7 @@ public sealed partial class OverlayCanvas
     {
         Prune(_artifactRects); Prune(_mdRects); Prune(_thermoRects); Prune(_warnRects); Prune(_taskRects);
         Prune(_bgTaskRects); Prune(_metricsRects); Prune(_noteRects); Prune(_originRects); Prune(_prRects);
-        Prune(_jiraRects); Prune(_dirRects); Prune(_subChevronRects); Prune(_workPlusRects);
+        Prune(_jiraRects); Prune(_dirRects); Prune(_subChevronRects);
         if (_autonomousHeaderRect.Width > 0)
         {
             var clipped = _autonomousHeaderRect.Intersect(new Rect(0, top, _autonomousHeaderRect.Right, bottom - top));
@@ -428,8 +419,8 @@ public sealed partial class OverlayCanvas
     }
 
     // ── The row-density toggle ──
-    // On the "+ New session" row, left of the grouping button: roomy two-line rows ⇄ compact one-line rows. Its
-    // glyph is the density showing now, as the grouping button's is.
+    // At the far right of the "+ New session" row: roomy two-line rows ⇄ compact one-line rows. Its glyph is the
+    // density showing now.
 
     private bool CompactToggleVisible => !RearrangeMode;
 

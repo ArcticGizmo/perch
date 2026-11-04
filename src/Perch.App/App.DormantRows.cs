@@ -32,7 +32,6 @@ public partial class App
     /// <summary>Re-feeds the overlay its rows when the not-running set changes between scans.</summary>
     private void PushOverlayRows()
     {
-        PushWorkItems();   // a not-running row coming or going moves a work item's "ended" count
         _overlay?.Canvas.Update(WithDormantRows(_lastSessions));
     }
 

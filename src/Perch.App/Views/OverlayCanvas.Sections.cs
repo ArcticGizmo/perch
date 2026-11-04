@@ -151,7 +151,6 @@ public sealed partial class OverlayCanvas
         double y = PaintRows(ctx, width, top + NewSessionRowHeight);   // must match RowsTop
 
         if (DaemonStripVisible) DrawDaemonStrip(ctx, width, y);
-        DrawDragGhost(ctx, width);   // a session being dragged onto a work item, over everything
     }
 
     // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
@@ -159,9 +158,8 @@ public sealed partial class OverlayCanvas
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
     // split-panes glyph, with its own hover and hit rect (_roostRect). The buttons fill ~18px boxes from the right,
-    // each that's on taking the next box in: the work-item grouping toggle (OverlayCanvas.Work.cs, once there's an
-    // item), the row-density toggle (OverlayCanvas.Scroll.cs), the Roost, Recent (OverlayCanvas.Recent.cs), then the
-    // Work items briefcase. A divider above the row keeps it from running into the section over it.
+    // each that's on taking the next box in: the row-density toggle (OverlayCanvas.Scroll.cs), the Roost, then Recent
+    // (OverlayCanvas.Recent.cs). A divider above the row keeps it from running into the section over it.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
         ctx.DrawLine(SepPen, new Point(HorizPad, top + 0.5), new Point(width - HorizPad, top + 0.5));
@@ -177,11 +175,9 @@ public sealed partial class OverlayCanvas
             bandRight = r.Left;
             return r;
         }
-        var group = _groupToggleRect = Slot(GroupToggleVisible);
         var density = _compactToggleRect = Slot(CompactToggleVisible);
         var roost = _roostRect = Slot(_showRoostButton && !RearrangeMode);
         var recent = _recentRect = Slot(RecentButtonVisible);
-        var work = _workButtonRect = Slot(WorkButtonVisible);
 
         var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
@@ -204,8 +200,6 @@ public sealed partial class OverlayCanvas
             if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(roostCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
         if (recent.Width > 0) DrawRecentButton(ctx, recent);
-        if (work.Width > 0) DrawWorkButton(ctx, work);
-        if (group.Width > 0) DrawGroupToggle(ctx, group);
         if (density.Width > 0) DrawCompactToggle(ctx, density);
     }
 

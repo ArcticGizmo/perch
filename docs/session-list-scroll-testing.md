@@ -8,7 +8,7 @@ Manual checks for keeping the overlay on its monitor when there are a lot of ses
   - **Cues.** A pill at the viewport's top or bottom ("● 2 above" / "● 1 below") counts the sessions waiting on you (API error, input, done) that are scrolled out of view. Its dot takes the most urgent colour among them. A click scrolls to the nearest one.
   - **Jumps.** The jump-to-next-session hotkey and a PR banner both scroll their row into view.
 - **A floating panel that grows upward near the bottom.** A panel that gets taller keeps its top where it is, so when its bottom would cross the work area it is lifted just enough to stay on screen. This isn't saved to the remembered placement.
-- **Compact rows.** A new density button on the "+ New session" row (left of the grouping button, or furthest right when there are no work items). Compact rows drop the activity/elapsed line, so a session takes 26px instead of 46px. The button's glyph is the density showing now: two spaced rows (roomy) or three tight rows (compact). The choice is kept in `AppSettings.CompactSessionRows`, which is off by default and has no Settings control (it's in `SettingsRegistryTests.NotSettings`).
+- **Compact rows.** A new density button at the far right of the "+ New session" row. Compact rows drop the activity/elapsed line, so a session takes 26px instead of 46px. The button's glyph is the density showing now: two spaced rows (roomy) or three tight rows (compact). The choice is kept in `AppSettings.CompactSessionRows`, which is off by default and has no Settings control (it's in `SettingsRegistryTests.NotSettings`).
 
 The headless render (`render <dir>` → `overlay_scroll_*.png`, `overlay_compact_rows_1.5x.png`) covers the layout with a 560 DIP budget. Only a real tray covers the wheel, the thumb drag, the cues' clicks and the monitor-derived budget.
 
@@ -64,7 +64,7 @@ With the target session scrolled out of view, press the jump-to-next-session hot
 
 | Action | Expected |
 |---|---|
-| The "+ New session" row | A new density button, left of the grouping button (or far right with no work items); glyph = two spaced rows |
+| The "+ New session" row | A new density button at the far right; glyph = two spaced rows |
 | Hover it | Tooltip "Roomy rows / Click for one line per session" |
 | Click it | Every session row becomes one line (name, glyphs, status); the activity/elapsed line goes; the panel gets shorter; the glyph becomes three tight rows |
 | Overflowing list, then compact | Far more rows fit; if they all fit now, the thumb and cues disappear |
@@ -91,6 +91,5 @@ Drag the panel so its bottom sits near the taskbar, then start another session (
 
 ## Not covered
 
-- **Dragging a row onto a work item that's scrolled out of view.** The list doesn't auto-scroll during a session drag; scroll first, then drag.
 - **A panel dragged partly off the bottom by hand.** The budget is the monitor's height, not the room under wherever the panel was dropped, and a manual drag is never clamped.
 - **Sub-agent rows.** They keep their own 24px line in compact mode; collapse a session's agents with their chevrons if they crowd the list.

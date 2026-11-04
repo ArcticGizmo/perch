@@ -18,9 +18,7 @@ The overlay's permission-mode badge (plan / accept edits / auto / bypass) used t
 | 5 | Start `claude --permission-mode bypassPermissions`, prompt "say hi" | Bypass badge | Same |
 | 6 | Ask for a sub-agent: "use a sub-agent to list the files here" while in plan mode | Parent badge stays plan | Same — sub-agent records don't override the parent's mode |
 | 7 | `dir ~/.claude/sessions/*.mode` after a new session starts | A fresh `{sid}.mode` appears | No new `.mode` file is written (old ones are swept on SessionEnd) |
-| 8 | Create a work item (`perch work new "Test"`), then in PowerShell `$env:PERCH_WORK = "<id>"; claude` | Session joins the item ("Joined from a terminal") | Session does not join; `perch work new` and the empty-item hint now suggest `perch --work <id>` only |
-| 9 | `perch --work <id>` | Session opens in the item | Same |
-| 10 | Check `settings.json` hooks again | A `SubagentStop` entry running `perch-hook agentstop` | No `SubagentStop` entry (unless it's your own); TeammateIdle, SessionStart, SessionEnd remain |
-| 11 | Prompt "use two sub-agents in parallel to summarise README.md and CHANGELOG.md" | Sub-agent rows/chips appear, then vanish as each finishes | Same; `subagents/agent-*.meta.json` gains `"finished":true` and no new `.stopped` file appears |
-| 12 | Count `~/.claude/projects/<this project>/*/subagents/agent-*.stopped`, then start and `/exit` a `claude` in that project | Count unchanged (only the ended session's own markers were removed) | Zero; `.idle` markers survive only beside an agent transcript that still exists |
-| 13 | Prompt "use a sub-agent to run `ping -n 60 127.0.0.1`", then press Esc to stop it | Row lingered until the staleness window (~90s+) or the hook fired | Row drops once the meta gains `"stoppedByUser":true` |
+| 8 | Check `settings.json` hooks again | A `SubagentStop` entry running `perch-hook agentstop` | No `SubagentStop` entry (unless it's your own); TeammateIdle, SessionStart, SessionEnd remain |
+| 9 | Prompt "use two sub-agents in parallel to summarise README.md and CHANGELOG.md" | Sub-agent rows/chips appear, then vanish as each finishes | Same; `subagents/agent-*.meta.json` gains `"finished":true` and no new `.stopped` file appears |
+| 10 | Count `~/.claude/projects/<this project>/*/subagents/agent-*.stopped`, then start and `/exit` a `claude` in that project | Count unchanged (only the ended session's own markers were removed) | Zero; `.idle` markers survive only beside an agent transcript that still exists |
+| 11 | Prompt "use a sub-agent to run `ping -n 60 127.0.0.1`", then press Esc to stop it | Row lingered until the staleness window (~90s+) or the hook fired | Row drops once the meta gains `"stoppedByUser":true` |
