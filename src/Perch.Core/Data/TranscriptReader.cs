@@ -1277,7 +1277,7 @@ internal sealed class TranscriptReader
 
     // Marker text Claude Code writes into a synthetic user record when a turn is cancelled. Matches
     // both variants ("[Request interrupted by user]" and "…for tool use]") via the common prefix.
-    private const string InterruptMarker = "[Request interrupted by user";
+    internal const string InterruptMarker = "[Request interrupted by user";
 
     private static bool ParseInterrupted(string path)
     {
@@ -1375,7 +1375,7 @@ internal sealed class TranscriptReader
     // True when a user record's message content contains the given text, in either shape we see:
     // a plain string content, or an array of blocks whose "text" field carries it (the interrupt
     // marker lands in a text block). Best-effort; false on any absent/typed-wrong field.
-    private static bool MessageTextContains(JsonNode? node, string needle)
+    internal static bool MessageTextContains(JsonNode? node, string needle)
     {
         var content = node?["message"]?["content"];
         if (content is JsonValue direct)

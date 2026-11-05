@@ -369,6 +369,67 @@ public class SubAgentReaderTests
         }
     }
 
+    // TaskStop (a parent stopping its background child) rejects the pending tool call and appends the interrupt
+    // marker, but never rewrites the meta sidecar with an end flag. The marker alone must retire the agent at once
+    // rather than after the staleness window, and a later SendMessage resume must bring it back.
+    [Theory]
+    [InlineData("[Request interrupted by user for tool use]")]
+    [InlineData("[Request interrupted by user]")]
+    public void ScanBackground_InterruptMarkerTail_DropsAgentImmediately(string marker)
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "perch-subint-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            var jsonl = Path.Combine(dir, "agent-stopped4444.jsonl");
+            File.WriteAllText(Path.Combine(dir, "agent-stopped4444.meta.json"),
+                """{"agentType":"general-purpose","description":"prover","toolUseId":"toolu_prover","spawnDepth":1,"requestShape":"background"}""");
+            string[] working =
+            [
+                """{"type":"user","message":{"role":"user","content":"prove it"}}""",
+                """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_sh","name":"PowerShell","input":{"command":"dotnet test"}}]}}""",
+            ];
+            File.WriteAllLines(jsonl, working);
+            var reader = new SubAgentReader();
+            Assert.Single(reader.ScanBackground(dir));   // mid shell call: working
+
+            File.AppendAllLines(jsonl,
+            [
+                """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sh","is_error":true,"content":"The user doesn't want to proceed with this tool use."}]}}""",
+                $$$"""{"type":"user","message":{"role":"user","content":[{"type":"text","text":"{{{marker}}}"}]}}""",
+            ]);
+            Assert.Empty(reader.ScanBackground(dir));   // stopped: gone now, not after 90s
+
+            File.AppendAllLines(jsonl, ["""{"type":"user","message":{"role":"user","content":"carry on"}}"""]);
+            Assert.Single(reader.ScanBackground(dir));   // resumed via SendMessage: working again
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // A tool_result that merely quotes the marker (e.g. grep output over a transcript) isn't an interrupt.
+    [Fact]
+    public void ScanBackground_ToolResultQuotingInterruptMarker_StaysWorking()
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "perch-subint-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "agent-grep5555.meta.json"),
+                """{"agentType":"Explore","description":"search","toolUseId":"toolu_grep","spawnDepth":1}""");
+            File.WriteAllLines(Path.Combine(dir, "agent-grep5555.jsonl"),
+            [
+                """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_g","name":"Grep","input":{"pattern":"interrupted"}}]}}""",
+                """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_g","content":"x.cs:1: \"[Request interrupted by user]\""}]}}""",
+            ]);
+            Assert.Single(new SubAgentReader().ScanBackground(dir));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // CP20: an ordinary sub-agent whose file has gone quiet past the longest stale window (a pending shell call's,
     // 10m30s) can never be surfaced, so it's skipped before its transcript is parsed at all; a teammate is always
     // classified (it stays on the roster).
