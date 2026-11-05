@@ -167,8 +167,11 @@ internal sealed class SubAgentReader
                 // left frozen mid-turn by an interrupt keeps that tail forever, so demote it to not-working
                 // once its file has gone silent past the staleness window (see DefaultStaleAfter; longer for
                 // a pending shell call, see ShellDefaultTimeout). The explicit marker above wins, so a
-                // cleanly-stopped agent never has to wait for this.
-                bool stale = state.Working && !ended && IsStale(file, nowUtc, StaleWindow(state));
+                // cleanly-stopped agent never has to wait for this. A tail that is Claude Code's own interrupt
+                // marker needs no window either: TaskStop (the parent stopping its child) writes that marker but
+                // leaves the meta sidecar without an end flag, so without this it lingered for the full window.
+                bool stale = state.Working && !ended
+                    && (state.Interrupted || IsStale(file, nowUtc, StaleWindow(state)));
                 bool working = state.Working && !ended && !stale;
 
                 var agentId = AgentIdFromFile(file);
@@ -353,7 +356,8 @@ internal sealed class SubAgentReader
     // spawn ids of any nested sub-agents, used to reconstruct the tree in BuildForest. PendingShellTimeout is
     // set while the turn waits on a shell call, which stays silent until it returns (see StaleWindow).
     private readonly record struct Classification(
-        bool Working, string? Activity, IReadOnlyList<string>? LaunchedIds, TimeSpan? PendingShellTimeout = null);
+        bool Working, string? Activity, IReadOnlyList<string>? LaunchedIds, TimeSpan? PendingShellTimeout = null,
+        bool Interrupted = false);
 
     // A sub-agent's transcript ends in a completed assistant turn — a final assistant message with no
     // pending tool call — only while it is idle, waiting for its next instruction. While it is working,
@@ -377,6 +381,8 @@ internal sealed class SubAgentReader
         // Newer Claude Code has a sub-agent deliver its report through that tool, so its transcript ends on the
         // call's tool_result (a user record) and would otherwise read as "awaiting the model" = working.
         public string? HandbackId;
+        // The last user record is Claude Code's "[Request interrupted by user…]" marker: the turn was cancelled.
+        public bool Interrupted;
     }
 
     private static void StepClassify(ClassifyState s, string line)
@@ -395,6 +401,7 @@ internal sealed class SubAgentReader
         {
             s.SawTurn = true;
             s.LastWasUser = true;
+            s.Interrupted = TranscriptReader.MessageTextContains(node, TranscriptReader.InterruptMarker);
             // Only the handback's own result keeps the agent finished; anything else (a SendMessage resuming it,
             // an injected reminder) means it's been given more to do.
             if (s.HandbackId is { } handback && !IsResultFor(node, handback))
@@ -404,6 +411,7 @@ internal sealed class SubAgentReader
         {
             s.SawTurn = true;
             s.LastWasUser = false;
+            s.Interrupted = false;
             s.LastAssistantHadToolUse = false;
             s.LastAssistantThinkingOnly = TranscriptJson.IsThinkingOnly(node);
             s.HandbackId = null;
@@ -453,7 +461,7 @@ internal sealed class SubAgentReader
             && s.LastToolName is "Bash" or "PowerShell"
                 ? ShellTimeout(s.LastToolInput)
                 : null;
-        return new Classification(working, activity, launched, shellTimeout);
+        return new Classification(working, activity, launched, shellTimeout, Interrupted: s.LastWasUser && s.Interrupted);
     }
 
     // A shell call's declared timeout (milliseconds in its input), else the tool's default, capped at the max.

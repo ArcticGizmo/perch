@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.7] - 2026-11-05
+
+- Sub-agents stopped by their parent vanish at once (no 90-second wake)
+
+---
+
 ## [v0.6.6] - 2026-11-04
 
 - Rewind a session to an earlier prompt: conversation, code, or both
