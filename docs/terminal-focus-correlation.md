@@ -146,7 +146,7 @@ bool — and reproduce Perch's runtime with a **WinExe/STA** harness, not a cons
   `GetConsoleTitleW`, the same attach as the fallback above), which is also WT's name for that tab,
   and `WindowsTerminalTabs` selects the one tab carrying it before the window is raised. The match
   (`Perch.Data.TerminalTabMatch`) ignores Claude Code's animated status glyph and refuses to guess:
-  a renamed tab or two tabs with the same title leave the tab as it was.
+  a renamed tab or two tabs with the same title leave the tab as it was. UIA calls block until WT answers, so the walk runs on the thread pool and the click waits at most 500 ms for it: a hung WT delays the raise by that much rather than freezing the overlay, and a selection that only arrives more than 2 s after the click is dropped rather than switching tabs under the user. When several tabs share the title (untitled "Claude Code" sessions), Perch briefly appends a marker (a bird plus a short token) to that session's console title, selects the one tab that shows it, and puts the title back, leaving it alone if the session has set a newer one meanwhile. If the window has several tabs and none can be singled out, a row click says so with an info toast. A WT window on another virtual desktop is DWM-cloaked until the desktop switch lands, and a tab selected while it is cloaked was not the one showing afterwards, so such a window is raised first and its tab selected once it uncloaks (waiting up to 1 s).
 
 ## Trying it
 

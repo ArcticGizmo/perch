@@ -22,6 +22,13 @@ public interface IWindowActivator
     /// </summary>
     bool FocusTerminalForProcess(int pid, string? projectHint = null);
 
+    /// <summary>
+    /// <see cref="FocusTerminalForProcess"/>, additionally reporting when a tabbed terminal's window was raised
+    /// but the session's own tab couldn't be selected. Platforms without tab steering keep this default.
+    /// </summary>
+    TerminalFocus FocusTerminal(int pid, string? projectHint = null)
+        => new(FocusTerminalForProcess(pid, projectHint));
+
     /// <summary>Brings the main window of the process identified by <paramref name="pid"/> to the
     /// foreground (used to re-focus an already-running quick-link app). Best-effort; never throws.</summary>
     void FocusProcessMainWindow(int pid);

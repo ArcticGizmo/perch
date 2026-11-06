@@ -848,7 +848,15 @@ public partial class App : Application
                     "Autonomous session",
                     $"{session.DisplayName} is an autonomous (SDK) session — there's no window to open.",
                     ToastLevel.Info, null, null);
-            else if (!PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName))
+            else if (PlatformServices.WindowActivator.FocusTerminal(pid, session.ProjectName) is { Raised: true } focus)
+            {
+                // The window came forward but on some other tab. Without a word that looks like Perch picked
+                // the wrong session, so say why it couldn't choose.
+                if (focus.TabMiss is { } miss)
+                    _notifier?.Show("Couldn't pick the tab", DescribeTabMiss(session.DisplayName, miss),
+                        ToastLevel.Info, null, null);
+            }
+            else
             {
                 // The session is alive but has no terminal to bring forward — its window was hidden or torn
                 // down while the process kept running. Say so: an unexplained no-op click reads as Perch
@@ -863,6 +871,16 @@ public partial class App : Application
         }
         _monitorHost?.Acknowledge(session.Pid);
     }
+
+    private static string DescribeTabMiss(string sessionName, TabMiss miss) => miss.Reason switch
+    {
+        TabMissReason.Ambiguous =>
+            $"{sessionName} is in this Windows Terminal window, but {miss.SameTitleCount} of its tabs are "
+            + $"named \"{miss.Title}\" and Perch couldn't tell which is which.",
+        _ =>
+            $"{sessionName} is in this Windows Terminal window, but no tab is named \"{miss.Title}\". The tab "
+            + "may have been renamed, or the session is in a split pane that doesn't have focus.",
+    };
 
     // Un-minimises (if needed) and raises a Perch-owned window — used to focus the embedded terminal that
     // hosts a Perch-controlled session.
