@@ -168,6 +168,11 @@ internal sealed class SessionMonitor : IDisposable
     // from the scan, a config-set change and a watcher's own error callback — different threads — so every
     // access holds _watchGate (review fixes CP20/CP25).
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new();
+    // One recursive watcher per distinct projects/ dir, for sub-agent spawns. Claude Code doesn't touch the parent's
+    // session file while it works, so a sub-agent appearing under {sessionId}/subagents/ would otherwise wait out the
+    // host's 30s reconcile, which is most of a short agent's life. Names only (create/rename), never LastWrite:
+    // transcripts append constantly, and a spawn is all this needs to catch. Guarded by _watchGate like _watchers.
+    private readonly Dictionary<string, FileSystemWatcher> _agentWatchers = new();
     private readonly object _watchGate = new();
     private readonly System.Threading.Timer _debounceTimer;
     private bool _disposed;
@@ -230,6 +235,14 @@ internal sealed class SessionMonitor : IDisposable
     /// holds, closing the gap left by the 30s reconcile (which is far too coarse to catch a sub-agent).
     /// </summary>
     public bool HasWorkingControlledSession { get; private set; }
+
+    /// <summary>
+    /// True after the last <see cref="Scan"/> when any session has a sub-agent (or teammate) actively working. Claude
+    /// Code writes nothing to the parent's session file while its sub-agents run, so the host polls on the same short
+    /// cadence as for <see cref="HasWorkingControlledSession"/>: that keeps the agents' activity current and drops a
+    /// finished one within seconds instead of on the next reconcile.
+    /// </summary>
+    public bool HasRunningSubAgents { get; private set; }
 
     /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; replay
     /// injects one backed by the recording so dead recorded pids report alive within their window.</param>
@@ -304,6 +317,7 @@ internal sealed class SessionMonitor : IDisposable
         {
             NextNeedsAttentionDeadline = null;
             HasWorkingControlledSession = false;
+            HasRunningSubAgents = false;
             SyncProcessSubscriptions(new HashSet<string>());
             SessionsChanged?.Invoke([]);
             return [];
@@ -329,6 +343,8 @@ internal sealed class SessionMonitor : IDisposable
         // (background) sub-agents, which the CLI never heartbeats into the session file. See the property.
         HasWorkingControlledSession =
             sessions.Any(s => s.IsPerchControlled && s.Status == SessionStatus.Running);
+        HasRunningSubAgents =
+            sessions.Any(s => s.SubAgents.SelectMany(a => a.SelfAndDescendants()).Any(a => !a.IsIdle));
 
         SessionsChanged?.Invoke(sessions);
 
@@ -1270,6 +1286,50 @@ internal sealed class SessionMonitor : IDisposable
                 // If a watcher can't be created the reconciliation poll still keeps state fresh.
             }
         }
+
+        foreach (var dir in ClaudeConfigSet.Instance.DistinctProjectsDirs())
+        {
+            if (_agentWatchers.ContainsKey(dir) || !Directory.Exists(dir))
+                continue;
+
+            try
+            {
+                var watcher = new FileSystemWatcher(dir)
+                {
+                    NotifyFilter = NotifyFilters.FileName,
+                    IncludeSubdirectories = true,
+                    InternalBufferSize = 64 * 1024,
+                };
+
+                watcher.Created += OnAgentFileEvent;
+                watcher.Renamed += OnAgentFileEvent;
+                watcher.Error += OnWatcherError;
+                watcher.EnableRaisingEvents = true;
+
+                _agentWatchers[dir] = watcher;
+            }
+            catch
+            {
+                // Sub-agents still surface on the next scan from any other trigger.
+            }
+        }
+    }
+
+    // Every other file created under projects/ (tool results, new transcripts, notes) is ignored here, so the
+    // recursive watch costs a string check per event rather than a scan.
+    private void OnAgentFileEvent(object sender, FileSystemEventArgs e)
+    {
+        if (IsSubAgentFile(e.FullPath))
+            RequestScanDebounced();
+    }
+
+    // {sessionId}/subagents/agent-{id}.jsonl or its .meta.json sidecar.
+    internal static bool IsSubAgentFile(string path)
+    {
+        var name = Path.GetFileName(path);
+        return name.StartsWith("agent-", StringComparison.Ordinal)
+            && (name.EndsWith(".jsonl", StringComparison.Ordinal) || name.EndsWith(".meta.json", StringComparison.Ordinal))
+            && string.Equals(Path.GetFileName(Path.GetDirectoryName(path)), "subagents", StringComparison.OrdinalIgnoreCase);
     }
 
     // A config dir appeared or vanished: reconcile watchers and rescan.
@@ -1290,6 +1350,8 @@ internal sealed class SessionMonitor : IDisposable
             watcher.Changed -= OnFileEvent;
             watcher.Deleted -= OnFileEvent;
             watcher.Renamed -= OnFileEvent;
+            watcher.Created -= OnAgentFileEvent;
+            watcher.Renamed -= OnAgentFileEvent;
             watcher.Error -= OnWatcherError;
             watcher.Dispose();
         }
@@ -1316,9 +1378,12 @@ internal sealed class SessionMonitor : IDisposable
             DisposeWatcher(watcher);
             lock (_watchGate)
             {
-                var key = _watchers.FirstOrDefault(kv => ReferenceEquals(kv.Value, watcher)).Key;
-                if (key != null)
-                    _watchers.Remove(key);
+                foreach (var map in new[] { _watchers, _agentWatchers })
+                {
+                    var key = map.FirstOrDefault(kv => ReferenceEquals(kv.Value, watcher)).Key;
+                    if (key != null)
+                        map.Remove(key);
+                }
             }
         }
 
@@ -1413,9 +1478,10 @@ internal sealed class SessionMonitor : IDisposable
 
         lock (_watchGate)
         {
-            foreach (var watcher in _watchers.Values)
+            foreach (var watcher in _watchers.Values.Concat(_agentWatchers.Values))
                 DisposeWatcher(watcher);
             _watchers.Clear();
+            _agentWatchers.Clear();
         }
 
         lock (_trackedProcesses)

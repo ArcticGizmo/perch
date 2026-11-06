@@ -22,12 +22,12 @@ internal sealed class SessionMonitorHost : IDisposable
     // event or the deadline timer misses. The deadline timer below is what makes "done" fire on time.
     private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(30);
 
-    // Short-cadence poll that runs ONLY while a Perch-controlled session is actively working
-    // (SessionMonitor.HasWorkingControlledSession). A controlled session doesn't heartbeat its session
-    // file, so no file event fires while it runs a turn — and a background sub-agent it launches lives
-    // and dies well inside the 30s reconcile, so the overlay never sampled it. Polling here catches the
-    // sub-agent's working window. Off whenever no controlled session is working, so it costs nothing at rest.
-    private static readonly TimeSpan ControlledPollInterval = TimeSpan.FromSeconds(2);
+    // Short-cadence poll that runs ONLY while a Perch-controlled session is actively working or any session has a
+    // working sub-agent (SessionMonitor.HasWorkingControlledSession / HasRunningSubAgents). Neither a controlled nor
+    // a terminal session rewrites its session file mid-turn, so no file event fires while it works, and a sub-agent
+    // lives and dies well inside the 30s reconcile. The monitor's projects/ watcher catches a sub-agent's spawn; this
+    // poll keeps its activity current and catches it finishing. Off at rest, so it costs nothing then.
+    private static readonly TimeSpan FastPollInterval = TimeSpan.FromSeconds(2);
 
     // A scan slower than this is written to logs/scan.log, with the session count, to diagnose a slow machine.
     private const int SlowScanMs = 250;
@@ -44,7 +44,7 @@ internal sealed class SessionMonitorHost : IDisposable
     // _deadlineTimer + ArmDeadlineTimer.
     private readonly DispatcherTimer _deadlineTimer;
     private readonly DispatcherTimer _reconcileTimer;
-    private readonly DispatcherTimer _controlledPollTimer;
+    private readonly DispatcherTimer _fastPollTimer;
 
     /// <summary>Raised when a session newly needs attention (finished) — the app flashes the overlay.</summary>
     public event Action<ClaudeSession>? NeedsAttention;
@@ -97,8 +97,8 @@ internal sealed class SessionMonitorHost : IDisposable
         _deadlineTimer.Tick += (_, _) => { _deadlineTimer.Stop(); RequestScan(); };
         _reconcileTimer = new DispatcherTimer { Interval = ReconcileInterval };
         _reconcileTimer.Tick += (_, _) => RequestScan();
-        _controlledPollTimer = new DispatcherTimer { Interval = ControlledPollInterval };
-        _controlledPollTimer.Tick += (_, _) => RequestScan();
+        _fastPollTimer = new DispatcherTimer { Interval = FastPollInterval };
+        _fastPollTimer.Tick += (_, _) => RequestScan();
     }
 
     /// <summary>Whether the monitor flags stuck sessions (feeds the overlay's warning glyph). Off by
@@ -199,31 +199,29 @@ internal sealed class SessionMonitorHost : IDisposable
     });
 
     // Raised on the worker at the end of each scan: capture what the UI needs from the monitor now (the
-    // worker owns it), then pump the result to the UI and (re)arm the deadline timer and controlled poll there.
+    // worker owns it), then pump the result to the UI and (re)arm the deadline timer and fast poll there.
     private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions)
     {
         var deadline = _monitor.NextNeedsAttentionDeadline;
-        var controlledWorking = _monitor.HasWorkingControlledSession;
+        var fastPoll = _monitor.HasWorkingControlledSession || _monitor.HasRunningSubAgents;
         Post(() =>
         {
             _onSessions(sessions);
             ArmDeadlineTimer(deadline);
-            UpdateControlledPoll(controlledWorking);
+            UpdateFastPoll(fastPoll);
         });
     }
 
-    // Runs the short-cadence poll only while a controlled session is working, so its background sub-agents
-    // are sampled during their run; stops it the moment none is, keeping the overlay quiet at rest. See
-    // ControlledPollInterval / SessionMonitor.HasWorkingControlledSession.
-    private void UpdateControlledPoll(bool controlledWorking)
+    // See FastPollInterval.
+    private void UpdateFastPoll(bool on)
     {
-        if (controlledWorking)
+        if (on)
         {
-            if (!_controlledPollTimer.IsEnabled) _controlledPollTimer.Start();
+            if (!_fastPollTimer.IsEnabled) _fastPollTimer.Start();
         }
-        else if (_controlledPollTimer.IsEnabled)
+        else if (_fastPollTimer.IsEnabled)
         {
-            _controlledPollTimer.Stop();
+            _fastPollTimer.Stop();
         }
     }
 
@@ -243,7 +241,7 @@ internal sealed class SessionMonitorHost : IDisposable
         _disposed = true;
         _deadlineTimer.Stop();
         _reconcileTimer.Stop();
-        _controlledPollTimer.Stop();
+        _fastPollTimer.Stop();
         _monitor.SessionsChanged -= OnSessionsChanged;
         _monitor.ChangeDetected -= RequestScan;
         _monitor.Dispose();

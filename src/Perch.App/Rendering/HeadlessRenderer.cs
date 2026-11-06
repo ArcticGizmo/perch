@@ -15,6 +15,7 @@ using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
+using Perch.Data.Resources;
 using Perch.Platform;
 
 namespace Perch.Avalonia.Rendering;
@@ -619,6 +620,127 @@ internal static class HeadlessRenderer
         statsAll.SetReport(allReport, allRange);
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1x.png"), 96);
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1.5x.png"), 144);
+
+        // Resource monitor (docs/resource-diagnostics-plan.md): the charts with a finding selected and the cursor on
+        // it, and the breakdown at that tick with the finding's group opened.
+        var resourceAnalysis = Perch.Data.Resources.ResourceAnalysis.Build(SampleResourceRecording.Build());
+        var resourceFinding = resourceAnalysis.Findings.FirstOrDefault();
+        int resourceTick = resourceFinding?.PeakTick ?? resourceAnalysis.TickCount - 1;
+        var resourceTimeline = new Views.ResourceTimelineView { Width = 1100 };
+        resourceTimeline.SetAnalysis(resourceAnalysis);
+        resourceTimeline.SetCursor(resourceTick);
+        resourceTimeline.SetSelected(resourceFinding);
+        RenderControl(resourceTimeline, Path.Combine(outDir, "resource_timeline_1x.png"), 96);
+        RenderControl(resourceTimeline, Path.Combine(outDir, "resource_timeline_1.5x.png"), 144);
+        var resourceBreakdown = new Views.ResourceBreakdownView { Width = 800 };
+        resourceBreakdown.Highlight(resourceFinding?.GroupKey
+            ?? (resourceFinding?.ProcId is { } rid ? resourceAnalysis.GroupOf(rid).Key : null), resourceFinding?.ProcId);
+        resourceBreakdown.SetData(resourceAnalysis, resourceTick);
+        RenderControl(resourceBreakdown, Path.Combine(outDir, "resource_breakdown_1x.png"), 96);
+        RenderControl(resourceBreakdown, Path.Combine(outDir, "resource_breakdown_1.5x.png"), 144);
+        // The Windows group opened on its busy service host, to check svchost rows read by the services they run.
+        if (resourceAnalysis.Findings.FirstOrDefault(f => f.Kind == FindingKind.Runaway && f.Title.StartsWith("svchost")) is { ProcId: { } svcId } svcFinding)
+        {
+            var windowsBreakdown = new Views.ResourceBreakdownView { Width = 800 };
+            windowsBreakdown.Highlight(resourceAnalysis.GroupOf(svcId).Key, svcId);
+            windowsBreakdown.SetData(resourceAnalysis, svcFinding.PeakTick);
+            RenderControl(windowsBreakdown, Path.Combine(outDir, "resource_breakdown_windows_1x.png"), 96);
+        }
+        File.WriteAllLines(Path.Combine(outDir, "resource_findings.txt"),
+            resourceAnalysis.Findings.Select(f => $"[{f.Severity}] {f.Kind} @{f.PeakTick}: {f.Title} | {f.Detail} | {f.Advice}"));
+
+        // A real recording, analysed with this machine's hooks and transcripts (PERCH_RESOURCE_RECORDING=<file>): the
+        // way to check the analysis against what actually happened, without the window.
+        if (Environment.GetEnvironmentVariable("PERCH_RESOURCE_RECORDING") is { Length: > 0 } realPath && File.Exists(realPath))
+        {
+            var real = ResourceRecording.Load(realPath);
+            var realContext = ResourceContext.Load(real);
+            var realAnalysis = ResourceAnalysis.Build(real, realContext);
+            var lines = new List<string>
+            {
+                $"hooks in catalog: {realContext.Hooks?.Hooks.Count ?? 0}; sessions with activity: {realContext.Activity?.Count ?? 0} " +
+                $"({string.Join(", ", realContext.Activity?.Values.Select(a => $"{a.SessionId[..8]} {a.Calls.Count} calls") ?? [])})",
+                "hook sources: " + string.Join("; ", (realContext.Hooks?.Hooks ?? []).GroupBy(h => h.Source).Select(g => $"{g.Key} ×{g.Count()}")),
+                "",
+            };
+            lines.AddRange(realAnalysis.Findings.Select(f =>
+                $"[{f.Severity}] {f.Kind} @{f.PeakTick}: {f.Title}\n    {f.Detail}\n    → {f.Advice}\n    [{f.ActionLabel}] {f.ActionPath}"));
+            lines.Add("");
+            foreach (var s in real.Sessions.DistinctBy(s => s.Pid))
+            {
+                lines.Add($"causes for {s.Label}:");
+                lines.AddRange(realAnalysis.CausesFor("session:" + s.Pid).Select(c =>
+                    $"    {c.Cause.Kind,-14} {c.Cause.Label,-70} launches={c.Launches,4} procs={c.Processes,4} cpu-s={c.CpuSeconds,7:N1} " +
+                    string.Join(",", c.Exes.OrderByDescending(e => e.Value).Take(4).Select(e => $"{e.Key}×{e.Value}"))));
+            }
+            lines.Add("");
+            foreach (var report in HookActivity.Build(realAnalysis, realContext))
+            {
+                lines.Add($"hook {report.Cause.Label}: runs={report.Runs} seen={report.Seen} errors={report.Errors} cpu-s={report.CpuSecondsSeen:N1}");
+                foreach (var e in report.Events)
+                    lines.Add($"    {e.Event,-22} runs={e.Runs,4} seen={e.Seen,4} errors={e.Errors} avg={e.AverageMs?.ToString("0") ?? "-"}ms " +
+                              $"matchers=[{string.Join("|", e.Matchers.Select(m => m == "" ? "(any)" : m))}] tools: " +
+                              string.Join(", ", e.ByTool.Take(5).Select(t => $"{t.Name} {t.Runs}")) + " | by: " +
+                              string.Join(", ", e.ByAgent.Take(4).Select(t => $"{t.Name} {t.Runs}")));
+                lines.AddRange(report.ErrorMessages.Select(m => $"    error ×{m.Count}: {m.Message}"));
+                lines.AddRange(report.Advice.Select(a => $"    → {a}"));
+            }
+            File.WriteAllLines(Path.Combine(outDir, "resource_real_analysis.txt"), lines);
+            var hookReports = HookActivity.Build(realAnalysis, realContext);
+            if (hookReports.Count > 0)
+            {
+                var hooksView = new Views.HookActivityView { Width = 1100 };
+                hooksView.SetReports(hookReports, true);
+                hooksView.FocusHook(hookReports[0].Cause.Key);
+                RenderControl(hooksView, Path.Combine(outDir, "resource_real_hooks_1x.png"), 96);
+            }
+            var realTimeline = new Views.ResourceTimelineView { Width = 1100 };
+            realTimeline.SetAnalysis(realAnalysis);
+            realTimeline.SetCursor(realAnalysis.Findings.FirstOrDefault()?.PeakTick ?? 0);
+            realTimeline.SetSelected(realAnalysis.Findings.FirstOrDefault());
+            RenderControl(realTimeline, Path.Combine(outDir, "resource_real_timeline_1x.png"), 96);
+            // Hovering: a band low in the CPU chart, the busiest session in the Claude lane, and the memory chart.
+            var (cpuRect, laneRect, memRect) = realTimeline.ChartsForRender;
+            realTimeline.HoverForRender(new Point(cpuRect.X + cpuRect.Width * 0.6, cpuRect.Bottom - 12));
+            RenderControl(realTimeline, Path.Combine(outDir, "resource_real_hover_cpu_1x.png"), 96);
+            realTimeline.HoverForRender(new Point(laneRect.X + laneRect.Width * 0.6, laneRect.Bottom - 8));
+            RenderControl(realTimeline, Path.Combine(outDir, "resource_real_hover_lane_1x.png"), 96);
+            realTimeline.HoverForRender(new Point(memRect.X + memRect.Width * 0.3, memRect.Bottom - 20));
+            RenderControl(realTimeline, Path.Combine(outDir, "resource_real_hover_memory_1x.png"), 96);
+            realTimeline.HoverForRender(null);
+            var fanOut = realAnalysis.Findings.FirstOrDefault(f => f.Kind == FindingKind.SubagentFanOut) ?? realAnalysis.Findings.FirstOrDefault();
+            if (fanOut is not null)
+            {
+                var realBreakdown = new Views.ResourceBreakdownView { Width = 1000 };
+                realBreakdown.Highlight(fanOut.GroupKey, fanOut.ProcId);
+                realBreakdown.SetData(realAnalysis, fanOut.PeakTick);
+                RenderControl(realBreakdown, Path.Combine(outDir, "resource_real_breakdown_1x.png"), 96);
+            }
+        }
+        // The process table's native reads, against this process only: proves the interop layouts on this head.
+        var table = PlatformServices.ProcessTable;
+        var self = table.Read(Environment.ProcessId);
+        var (commitUsed, commitLimit) = table.ReadCommit();
+        var snap = table.Snapshot();
+        var (ramUsed, ramTotal) = PlatformServices.SystemMetrics.ReadMemory();
+        var kmem = table.ReadKernelMemory();
+        long snapPrivate = snap.Sum(s => s.Counters?.PrivateWorkingSet ?? 0);
+        long kernelSum = kmem is { } km ? km.PagedPoolResident + km.NonPagedPool + km.SystemCacheResident + km.DriverResident + km.ModifiedList : 0;
+        File.WriteAllLines(Path.Combine(outDir, "resource_selfcheck.txt"),
+        [
+            $"processes enumerated: {table.Enumerate().Count}",
+            $"self entry: {table.Enumerate().FirstOrDefault(e => e.Pid == Environment.ProcessId)}",
+            $"self counters (handle): {self}",
+            $"self counters (snapshot): {snap.FirstOrDefault(s => s.Entry.Pid == Environment.ProcessId)}",
+            $"self command line: {CommandLineRedactor.Redact(table.ReadCommandLine(Environment.ProcessId) ?? "(null)")}",
+            $"commit: {ResourceFormat.Bytes(commitUsed)} of {ResourceFormat.Bytes(commitLimit)}",
+            $"snapshot: {snap.Count} processes, {snap.Count(s => s.Counters is not null)} with counters, private WS sum {ResourceFormat.Bytes(snapPrivate)}",
+            $"snapshot top: {string.Join(", ", snap.OrderByDescending(s => s.Counters?.WorkingSet ?? 0).Take(6).Select(s => $"{s.Entry.Name} ws={ResourceFormat.Bytes(s.Counters?.WorkingSet ?? 0)} pws={ResourceFormat.Bytes(s.Counters?.PrivateWorkingSet ?? 0)}"))}",
+            $"kernel: {kmem}",
+            $"processor: {table.ReadProcessorTimes()}",
+            $"ram used {ResourceFormat.Bytes(ramUsed)} of {ResourceFormat.Bytes(ramTotal)}; processes {ResourceFormat.Bytes(snapPrivate)} + kernel {ResourceFormat.Bytes(kernelSum)} = residual {ResourceFormat.Bytes(ramUsed - snapPrivate - kernelSum)}",
+            ServicesLine(table, snap),
+        ]);
 
         // Change Review diff (git-review M1): a synthetic multi-file diff so the added/removed/context
         // colours, the file bars, and the monospace alignment can be eyeballed without a repo — in both
@@ -1789,6 +1911,18 @@ internal static class HeadlessRenderer
 
     // A synthetic unified diff for the Change Review surface: a modified file (context + add + remove),
     // an added file (all-green), and a binary file — enough to exercise every DiffView branch.
+    // How many service hosts the service manager could name, and a few of them, to prove that read unelevated.
+    private static string ServicesLine(Perch.Platform.IProcessTable table, IReadOnlyList<Perch.Platform.ProcessSnapshot> snap)
+    {
+        var services = table.ReadServices();
+        var hosts = snap.Where(s => ProcessFamilies.Stem(s.Entry.Name).Equals("svchost", StringComparison.OrdinalIgnoreCase)).ToList();
+        int named = hosts.Count(h => services.ContainsKey(h.Entry.Pid));
+        var sample = hosts.Where(h => services.ContainsKey(h.Entry.Pid))
+            .OrderByDescending(h => h.Counters?.PrivateWorkingSet ?? 0).Take(5)
+            .Select(h => $"{h.Entry.Pid}={string.Join("+", services[h.Entry.Pid].Select(s => s.Name))}");
+        return $"services: {services.Values.Sum(v => v.Count)} running in {services.Count} processes; svchost named {named} of {hosts.Count}; largest: {string.Join(", ", sample)}";
+    }
+
     private static GitDiff SampleDiff()
     {
         GitDiffLine C(string t) => new(GitDiffLineKind.Context, t);

@@ -165,6 +165,20 @@ public static class Palette
         _                                => TeamDefault,
     };
 
+    // Chart bands for the resource monitor, from hues every theme already defines, so a theme swap or the CVD
+    // preview recolours them along with everything else. Red is left out: it reads as an error, not a series.
+    public static Color SeriesColor(int index) => (((index % 8) + 8) % 8) switch
+    {
+        0 => Active.Accent.ToColor(),
+        1 => Active.StatusAttention.ToColor(),
+        2 => Active.Teal.ToColor(),
+        3 => Active.SubAgent.ToColor(),
+        4 => Active.StatusAwaiting.ToColor(),
+        5 => Active.StatusRunning.ToColor(),
+        6 => Active.Burn.ToColor(),
+        _ => Active.BackgroundTask.ToColor(),
+    };
+
     public static Color Blend(Color a, Color b, float t) => Color.FromRgb(
         (byte)(a.R * (1 - t) + b.R * t),
         (byte)(a.G * (1 - t) + b.G * t),
