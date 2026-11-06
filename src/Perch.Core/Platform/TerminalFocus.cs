@@ -10,9 +10,8 @@ public readonly record struct TerminalFocus(bool Raised, TabMiss? TabMiss = null
 
 /// <param name="Reason">Why no tab was chosen.</param>
 /// <param name="Title">The session's console title, i.e. the tab name Perch looked for.</param>
-/// <param name="TabCount">How many tabs the window has.</param>
-/// <param name="SameTitleCount">How many of them carry <paramref name="Title"/> (Ambiguous only).</param>
-public sealed record TabMiss(TabMissReason Reason, string Title, int TabCount, int SameTitleCount);
+/// <param name="SameTitleCount">How many of the window's tabs carry <paramref name="Title"/> (Ambiguous only).</param>
+public sealed record TabMiss(TabMissReason Reason, string Title, int SameTitleCount);
 
 public enum TabMissReason
 {

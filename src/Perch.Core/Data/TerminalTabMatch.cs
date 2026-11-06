@@ -18,10 +18,6 @@ namespace Perch.Data;
 /// </summary>
 public static class TerminalTabMatch
 {
-    /// <summary>The index of the one tab whose name matches <paramref name="consoleTitle"/>, or -1.</summary>
-    public static int FindTab(IReadOnlyList<string> tabNames, string? consoleTitle)
-        => Match(tabNames, consoleTitle) is { Kind: TabMatchKind.Found } m ? m.Index : -1;
-
     /// <summary>
     /// Matches <paramref name="consoleTitle"/> against <paramref name="tabNames"/>, telling a single match
     /// apart from several look-alikes (<see cref="TabMatch.Count"/> of them) and from none.

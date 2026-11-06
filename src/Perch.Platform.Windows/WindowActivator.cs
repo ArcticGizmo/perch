@@ -1,6 +1,5 @@
 ﻿using System.Runtime.InteropServices;
 using System.Text;
-using Perch.Data;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;
@@ -155,18 +154,12 @@ public sealed class WindowActivator : IWindowActivator
     // hosting terminal window — the authoritative session→terminal link the ancestry can't provide. It is
     // read live at click time from the console object; nothing is persisted and no hook is involved.
     //
-    // Console attachment is process-*global* state, so this serialises on a lock, does only three Win32
-    // calls while attached, and always FreeConsole()s in a finally. Perch's Windows head is a WinExe (GUI,
-    // no console of its own), so FreeConsole/AttachConsole neither allocate nor destroy a visible console
-    // window; the leading FreeConsole only matters for a dev run that inherited the launching terminal's
-    // console (AttachConsole fails with ERROR_ACCESS_DENIED while we already hold one).
+    // Attaching follows ConsoleAttach's rules (one at a time, Ctrl+C absorbed, always detached).
     //
     // Returns IntPtr.Zero when there is nothing to focus: the process is gone, it has no Win32 console
     // (Git Bash/mintty — already covered by the ancestry walk), or its console is a higher integrity level
     // than Perch (access denied). The caller treats zero as "no window" and notifies the user.
-    private static readonly object _consoleLock = new();
-
-    private static IntPtr ResolveTerminalViaConsole(int pid) => WithConsole(pid, () =>
+    private static IntPtr ResolveTerminalViaConsole(int pid) => ConsoleAttach.With(pid, () =>
     {
         IntPtr consoleWnd = GetConsoleWindow();
         if (consoleWnd == IntPtr.Zero)
@@ -175,158 +168,11 @@ public sealed class WindowActivator : IWindowActivator
         return owner == IntPtr.Zero ? consoleWnd : owner;
     });
 
-    // The title the session gave its console: Claude Code's status glyph plus the session title, which is
-    // also what Windows Terminal shows as that session's tab name. Read live from the console object, like
-    // ResolveTerminalViaConsole; null when the console can't be attached (gone, mintty, higher integrity).
-    private static string? ReadConsoleTitle(int pid) => WithConsole(pid, () => AttachedConsoleTitle(1024));
-
-    private static bool WriteConsoleTitle(int pid, string title) => WithConsole(pid, () => SetConsoleTitleW(title));
-
-    // Puts original back only while the title is still marked: the session may have set a newer title of its
-    // own in the meantime (Claude Code redraws its title as it works), and that one must stand.
-    private static void RestoreConsoleTitle(int pid, string marked, string original) => WithConsole(pid, () =>
-        AttachedConsoleTitle(marked.Length + 2) == marked && SetConsoleTitleW(original));
-
-    private static string? AttachedConsoleTitle(int capacity)
-    {
-        var sb = new StringBuilder(capacity);
-        return GetConsoleTitleW(sb, (uint)sb.Capacity) == 0 ? null : sb.ToString();
-    }
-
-    // Runs read while attached to pid's console, under the rules ResolveTerminalViaConsole describes: one
-    // attach at a time, only quick console calls while attached, always detached again. default(T) when the
-    // attach fails.
-    //
-    // While attached, Perch is one of that console's processes, so a Ctrl+C or Ctrl+Break typed into the
-    // session at that instant would reach Perch too, and the default handler ends the process. SwallowCtrl
-    // absorbs them for the duration of the attach. It is a registered handler rather than
-    // SetConsoleCtrlHandler(null, true) because that flag is inherited by any child process Perch starts
-    // meanwhile (a new session, a git call), which would then ignore Ctrl+C for good.
-    private static T? WithConsole<T>(int pid, Func<T> read)
-    {
-        lock (_consoleLock)
-        {
-            FreeConsole();
-            SetConsoleCtrlHandler(SwallowCtrl, true);
-            try
-            {
-                if (!AttachConsole((uint)pid))
-                    return default;
-                try
-                {
-                    return read();
-                }
-                finally
-                {
-                    FreeConsole();
-                }
-            }
-            finally
-            {
-                SetConsoleCtrlHandler(SwallowCtrl, false);
-            }
-        }
-    }
-
-    // A static field so the marshalled delegate outlives every native call that can invoke it.
-    private static readonly ConsoleCtrlHandler SwallowCtrl =
-        ctrlType => ctrlType is CTRL_C_EVENT or CTRL_BREAK_EVENT;
-
-    // When the session's terminal window is Windows Terminal, selects the session's own tab in it before
-    // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
-    // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: any failure
-    // leaves the tab as it was, and the window is still raised. Returns a TabMiss when the window has several
-    // tabs and none could be told to be the session's, so the caller can say so; null otherwise, including
-    // when the answer took too long to matter.
-    //
-    // UI Automation calls block until Windows Terminal answers, and this runs on a click, i.e. on the UI
-    // thread: a hung WT would freeze the overlay for UIA's own timeout (tens of seconds). So the walk runs on
-    // the thread pool (MTA, which UIA clients prefer anyway) and the click waits at most TabSelectWait for it.
-    // That is ample for the usual ~150 ms walk, so the tab is normally selected before the window comes
-    // forward; when WT is slower the window is raised regardless and the tab follows if it arrives within
-    // TabSelectLateMs, or not at all. Only one walk runs at a time, so clicks on a hung WT don't stack threads.
-    private static readonly TimeSpan TabSelectWait = TimeSpan.FromMilliseconds(500);
-    private const int TabSelectLateMs = 2000;
-    private static int _tabSelectBusy;
-
-    private static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
-    {
-        if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (Interlocked.Exchange(ref _tabSelectBusy, 1) == 1)
-            return null;
-
-        long selectBy = Environment.TickCount64 + TabSelectLateMs;
-        var walk = Task.Run(() =>
-        {
-            try
-            {
-                return SelectTabCore(terminalWindow, pid, selectBy);
-            }
-            catch
-            {
-                return null; // best-effort: the window is still raised by the caller
-            }
-            finally
-            {
-                Volatile.Write(ref _tabSelectBusy, 0);
-            }
-        });
-        return walk.Wait(TabSelectWait) ? walk.Result : null;
-    }
-
-    private static TabMiss? SelectTabCore(IntPtr terminalWindow, int pid, long selectBy)
-    {
-        var title = ReadConsoleTitle(pid);
-        if (string.IsNullOrEmpty(title)) return null;
-
-        using var tabs = WindowsTerminalTabs.Open(terminalWindow);
-        if (tabs is null) return null;
-
-        var match = TerminalTabMatch.Match(tabs.ReadNames(), title);
-        switch (match.Kind)
-        {
-            case TabMatchKind.Found:
-                if (Environment.TickCount64 <= selectBy) tabs.Select(match.Index);
-                return null;
-            case TabMatchKind.None:
-                // A lone tab is already the one on show, so there is nothing to apologise for.
-                return tabs.Count > 1 ? new TabMiss(TabMissReason.NotFound, title, tabs.Count, 0) : null;
-            default:
-                return SelectByMarker(tabs, pid, title, selectBy)
-                    ? null
-                    : new TabMiss(TabMissReason.Ambiguous, title, tabs.Count, match.Count);
-        }
-    }
-
-    // Several tabs carry the session's title (typically a few untitled "Claude Code" sessions), so tag the
-    // title for a moment: WT renames exactly the session's tab, the marker is unique, and that tab is the one.
-    // This is the classic way to find a console's window from its title. The original title is put back
-    // whatever happens. No marker turns up when the tab ignores app titles (renamed, or a profile with
-    // suppressApplicationTitle), or when Claude Code redraws its title before WT shows ours.
-    private const int MarkerWaitMs = 400;
-    private const int MarkerPollMs = 25;
-
-    private static bool SelectByMarker(WindowsTerminalTabs tabs, int pid, string title, long selectBy)
-    {
-        var marked = TerminalTabMatch.Mark(title, Guid.NewGuid().ToString("N")[..4]);
-        if (!WriteConsoleTitle(pid, marked)) return false;
-        try
-        {
-            long giveUp = Math.Min(selectBy, Environment.TickCount64 + MarkerWaitMs);
-            while (Environment.TickCount64 < giveUp)
-            {
-                Thread.Sleep(MarkerPollMs);
-                int index = TerminalTabMatch.FindMarked(tabs.ReadNames(), marked);
-                if (index >= 0) return tabs.Select(index);
-            }
-            return false;
-        }
-        finally
-        {
-            RestoreConsoleTitle(pid, marked, title);
-        }
-    }
+    // Windows Terminal is the one host whose tabs Perch can steer; anything else is raised as it stands.
+    private static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe) =>
+        string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase)
+            ? WindowsTerminalTabs.SelectSessionTab(terminalWindow, pid)
+            : null;
 
     // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
     private static string? ExeOwning(IntPtr hWnd, Dictionary<int, (int ParentPid, string ExeFile)> processes)
@@ -574,36 +420,9 @@ public sealed class WindowActivator : IWindowActivator
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
-    // Console attach/detach for ResolveTerminalViaConsole. AttachConsole binds this process to a target's
-    // console; GetConsoleWindow then returns that console's window (the ConPTY PseudoConsoleWindow).
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AttachConsole(uint dwProcessId);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool FreeConsole();
-
+    // Valid only inside ConsoleAttach.With: the attached console's window (the ConPTY PseudoConsoleWindow).
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint GetConsoleTitleW(StringBuilder lpConsoleTitle, uint nSize);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetConsoleTitleW(string lpConsoleTitle);
-
-    private const uint CTRL_C_EVENT = 0;
-    private const uint CTRL_BREAK_EVENT = 1;
-
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private delegate bool ConsoleCtrlHandler(uint ctrlType);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetConsoleCtrlHandler(
-        ConsoleCtrlHandler handler, [MarshalAs(UnmanagedType.Bool)] bool add);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
