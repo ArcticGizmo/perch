@@ -18,6 +18,22 @@ public class SubAgentReaderTests
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow - age);
     }
 
+    // The recursive projects/ watcher rescans only for a sub-agent's own files, so everything else created under
+    // projects/ (tool results, new session transcripts, notes) never costs a scan.
+    [Theory]
+    [InlineData(@"proj\sess\subagents\agent-a1c30ae622c67bef1.jsonl", true)]
+    [InlineData(@"proj\sess\subagents\agent-a1c30ae622c67bef1.meta.json", true)]
+    [InlineData(@"proj\sess\subagents\agent-a1c30ae622c67bef1.idle", false)]
+    [InlineData(@"proj\sess\subagents\agent-x.forked-skill.json", false)]
+    [InlineData(@"proj\sess\tool-results\agent-x.jsonl", false)]
+    [InlineData(@"proj\sess.jsonl", false)]
+    [InlineData(@"proj\agent-x.jsonl", false)]
+    public void IsSubAgentFile_MatchesOnlyAgentTranscriptsAndMeta(string relative, bool expected)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "projects", relative.Replace('\\', Path.DirectorySeparatorChar));
+        Assert.Equal(expected, SessionMonitor.IsSubAgentFile(path));
+    }
+
     [Fact]
     public void GetRunning_Legacy_ReturnsOnlyTasksWithoutAResult()
     {

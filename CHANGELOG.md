@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.8] - 2026-11-06
+
+- Analyse resource usage: record the whole machine, then scrub back through it
+- CPU and RAM by session, app, and the kernel's own share
+- Findings that name the culprit and say what to change
+- Blames the hooks, sub-agents and builds behind the load (politely, with numbers)
+- Hooks page: every hook's runs, by event
+- Windows services named, not just "svchost" (it was Windows Update)
+- Sub-agents appear the moment they spawn
+
+---
+
 ## [v0.6.7] - 2026-11-05
 
 - Sub-agents stopped by their parent vanish at once (no 90-second wake)

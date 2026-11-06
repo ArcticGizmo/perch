@@ -1651,6 +1651,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// carries the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? SystemMetricsToggleRequested;
 
+    /// <summary>"Analyse resource usage…": open the resource monitor (docs/resource-diagnostics-plan.md).</summary>
+    public event Action? ResourceAnalysisRequested;
+
     /// <summary>Raised when the user toggles the account-usage strip from the right-click menu; carries
     /// the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? UsageToggleRequested;
@@ -5110,7 +5113,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overSystemStrip = ShowFullPanel && _showSystemMetrics
                                && p.Y >= SystemInfoTop && p.Y < SystemInfoTop + SysMetricsStripHeight;
         if (overSystemStrip)
+        {
+            items.Add(MenuItem("Analyse resource usage…", () => ResourceAnalysisRequested?.Invoke()));
             items.Add(MenuItem("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
+        }
         if (InUsageStrip(p))
             items.Add(MenuItem("Hide usage", () => UsageToggleRequested?.Invoke(false)));
 
@@ -5122,6 +5128,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
+            // Also here so it's reachable while the system strip is hidden.
+            items.Add(MenuItem("Analyse resource usage…", () => ResourceAnalysisRequested?.Invoke()));
             items.Add(new Separator());
             // Only where the OS can actually reserve the edge (Windows) — see App.DockedModeAvailable.
             if (App.DockedModeAvailable)

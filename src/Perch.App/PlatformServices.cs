@@ -38,6 +38,8 @@ internal static class PlatformServices
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();
+    // Whole-machine process sampling for the resource monitor (docs/resource-diagnostics-plan.md).
+    public static IProcessTable ProcessTable { get; } = new Impl.WindowsProcessTable();
     // Windows/Linux store the OAuth blob in ~/.claude/.credentials.json — the portable file reader.
     public static IClaudeCredentials ClaudeCredentials { get; } = new FileClaudeCredentials();
     // The Social feature's OAuth refresh token, protected at rest by DPAPI (current user).
@@ -47,6 +49,8 @@ internal static class PlatformServices
 #else
     public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
+    // The portable fallback until the mac head has a libproc table (resource-diagnostics-plan R5).
+    public static IProcessTable ProcessTable { get; } = new ManagedProcessTable(SystemMetrics);
     // macOS keeps the OAuth blob in the login Keychain (with a file fallback for a Linux head).
     public static IClaudeCredentials ClaudeCredentials { get; } = new Impl.KeychainClaudeCredentials();
     // The Social feature's OAuth refresh token, kept in the login Keychain.

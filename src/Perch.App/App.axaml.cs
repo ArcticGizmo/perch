@@ -53,6 +53,7 @@ public partial class App : Application
     private StatuslineDesignerWindow? _statuslineWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
+    private ResourceMonitorWindow? _resourceWindow;
     // Perch-controlled sessions over stream-json (docs/session-ui-plan.md). The app owns every live
     // PerchSession; a SessionWindow is just a view onto one — closing it leaves the session running, and the
     // session's overlay row reopens a window onto it. Several sessions/windows may exist at once.
@@ -358,6 +359,7 @@ public partial class App : Application
                 _overlay!.Canvas.Update(roster);
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
+                _resourceWindow?.SetSessions(sessions);
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 _treeWindow?.SetSessions(sessions);   // which session is working in which worktree
                 _roostScanned = true;
@@ -458,6 +460,7 @@ public partial class App : Application
             _overlay.Canvas.OverlayModeToggleRequested += ToggleOverlayMode;
             _overlay.Canvas.QuietModeRequested += OnQuietModeRequested;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
+            _overlay.Canvas.ResourceAnalysisRequested += OpenResourceMonitor;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
             // Per-account usage collapse: clicking an account collapses its bars to a chip (or expands a chip).
             // Seeded from the persisted overrides; each toggle is written back (not a Settings-window control).
@@ -785,6 +788,7 @@ public partial class App : Application
         _reactionBubbles?.Close();
         _basketball?.Close();
         _flightWindow?.Close();
+        _resourceWindow?.Close();
         foreach (var w in _sessionWindows.ToArray()) w.Close();
         // An update restarts the tray: the processes must not be orphaned. Sessions stay resumable on disk.
         foreach (var s in _perchSessions.ToArray()) s.End();
@@ -2364,6 +2368,12 @@ public partial class App : Application
 
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
+
+    // "Analyse resource usage…" (overlay system strip / header). The window owns its recorder, so it only ever
+    // samples between the user's Start and Stop.
+    private void OpenResourceMonitor() =>
+        _resourceWindow = WindowHost.ShowOrFocus(_resourceWindow, () => new ResourceMonitorWindow(),
+            () => _resourceWindow = null, w => w.SetSessions(_lastSessions));
 
     // ── Perch-controlled sessions (docs/session-ui-plan.md) ────────────────────────
 
