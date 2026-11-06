@@ -25,12 +25,14 @@ public sealed class WindowActivator : IWindowActivator
     // Windows Terminal windows that share a single process. For a plain top-level window (an IDE) the
     // root owner is the window itself; there the title (carrying the folder name, e.g.
     // "… - perch - Visual Studio Code") disambiguates projectHint among windows sharing a pid.
-    // Focus is best-effort for Windows Terminal, whose title follows the *active tab* and can't be
-    // steered to a background tab via Win32.
+    // Win32 can only raise the Windows Terminal *window*, which shows whatever tab was last active, so
+    // for a WT host SelectSessionTab first selects the session's own tab through UI Automation.
     //
-    // Returns false when no host window could be resolved at all, so the caller can say so instead of
+    // Raised is false when no host window could be resolved at all, so the caller can say so instead of
     // leaving a click that appears to do nothing.
-    public bool FocusTerminalForProcess(int pid, string? projectHint = null)
+    public bool FocusTerminalForProcess(int pid, string? projectHint = null) => FocusTerminal(pid, projectHint).Raised;
+
+    public TerminalFocus FocusTerminal(int pid, string? projectHint = null)
     {
         // Build the ancestor chain closest-first (claude → cmd → WindowsTerminal → explorer …) from a
         // single process snapshot, assigning each a depth score (0 = the Claude process itself).
@@ -80,9 +82,8 @@ public sealed class WindowActivator : IWindowActivator
                 // whichever way the console was allocated. If that too comes up empty the session has no
                 // reachable window, so return false and let the caller show its "no window" notification.
                 IntPtr viaConsole = ResolveTerminalViaConsole(pid);
-                if (viaConsole == IntPtr.Zero) return false;
-                FocusWindow(viaConsole);
-                return true;
+                if (viaConsole == IntPtr.Zero) return new(false);
+                return RaiseOnSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
             }
         }
 
@@ -100,8 +101,7 @@ public sealed class WindowActivator : IWindowActivator
 
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
-        FocusWindow(chosen.hWnd);
-        return true;
+        return RaiseOnSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
     }
 
     // For every window owned by an ancestor, resolve it to its root owner and keep that, grouped by the
@@ -150,37 +150,36 @@ public sealed class WindowActivator : IWindowActivator
     // hosting terminal window — the authoritative session→terminal link the ancestry can't provide. It is
     // read live at click time from the console object; nothing is persisted and no hook is involved.
     //
-    // Console attachment is process-*global* state, so this serialises on a lock, does only three Win32
-    // calls while attached, and always FreeConsole()s in a finally. Perch's Windows head is a WinExe (GUI,
-    // no console of its own), so FreeConsole/AttachConsole neither allocate nor destroy a visible console
-    // window; the leading FreeConsole only matters for a dev run that inherited the launching terminal's
-    // console (AttachConsole fails with ERROR_ACCESS_DENIED while we already hold one).
+    // Attaching follows ConsoleAttach's rules (one at a time, Ctrl+C absorbed, always detached).
     //
     // Returns IntPtr.Zero when there is nothing to focus: the process is gone, it has no Win32 console
     // (Git Bash/mintty — already covered by the ancestry walk), or its console is a higher integrity level
     // than Perch (access denied). The caller treats zero as "no window" and notifies the user.
-    private static readonly object _consoleLock = new();
-
-    private static IntPtr ResolveTerminalViaConsole(int pid)
+    private static IntPtr ResolveTerminalViaConsole(int pid) => ConsoleAttach.With(pid, () =>
     {
-        lock (_consoleLock)
+        IntPtr consoleWnd = GetConsoleWindow();
+        if (consoleWnd == IntPtr.Zero)
+            return IntPtr.Zero;
+        IntPtr owner = GetAncestor(consoleWnd, GA_ROOTOWNER);
+        return owner == IntPtr.Zero ? consoleWnd : owner;
+    });
+
+    // Windows Terminal is the one host whose tabs Perch can steer; anything else is raised as it stands.
+    private static TerminalFocus RaiseOnSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
+    {
+        if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
         {
-            FreeConsole();
-            if (!AttachConsole((uint)pid))
-                return IntPtr.Zero;
-            try
-            {
-                IntPtr consoleWnd = GetConsoleWindow();
-                if (consoleWnd == IntPtr.Zero)
-                    return IntPtr.Zero;
-                IntPtr owner = GetAncestor(consoleWnd, GA_ROOTOWNER);
-                return owner == IntPtr.Zero ? consoleWnd : owner;
-            }
-            finally
-            {
-                FreeConsole();
-            }
+            FocusWindow(terminalWindow);
+            return new(true);
         }
+        return new(true, WindowsTerminalTabs.RaiseOnSessionTab(terminalWindow, pid, () => FocusWindow(terminalWindow)));
+    }
+
+    // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
+    private static string? ExeOwning(IntPtr hWnd, Dictionary<int, (int ParentPid, string ExeFile)> processes)
+    {
+        GetWindowThreadProcessId(hWnd, out uint windowPid);
+        return processes.TryGetValue((int)windowPid, out var info) ? info.ExeFile : null;
     }
 
     // Focuses the app that owns pid, where pid may well be a windowless helper process — the case this
@@ -422,16 +421,7 @@ public sealed class WindowActivator : IWindowActivator
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
-    // Console attach/detach for ResolveTerminalViaConsole. AttachConsole binds this process to a target's
-    // console; GetConsoleWindow then returns that console's window (the ConPTY PseudoConsoleWindow).
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool AttachConsole(uint dwProcessId);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool FreeConsole();
-
+    // Valid only inside ConsoleAttach.With: the attached console's window (the ConPTY PseudoConsoleWindow).
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
 
