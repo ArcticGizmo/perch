@@ -27,7 +27,12 @@ internal static class WindowsTerminalTabs
     /// Selects the tab of <paramref name="terminalWindow"/> whose name matches <paramref name="consoleTitle"/>.
     /// Returns true only when exactly one tab matched and was selected.
     /// </summary>
-    public static bool TrySelect(IntPtr terminalWindow, string consoleTitle)
+    /// <param name="selectBy">
+    /// An <see cref="Environment.TickCount64"/> past which the tab is no longer selected. A slow Windows
+    /// Terminal can answer the walk long after the click; switching tabs under the user then would be a
+    /// surprise, not a response.
+    /// </param>
+    public static bool TrySelect(IntPtr terminalWindow, string consoleTitle, long selectBy)
     {
         IUIAutomation? uia = null;
         try
@@ -54,7 +59,7 @@ internal static class WindowsTerminalTabs
             }
 
             int index = TerminalTabMatch.FindTab(names, consoleTitle);
-            if (index < 0) return false;
+            if (index < 0 || Environment.TickCount64 > selectBy) return false;
 
             if (tabs[index].GetCurrentPattern(UIA_SelectionItemPatternId, out var pattern) != 0) return false;
             return pattern is IUIAutomationSelectionItemPattern selection && selection.Select() == 0;

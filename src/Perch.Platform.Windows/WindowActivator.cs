@@ -206,14 +206,43 @@ public sealed class WindowActivator : IWindowActivator
     // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
     // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: no title,
     // no single matching tab, or any UIA failure leaves the tab as it was, and the window is still raised.
+    //
+    // UI Automation calls block until Windows Terminal answers, and this runs on a click, i.e. on the UI
+    // thread: a hung WT would freeze the overlay for UIA's own timeout (tens of seconds). So the walk runs on
+    // the thread pool (MTA, which UIA clients prefer anyway) and the click waits at most TabSelectWait for it.
+    // That is ample for the usual ~150 ms walk, so the tab is normally selected before the window comes
+    // forward; when WT is slower the window is raised regardless and the tab follows if it arrives within
+    // TabSelectLateMs, or not at all. Only one walk runs at a time, so clicks on a hung WT don't stack threads.
+    private static readonly TimeSpan TabSelectWait = TimeSpan.FromMilliseconds(500);
+    private const int TabSelectLateMs = 2000;
+    private static int _tabSelectBusy;
+
     private static void SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
     {
         if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
             return;
+        if (Interlocked.Exchange(ref _tabSelectBusy, 1) == 1)
+            return;
 
-        var title = ReadConsoleTitle(pid);
-        if (!string.IsNullOrEmpty(title))
-            WindowsTerminalTabs.TrySelect(terminalWindow, title);
+        long selectBy = Environment.TickCount64 + TabSelectLateMs;
+        var walk = Task.Run(() =>
+        {
+            try
+            {
+                var title = ReadConsoleTitle(pid);
+                if (!string.IsNullOrEmpty(title))
+                    WindowsTerminalTabs.TrySelect(terminalWindow, title, selectBy);
+            }
+            catch
+            {
+                // best-effort: the window is still raised by the caller
+            }
+            finally
+            {
+                Volatile.Write(ref _tabSelectBusy, 0);
+            }
+        });
+        walk.Wait(TabSelectWait);
     }
 
     // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
