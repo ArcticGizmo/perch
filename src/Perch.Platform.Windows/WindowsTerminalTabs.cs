@@ -34,14 +34,32 @@ internal sealed class WindowsTerminalTabs
     // whatever happens. No marker turns up when the tab ignores app titles (renamed, or a profile with
     // suppressApplicationTitle), or when Claude Code redraws its title before WT shows ours.
     private const int MarkerWaitMs = 400;
-    private const int MarkerPollMs = 25;
+
+    // A window on another virtual desktop is DWM-cloaked until the desktop switch lands, and how long that takes
+    // is the shell's business (its slide animation), so the tab waits up to this long for it to uncloak.
+    private const int UncloakWaitMs = 1000;
+
+    // How often the marker and uncloak waits look again.
+    private const int PollMs = 25;
 
     /// <summary>
-    /// Selects <paramref name="pid"/>'s tab in <paramref name="terminalWindow"/>. Returns a <see cref="TabMiss"/>
-    /// when the window has several tabs and none could be told to be the session's, so the caller can say so;
-    /// null otherwise, including when the answer took too long to matter.
+    /// Raises <paramref name="terminalWindow"/> (through <paramref name="raise"/>) on <paramref name="pid"/>'s own
+    /// tab. Returns a <see cref="TabMiss"/> when the window has several tabs and none could be told to be the
+    /// session's, so the caller can say so; null otherwise, including when the answer took too long to matter.
     /// </summary>
-    public static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid)
+    public static TabMiss? RaiseOnSessionTab(IntPtr terminalWindow, int pid, Action raise)
+    {
+        // Normally the tab is selected first, so the window comes forward already on it. A window on another
+        // virtual desktop is raised first instead (which switches desktop) and its tab selected once it is on
+        // screen: a tab selected while the window is still cloaked was not the one showing after the switch.
+        bool offDesktop = IsCloaked(terminalWindow);
+        if (offDesktop) raise();
+        var miss = SelectSessionTab(terminalWindow, pid, offDesktop);
+        if (!offDesktop) raise();
+        return miss;
+    }
+
+    private static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid, bool awaitUncloak)
     {
         if (Interlocked.Exchange(ref _busy, 1) == 1)
             return null;
@@ -51,6 +69,7 @@ internal sealed class WindowsTerminalTabs
         {
             try
             {
+                if (awaitUncloak) AwaitUncloak(terminalWindow, selectBy);
                 return SelectSessionTabCore(terminalWindow, pid, selectBy);
             }
             catch
@@ -63,6 +82,13 @@ internal sealed class WindowsTerminalTabs
             }
         });
         return walk.Wait(SelectWait) ? walk.Result : null;
+    }
+
+    private static void AwaitUncloak(IntPtr terminalWindow, long selectBy)
+    {
+        long giveUp = Math.Min(selectBy, Environment.TickCount64 + UncloakWaitMs);
+        while (IsCloaked(terminalWindow) && Environment.TickCount64 < giveUp)
+            Thread.Sleep(PollMs);
     }
 
     private static TabMiss? SelectSessionTabCore(IntPtr terminalWindow, int pid, long selectBy)
@@ -98,7 +124,7 @@ internal sealed class WindowsTerminalTabs
             long giveUp = Math.Min(selectBy, Environment.TickCount64 + MarkerWaitMs);
             while (Environment.TickCount64 < giveUp)
             {
-                Thread.Sleep(MarkerPollMs);
+                Thread.Sleep(PollMs);
                 int index = TerminalTabMatch.FindMarked(ReadNames(), marked);
                 if (index >= 0) return Select(index);
             }
@@ -197,6 +223,16 @@ internal sealed class WindowsTerminalTabs
             return false;
         }
     }
+
+    // Any cloak counts (the shell's for another virtual desktop is the one that matters); an unreadable
+    // attribute reads as on screen, which keeps the select-then-raise order.
+    private static bool IsCloaked(IntPtr hWnd) =>
+        DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0;
+
+    private const int DWMWA_CLOAKED = 14;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
     // ── UI Automation COM surface ────────────────────────────────────────────
     // Classic [ComImport] interfaces must list every vtable slot up to the last one used, in the order of

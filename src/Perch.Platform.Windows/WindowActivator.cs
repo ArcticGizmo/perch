@@ -83,9 +83,7 @@ public sealed class WindowActivator : IWindowActivator
                 // reachable window, so return false and let the caller show its "no window" notification.
                 IntPtr viaConsole = ResolveTerminalViaConsole(pid);
                 if (viaConsole == IntPtr.Zero) return new(false);
-                var consoleMiss = SelectSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
-                FocusWindow(viaConsole);
-                return new(true, consoleMiss);
+                return RaiseOnSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
             }
         }
 
@@ -103,9 +101,7 @@ public sealed class WindowActivator : IWindowActivator
 
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
-        var miss = SelectSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
-        FocusWindow(chosen.hWnd);
-        return new(true, miss);
+        return RaiseOnSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
     }
 
     // For every window owned by an ancestor, resolve it to its root owner and keep that, grouped by the
@@ -169,10 +165,15 @@ public sealed class WindowActivator : IWindowActivator
     });
 
     // Windows Terminal is the one host whose tabs Perch can steer; anything else is raised as it stands.
-    private static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe) =>
-        string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase)
-            ? WindowsTerminalTabs.SelectSessionTab(terminalWindow, pid)
-            : null;
+    private static TerminalFocus RaiseOnSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
+    {
+        if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            FocusWindow(terminalWindow);
+            return new(true);
+        }
+        return new(true, WindowsTerminalTabs.RaiseOnSessionTab(terminalWindow, pid, () => FocusWindow(terminalWindow)));
+    }
 
     // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
     private static string? ExeOwning(IntPtr hWnd, Dictionary<int, (int ParentPid, string ExeFile)> processes)
