@@ -87,7 +87,7 @@ jobs:
 
   build-macos:
     # arm64 runner - required: perch-hook is NativeAOT (osx-arm64) and can't cross-compile from x64.
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
