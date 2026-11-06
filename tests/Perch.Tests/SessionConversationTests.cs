@@ -391,6 +391,118 @@ public class SessionConversationTests
         Assert.Equal(PermissionResolution.Denied, perm.Resolution);
     }
 
+    // A turn typed on the phone, in the order the CLI wrote it (captured live, 2.1.319): state `running` comes before
+    // the prompt's echo, so the echo must not count as a second, queued prompt.
+    [Fact]
+    public void RemotePrompt_FromCapture_ShowsOnce_AndNeverReadsQueued()
+    {
+        var (conv, _) = Make();
+        string[] lines =
+        [
+            """{"type":"system","subtype":"session_state_changed","state":"running","uuid":"a","session_id":"s"}""",
+            """{"type":"command_lifecycle","command_uuid":"9db3faa1","state":"queued","uuid":"b","session_id":"s"}""",
+            """{"type":"command_lifecycle","command_uuid":"9db3faa1","state":"started","uuid":"c","session_id":"s"}""",
+            """{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5","permissionMode":"default","tools":[]}""",
+            """{"type":"user","message":{"role":"user","content":"Write the numbers from 1 to 40"},"session_id":"s","parent_tool_use_id":null,"uuid":"9db3faa1","isReplay":true,"origin":{"kind":"human"}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"1\n2\nFINISHED"}]},"parent_tool_use_id":null,"session_id":"s"}""",
+        ];
+        foreach (var line in lines)
+            foreach (var ev in StreamJsonParser.Parse(line)) conv.Apply(ev);
+
+        var prompt = Assert.Single(conv.Items.OfType<UserMessageItem>());
+        Assert.True(prompt.Remote);
+        Assert.Equal("9db3faa1", prompt.Uuid);
+        Assert.True(conv.TurnActive);
+        Assert.Equal(0, conv.QueuedPrompts);
+
+        foreach (var ev in StreamJsonParser.Parse("""{"type":"system","subtype":"session_state_changed","state":"idle","uuid":"d","session_id":"s"}"""))
+            conv.Apply(ev);
+        Assert.False(conv.TurnActive);
+    }
+
+    // An older CLI sends no state events: the echo then starts the turn itself, as a prompt sent from Perch would.
+    [Fact]
+    public void RemotePrompt_WithoutStateEvents_StartsTheTurn()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new UserPromptEchoEvent("u1", "hello", "human"));
+        Assert.True(conv.TurnActive);
+
+        conv.Apply(new UserPromptEchoEvent("u2", "and this", "human"));
+        Assert.Equal(1, conv.QueuedPrompts);
+    }
+
+    // A session driven from another Perch: the host machine's own prompts echo with no origin. They show as ordinary
+    // prompts, and one this view sent (keyed by its uuid up front) shows once.
+    [Fact]
+    public void BareEcho_IsAPlainPrompt_AndOwnKeyedPromptDedupes()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new UserPromptEchoEvent("u1", "typed on the worker", null));
+        Assert.False(Assert.Single(conv.Items.OfType<UserMessageItem>()).Remote);
+
+        conv.AddUserPrompt("sent from here", uuid: "u2");
+        conv.Apply(new UserPromptEchoEvent("u2", "sent from here", null));
+        Assert.Equal(2, conv.Items.OfType<UserMessageItem>().Count());
+    }
+
+    // The other view answered: the CLI's echo of that answer settles this side's card with the real verdict.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PermissionAnsweredElsewhere_SettlesWithTheVerdict(bool allowed)
+    {
+        var expected = allowed ? PermissionResolution.Allowed : PermissionResolution.Denied;
+        var (conv, _) = Make();
+        conv.AddUserPrompt("go");
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "ls", "{}", null));
+        var perm = Assert.IsType<PermissionItem>(conv.Items[^1]);
+
+        conv.Apply(new PermissionAnsweredEvent("req1", allowed, null));
+
+        Assert.Equal(expected, perm.Resolution);
+        Assert.Null(conv.PendingPermission);
+    }
+
+    // This side's own answer echoes back too; it must not overwrite the verdict already shown.
+    [Fact]
+    public void PermissionAnswered_AfterOwnAnswer_ChangesNothing()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("go");
+        conv.Apply(new PermissionRequestEvent("req1", "Bash", "ls", "{}", null));
+        var perm = Assert.IsType<PermissionItem>(conv.Items[^1]);
+        conv.ResolvePermission(perm, allowed: false);
+
+        conv.Apply(new PermissionAnsweredEvent("req1", true, null));
+        Assert.Equal(PermissionResolution.Denied, perm.Resolution);
+    }
+
+    [Fact]
+    public void QuestionAnsweredElsewhere_ShowsTheAnswers()
+    {
+        var (conv, _) = Make();
+        const string input = """{"questions":[{"question":"Which colour?","header":"Colour","options":[{"label":"Red"},{"label":"Blue"}],"multiSelect":false}]}""";
+        conv.AddUserPrompt("ask me");
+        conv.Apply(new PermissionRequestEvent("q1", "AskUserQuestion", "", input, null));
+        var card = Assert.IsType<PermissionItem>(conv.Items[^1]);
+
+        conv.Apply(new PermissionAnsweredEvent("q1", true,
+            """{"questions":[],"answers":{"Which colour?":"Blue"}}"""));
+
+        Assert.Equal(PermissionResolution.Allowed, card.Resolution);
+        Assert.Equal("Colour: Blue", card.AnswerSummary);
+    }
+
+    [Fact]
+    public void RemotePrompt_RepeatedEcho_AddsOneItem()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new UserPromptEchoEvent("u1", "hello", "human"));
+        conv.Apply(new UserPromptEchoEvent("u1", "hello", "human"));
+        Assert.Single(conv.Items.OfType<UserMessageItem>());
+    }
+
     // A turn a Remote Control client starts sends Perch no prompt: only the CLI's own state says it's running.
     [Fact]
     public void CliState_RunningAndIdle_DriveTheTurn_EvenBeforeAnyResult()

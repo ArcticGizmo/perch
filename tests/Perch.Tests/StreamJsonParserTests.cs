@@ -20,8 +20,8 @@ public class StreamJsonParserTests
         Assert.False(Assert.IsType<AssistantTextEvent>(Assert.Single(StreamJsonParser.Parse(main))).FromSubagent);
     }
 
-    // Remote Control (docs/remote-control-sync-plan.md). Shapes from the CLI's bundled protocol schema, not yet
-    // captured live.
+    // Remote Control (docs/remote-control-sync-plan.md). Shapes captured live from claude 2.1.319 with a phone on the
+    // bridge (P0); session ids and uuids shortened.
     [Fact]
     public void ControlCancelRequest_YieldsCancelled()
     {
@@ -44,6 +44,65 @@ public class StreamJsonParserTests
     [Fact]
     public void SessionStateChanged_UnknownState_IsIgnored() =>
         Assert.Empty(StreamJsonParser.Parse("""{"type":"system","subtype":"session_state_changed","state":"sleeping"}"""));
+
+    // --replay-user-messages: a prompt typed on the phone arrives with string content and origin.kind "human".
+    [Fact]
+    public void ReplayedRemotePrompt_YieldsEcho()
+    {
+        var line = """{"type":"user","message":{"role":"user","content":"Write the numbers from 1 to 40"},"session_id":"s","parent_tool_use_id":null,"uuid":"9db3faa1","timestamp":"2026-11-06T07:01:19.411Z","isReplay":true,"origin":{"kind":"human"}}""";
+        var echo = Assert.IsType<UserPromptEchoEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal("9db3faa1", echo.Uuid);
+        Assert.Equal("Write the numbers from 1 to 40", echo.Text);
+        Assert.Equal("human", echo.OriginKind);
+    }
+
+    // Perch's own prompt comes back with the uuid Perch stamped on it and no origin; the controller drops it by uuid.
+    [Fact]
+    public void ReplayedOwnPrompt_CarriesTheSentUuid()
+    {
+        var line = """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"echo baseline"}]},"session_id":"s","parent_tool_use_id":null,"uuid":"11111111-0000-4000-8000-000000000001","timestamp":"2026-11-06T06:54:34.426Z","isReplay":true}""";
+        var echo = Assert.IsType<UserPromptEchoEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal("11111111-0000-4000-8000-000000000001", echo.Uuid);
+        Assert.Null(echo.OriginKind);
+    }
+
+    // The CLI's own interrupt marker is an un-flagged user text record: never a prompt.
+    [Fact]
+    public void InterruptMarker_IsNotAnEcho() =>
+        Assert.Empty(StreamJsonParser.Parse(
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"parent_tool_use_id":null,"session_id":"s","uuid":"9dab","timestamp":"2026-11-06T07:03:14.271Z"}"""));
+
+    // A replayed record that isn't a typed prompt yields nothing, rather than re-entering the tool-result path.
+    [Fact]
+    public void ReplayedNonPrompt_YieldsNothing()
+    {
+        Assert.Empty(StreamJsonParser.Parse(
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"uuid":"u","isReplay":true}"""));
+        Assert.Empty(StreamJsonParser.Parse(
+            """{"type":"user","message":{"role":"user","content":"<task-notification><task-id>b1</task-id></task-notification>"},"uuid":"u","isReplay":true}"""));
+    }
+
+    // The CLI echoes the host's permission answer back as a control_response: the verdict, never a mode change.
+    [Fact]
+    public void EchoedPermissionAnswer_YieldsTheVerdict()
+    {
+        var allow = Assert.IsType<PermissionAnsweredEvent>(Assert.Single(StreamJsonParser.Parse(
+            """{"type":"control_response","response":{"subtype":"success","request_id":"f3949146","response":{"behavior":"allow","updatedInput":{"command":"echo baseline > rc-test-1.txt"}}}}""")));
+        Assert.Equal("f3949146", allow.RequestId);
+        Assert.True(allow.Allowed);
+        Assert.Contains("echo baseline", allow.UpdatedInputJson);
+
+        var deny = Assert.IsType<PermissionAnsweredEvent>(Assert.Single(StreamJsonParser.Parse(
+            """{"type":"control_response","response":{"subtype":"success","request_id":"r2","response":{"behavior":"deny","message":"no"}}}""")));
+        Assert.False(deny.Allowed);
+        Assert.Null(deny.UpdatedInputJson);
+    }
+
+    // Raw stdout is relayed to a remote controller as-is, and a mode ack must still read as one.
+    [Fact]
+    public void ModeAck_IsNotAPermissionAnswer() =>
+        Assert.IsType<ModeChangedEvent>(Assert.Single(StreamJsonParser.Parse(
+            """{"type":"control_response","response":{"subtype":"success","request_id":"perch_req_3","response":{"mode":"plan"}}}""")));
 
     [Fact]
     public void Init_YieldsSessionInit()

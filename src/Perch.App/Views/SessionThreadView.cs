@@ -960,6 +960,20 @@ internal sealed partial class SessionThreadView : ScrollViewer
                 ? new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Children = { bubble, tray } }
                 : tray;
         }
+        if (u.Remote)
+            middle = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Children =
+                {
+                    middle,
+                    new TextBlock
+                    {
+                        Text = "↗ via Remote Control", FontSize = 11, Foreground = _p.Faint,
+                        HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 3, 2, 0),
+                    },
+                },
+            };
         var rewindable = CanRewind && !SlashCommandCatalog.LooksLikeCommand(u.Text) ? u : null;
         return Row(WithCopy(middle, () => u.Text, userSide: true, rewindable), left: null, right: who);
     }

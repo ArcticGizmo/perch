@@ -16,10 +16,16 @@ namespace Perch.Data.Control;
 /// <para>PoC status: shapes verified live against claude 2.1.247 except <c>interrupt</c> (implemented per
 /// the Agent SDK's protocol but not yet exercised); see <c>docs/session-control-poc.md</c>.</para>
 /// </summary>
-internal sealed class ClaudeSessionController : IDisposable
+internal sealed class ClaudeSessionController : ISessionBackend
 {
     /// <summary>A decoded output event. Raised on the pump thread.</summary>
     public event Action<SessionEvent>? EventReceived;
+
+    /// <summary>Each stdout line as the CLI wrote it, before it's decoded: what a remote controller is sent. Raised on
+    /// the pump thread, ahead of the line's <see cref="EventReceived"/>s.</summary>
+    public event Action<string>? LineReceived;
+
+    public bool IsRemote => false;
 
     /// <summary>The process ended: exit code + a clipped stderr tail (empty when clean).</summary>
     public event Action<int, string>? Exited;
@@ -71,8 +77,9 @@ internal sealed class ClaudeSessionController : IDisposable
         if (SessionLock.HeldByOther(id, lockDir) is { } other)
             throw new InvalidOperationException($"Session {id} is already controlled by {other.Profile} (PID {other.Pid}).");
 
+        // --replay-user-messages: a prompt typed on a Remote Control client reaches the host only as this echo.
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
-                   " --include-partial-messages --permission-prompt-tool stdio";
+                   " --include-partial-messages --permission-prompt-tool stdio --replay-user-messages";
         args += fork ? $" --resume {resumeSessionId} --fork-session --session-id {id}"
               : resume ? $" --resume {id}"
               : $" --session-id {id}";
@@ -171,8 +178,12 @@ internal sealed class ClaudeSessionController : IDisposable
             {
                 if (rawLog)
                     DiagnosticLog.AppendRaw(DebugSwitches.SessionLogFile, line, DebugSwitches.SessionLogMaxBytes);
+                try { LineReceived?.Invoke(line); }
+                catch { /* a relay's failure must not stop this session's own stream */ }
                 foreach (var ev in StreamJsonParser.Parse(line))
                 {
+                    // Perch already showed its own prompt when it sent it.
+                    if (ev is UserPromptEchoEvent echo && IsOwnPrompt(echo.Uuid)) continue;
                     // Normally confirms the pinned/resumed id; if the CLI reports a different one (it shouldn't),
                     // follow it so ownership tracks the transcript that is actually being written.
                     if (ev is SessionInitEvent init && init.SessionId.Length > 0 && init.SessionId != SessionId)
@@ -214,7 +225,7 @@ internal sealed class ClaudeSessionController : IDisposable
     /// <summary>Queues a user prompt, optionally with image attachments. The wire message's <c>content</c> is
     /// a block array (the Anthropic Messages shape the stream-json input consumes): a <c>text</c> block plus
     /// one <c>image</c> block per attachment (base64). Text-only sends stay exactly as before.</summary>
-    public void SendPrompt(string text, IReadOnlyList<ImageContent>? images)
+    public void SendPrompt(string text, IReadOnlyList<ImageContent>? images, string? uuid = null)
     {
         var content = new JsonArray();
         if (!string.IsNullOrEmpty(text))
@@ -230,11 +241,37 @@ internal sealed class ClaudeSessionController : IDisposable
                     },
                 });
         if (content.Count == 0) return;   // nothing to send
+        if (!Guid.TryParse(uuid, out _)) uuid = Guid.NewGuid().ToString();
+        RememberOwnPrompt(uuid);   // before the write, so the echo can't beat it
         WriteLine(new JsonObject
         {
             ["type"] = "user",
+            ["uuid"] = uuid,
             ["message"] = new JsonObject { ["role"] = "user", ["content"] = content },
         });
+    }
+
+    // The uuids of the prompts Perch sent most recently. Kept after their echo arrives, so a repeated echo is dropped
+    // too; bounded so a long session doesn't grow it forever.
+    private const int OwnPromptCap = 256;
+    private readonly Queue<string> _ownPromptOrder = new();
+    private readonly HashSet<string> _ownPrompts = [];
+    private readonly Lock _ownPromptLock = new();
+
+    private void RememberOwnPrompt(string uuid)
+    {
+        lock (_ownPromptLock)
+        {
+            if (!_ownPrompts.Add(uuid)) return;
+            _ownPromptOrder.Enqueue(uuid);
+            while (_ownPromptOrder.Count > OwnPromptCap) _ownPrompts.Remove(_ownPromptOrder.Dequeue());
+        }
+    }
+
+    private bool IsOwnPrompt(string? uuid)
+    {
+        if (string.IsNullOrEmpty(uuid)) return false;
+        lock (_ownPromptLock) return _ownPrompts.Contains(uuid);
     }
 
     /// <summary>Answers a <see cref="PermissionRequestEvent"/>. On allow the tool's input is echoed back

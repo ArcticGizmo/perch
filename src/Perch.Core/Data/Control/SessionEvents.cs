@@ -92,11 +92,23 @@ internal sealed record PermissionRequestEvent(
 /// (Remote Control's claude.ai / phone side) answered first, or the turn that asked was torn down.</summary>
 internal sealed record ControlRequestCancelledEvent(string RequestId) : SessionEvent;
 
+/// <summary>The host's answer to a permission request, echoed back by the CLI as a <c>control_response</c> (captured
+/// with <c>--replay-user-messages</c>, 2.1.319). Lets a second view of the session (a remote controller, or the worker
+/// when the controller answered) settle the card with the real verdict. <paramref name="UpdatedInputJson"/> carries an
+/// AskUserQuestion's answers.</summary>
+internal sealed record PermissionAnsweredEvent(string RequestId, bool Allowed, string? UpdatedInputJson) : SessionEvent;
+
 /// <summary>The CLI's own turn state (<c>system/session_state_changed</c>): <c>idle</c>, <c>running</c> or
 /// <c>requires_action</c>. Authoritative whoever started the turn (Perch or a Remote Control client), unlike
 /// the state Perch infers from its own sends. Only emitted when the child env has
 /// <c>CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1</c> (see <c>docs/remote-control-sync-plan.md</c>).</summary>
 internal sealed record SessionStateEvent(string State) : SessionEvent;
+
+/// <summary>A user prompt the CLI echoed back (<c>isReplay</c>, only with <c>--replay-user-messages</c>). Every
+/// prompt echoes, Perch's own included; the controller drops those by <paramref name="Uuid"/>, so what reaches the
+/// conversation was typed elsewhere: a Remote Control client (claude.ai / the phone).
+/// <paramref name="OriginKind"/> is the record's <c>origin.kind</c> (<c>human</c> for a remote prompt).</summary>
+internal sealed record UserPromptEchoEvent(string? Uuid, string Text, string? OriginKind) : SessionEvent;
 
 /// <summary>Acknowledgement of a <c>set_permission_mode</c> control request.</summary>
 internal sealed record ModeChangedEvent(string Mode) : SessionEvent;

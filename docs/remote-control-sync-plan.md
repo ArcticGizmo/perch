@@ -6,8 +6,8 @@ turn is running; it answers a permission, so the permission is resolved), and th
 client can act. Symptoms: permission cards that never clear, an overlay stuck on "Waiting", turns that read
 idle while Claude works, and prompts from the phone that never appear in the thread.
 
-Findings come from reading the JavaScript bundled inside the installed `claude.exe` (2026-10-08). None of it
-has been seen live yet; P0 captures it.
+Findings first came from reading the JavaScript bundled inside the installed `claude.exe` (2026-10-08). P0 confirmed
+them live on 2026-11-06 (claude 2.1.319); see "What the capture showed" below.
 
 ## What the CLI does
 
@@ -18,8 +18,37 @@ has been seen live yet; P0 captures it.
 | `user` echo (with `uuid`, `origin`) | CLI → host | Every user message, including ones from the bridge. Only with `--replay-user-messages` | Not enabled |
 | `control_request` with a subtype other than `can_use_tool` | CLI → host | Anything else the CLI asks the host | Dropped silently, never answered |
 
+## What the capture showed (P0, 2026-11-06, claude 2.1.319)
+
+Captured with a standalone harness that launched `claude` with Perch's exact flags and environment plus
+`--replay-user-messages`, turned Remote Control on and logged stdout, while a phone drove the session.
+
+- **Withdrawn permission:** allowing on the phone sends `{"type":"control_cancel_request","request_id":X}` (X = the
+  `can_use_tool` id), then `session_state_changed` `running`. Seen three times; P1's shape is right.
+- **State events:** `running` → `requires_action` → `running` → `idle` for a Perch turn, and `running` → `idle` for a
+  phone turn that Perch never saw a prompt for. P2's shape is right.
+- **Echoes:** every prompt comes back as a `user` record with `"isReplay":true`. Perch's own carries the `uuid` Perch
+  put on it and no `origin`. A phone prompt carries its own uuid, string `content` and `"origin":{"kind":"human"}`.
+  Only replayed records carry `isReplay`; the CLI's `[Request interrupted by user for tool use]` marker is an
+  ordinary user text record without it.
+- **Order:** for a phone prompt, `running` arrives *before* the echo, so the echo must not do the "turn already
+  active → one queued" bookkeeping.
+- **A `system/init` per turn**, phone turns included. Perch already treats init as a turn start.
+- **Interrupt from the phone:** no control request reaches the host. The turn ends with a `result` carrying
+  `is_error:true`, `terminal_reason:"aborted_tools"`, then `idle`. P2 covers it.
+- **Perch's own permission answer is echoed back** as a `control_response` with the request's id and
+  `{behavior, updatedInput}`. It carries no `mode`, so `ParseControlResponse` ignores it.
+- **New, not used yet:** `{"type":"command_lifecycle","command_uuid":U,"state":"queued"|"started"|"completed"|"cancelled"}`
+  per prompt, keyed by the prompt's uuid. An authoritative queue signal if "N queued" ever needs one. `init` also
+  lists `capabilities` (`msg_lifecycle_v1`, `interrupt_receipt_v1`, …).
+
 ## Status
-- P1 + P2 are built on branch `remote-control-sync` (uncommitted), with tests. Both heads build. Not run live.
+- P1 + P2 shipped in v0.5.16 (PR #53). The P0 capture confirmed their wire shapes; the UI hasn't been driven live.
+- P0 done (above).
+- P4 built: `--replay-user-messages`, uuid-stamped prompts, `UserPromptEchoEvent`, and a "↗ via Remote Control" marker
+  under the bubble. Tests in `StreamJsonParserTests` / `SessionConversationTests` use the captured shapes. The
+  session window hasn't been driven live.
+- P3 not started.
 - How P2 turned out: state events **add to** the inference rather than replacing it. `result` still settles a
   turn and output still reopens one; `running`/`requires_action` set the turn active, and `idle` settles it
   (clearing queued state and expiring any card the CLI never withdrew). So an older CLI behaves exactly as before.
@@ -72,8 +101,8 @@ From the phone: answer a permission, send a prompt, interrupt. Save the relevant
   transcripts parse: `ParseTranscriptLine` already takes genuine prompts out before `StreamJsonParser`
   sees them, but confirm with `StreamJsonReplayTests`.
 - Controller drops echoes whose uuid is ours. Conversation: an echo from somewhere else → `UserMessageItem` (tagged
-  remote, so the bubble can show a small "from phone/web" marker) and the same turn bookkeeping as
-  `AddUserPrompt`, minus the `/compact` handling.
+  remote, so the bubble can show a small "from phone/web" marker). Turn bookkeeping only when no state events have
+  arrived (`CliState` null); otherwise `running` already started the turn (see the capture).
 - Also replayed with this flag: `control_response` frames. Confirm they don't trip `ParseControlResponse`'s
   mode/RC matching (they echo the host's own answers, so the inner shape differs).
 - Tests: our own echo is dropped; a foreign echo adds one user item and starts a turn; the duplicate-ack path

@@ -66,6 +66,22 @@ internal static class AskUserQuestionInput
         return input;
     }
 
+    /// <summary><see cref="Summarise"/> for a question answered elsewhere, read back from the allow reply's
+    /// <c>updatedInput</c> (<see cref="BuildAnswer"/>'s shape). Null when it carries no answers.</summary>
+    public static string? SummariseReply(string inputJson, string? updatedInputJson)
+    {
+        try
+        {
+            if (updatedInputJson is null || JsonNode.Parse(updatedInputJson)?["answers"] is not JsonObject a) return null;
+            var answers = new Dictionary<string, IReadOnlyList<string>>();
+            foreach (var (question, value) in a)
+                if (value?.GetValueKind() == System.Text.Json.JsonValueKind.String) answers[question] = [value.GetValue<string>()];
+            var summary = Summarise(Parse(inputJson), answers);
+            return summary.Length > 0 ? summary : null;
+        }
+        catch { return null; }
+    }
+
     /// <summary>A one-line receipt: "Fruit: Apple · Size: Large".</summary>
     public static string Summarise(IReadOnlyList<UserQuestion> questions, IReadOnlyDictionary<string, IReadOnlyList<string>> answers)
     {

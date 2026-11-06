@@ -36,7 +36,7 @@ internal static class StreamJsonParser
         {
             "system"           => ParseSystem(root),
             "assistant"        => ParseAssistant(root),
-            "user"             => ParseToolResults(root),
+            "user"             => AsBool(root["isReplay"]) ? ParseReplayedPrompt(root) : ParseToolResults(root),
             "stream_event"     => ParseStreamEvent(root),
             "control_request"  => ParseControlRequest(root),
             "control_response" => ParseControlResponse(root),
@@ -251,6 +251,14 @@ internal static class StreamJsonParser
         catch { return false; }
     }
 
+    // Only what --replay-user-messages adds carries isReplay, so a replayed record yields an echo or nothing: it
+    // never re-enters the tool-result/notification paths those records already reach without the flag. The CLI's own
+    // "[Request interrupted by user…]" marker is an un-flagged user record and never gets here.
+    private static IReadOnlyList<SessionEvent> ParseReplayedPrompt(JsonNode root) =>
+        SessionConversation.GenuineUserPrompt(root) is { } text
+            ? [new UserPromptEchoEvent(TranscriptJson.AsString(root["uuid"]), text, TranscriptJson.AsString(root["origin"]?["kind"]))]
+            : [];
+
     private static IReadOnlyList<SessionEvent> ParseToolResults(JsonNode root)
     {
         // A delivered <task-notification> (transcript only: stream-json doesn't echo user records) is a user
@@ -400,6 +408,13 @@ internal static class StreamJsonParser
                 (int)TranscriptJson.AsLong(inner?["insertions"]),
                 (int)TranscriptJson.AsLong(inner?["deletions"]))];
         }
+
+        // A permission verdict can only reach stdout as the CLI echoing the host's own answer back.
+        if (TranscriptJson.AsString(response?["subtype"]) == "success"
+            && TranscriptJson.AsString(response?["response"]?["behavior"]) is ("allow" or "deny") and var behavior
+            && TranscriptJson.AsString(response?["request_id"]) is { Length: > 0 } answeredId)
+            return [new PermissionAnsweredEvent(answeredId, behavior == "allow",
+                response?["response"]?["updatedInput"]?.ToJsonString())];
 
         // Only the set_permission_mode ack carries information the UI shows; other acks are ignored.
         var mode = TranscriptJson.AsString(response?["response"]?["mode"]);

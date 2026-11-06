@@ -18,6 +18,9 @@ internal sealed class UserMessageItem(string text, IReadOnlyList<MessageAttachme
     /// <summary>The transcript record's uuid, when known: set for prompts loaded from a transcript, and for live
     /// ones once a rewind has placed them (<see cref="RewindPoints"/>). The anchor a rewind or fork names.</summary>
     public string? Uuid { get; set; }
+
+    /// <summary>Typed on a Remote Control client (claude.ai / the phone), not in a Perch.</summary>
+    public bool Remote { get; init; }
 }
 
 internal enum NoteKind { Info, Error }
@@ -402,9 +405,25 @@ internal sealed class SessionConversation
                 break;
             }
 
+            case PermissionAnsweredEvent answered:
+            {
+                // The other view of the session answered. This side's own echo arrives after it resolved, so it's a no-op.
+                var item = _items.OfType<PermissionItem>().LastOrDefault(p => p.Request.RequestId == answered.RequestId);
+                if (item is not { Resolution: PermissionResolution.Pending }) break;
+                var summary = item.IsQuestion && answered.Allowed
+                    ? AskUserQuestionInput.SummariseReply(item.Request.InputJson, answered.UpdatedInputJson)
+                    : null;
+                ResolvePermission(item, answered.Allowed, answerSummary: summary);
+                break;
+            }
+
             case SessionStateEvent state:
                 ApplyCliState(state.State);
                 StateChanged?.Invoke();
+                break;
+
+            case UserPromptEchoEvent echo:
+                AddRemotePrompt(echo);
                 break;
 
             case StatusEvent status:
@@ -739,9 +758,9 @@ internal sealed class SessionConversation
 
     /// <summary>Records a prompt the user sent (the controller already wrote it to the CLI), with any
     /// attachments for display.</summary>
-    public void AddUserPrompt(string text, IReadOnlyList<MessageAttachment>? attachments = null)
+    public void AddUserPrompt(string text, IReadOnlyList<MessageAttachment>? attachments = null, string? uuid = null)
     {
-        Append(new UserMessageItem(text, attachments));
+        Append(new UserMessageItem(text, attachments) { Uuid = uuid });
         _suppressNextResultContext = false;   // a genuine new turn: its result's context is real again
         if (TurnActive) QueuedPrompts++; else TurnActive = true;
         // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,
@@ -760,6 +779,22 @@ internal sealed class SessionConversation
             _contextBeforeCompaction = ContextTokens;
             _compactionInterrupted = false;
             Append(item);
+        }
+        StateChanged?.Invoke();
+    }
+
+    // A prompt this view didn't send: typed on a Remote Control client (it carries an origin), or, for a session driven
+    // from another Perch, typed on the machine that hosts it (no origin; the host's own prompts echo bare). The CLI
+    // reports `running` before it echoes the prompt, so once state events flow they already own the turn and counting
+    // here would read as a phantom "1 queued". Without them, it's the same bookkeeping as a prompt sent from Perch.
+    private void AddRemotePrompt(UserPromptEchoEvent echo)
+    {
+        if (echo.Uuid is { Length: > 0 } uuid && _items.OfType<UserMessageItem>().Any(u => u.Uuid == uuid)) return;
+        Append(new UserMessageItem(echo.Text) { Uuid = echo.Uuid, Remote = echo.OriginKind is { Length: > 0 } });
+        _suppressNextResultContext = false;
+        if (CliState is null)
+        {
+            if (TurnActive) QueuedPrompts++; else TurnActive = true;
         }
         StateChanged?.Invoke();
     }

@@ -20,8 +20,12 @@ namespace Perch.Avalonia.Services;
 /// </summary>
 internal sealed class PerchSession : IDisposable
 {
-    // Null while dormant (until Wake) and for the headless renderer's process-less stand-in.
-    private ClaudeSessionController? _controller;
+    // Null while dormant (until Wake) and for the headless renderer's process-less stand-in. A ClaudeSessionController
+    // for a session on this machine; a network backend for one another Perch hosts (docs/remote-workers-plan.md).
+    private ISessionBackend? _controller;
+
+    /// <summary>The session runs on another machine: what touches this machine's files or process isn't available.</summary>
+    public bool IsRemote => _controller?.IsRemote == true;
 
     public SessionConversation Conversation { get; } = new();
     public string Cwd { get; }
@@ -94,7 +98,7 @@ internal sealed class PerchSession : IDisposable
         return rest.Length > 0 ? rest : null;
     }
 
-    private PerchSession(ClaudeSessionController? controller, SessionLaunchOptions o)
+    private PerchSession(ISessionBackend? controller, SessionLaunchOptions o)
     {
         _controller = controller;
         Cwd = o.Cwd;
@@ -152,11 +156,19 @@ internal sealed class PerchSession : IDisposable
         Woke?.Invoke(this);
     }
 
-    // Spawns the controller and wires it into this session. Throws (and disposes the controller) when it can't start.
-    private void Launch(SessionLaunchOptions o)
+    /// <summary>A session another Perch hosts, driven through <paramref name="backend"/>. The backend supplies the
+    /// conversation so far itself (its catch-up), so nothing is read from disk here.</summary>
+    internal static PerchSession ForBackend(ISessionBackend backend, SessionLaunchOptions o)
     {
-        var controller = new ClaudeSessionController();
-        controller.EventReceived += ev => Dispatcher.UIThread.Post(() =>
+        var session = new PerchSession(backend, o);
+        session.Wire(backend);
+        session.Conversation.SetSessionId(backend.SessionId);
+        return session;
+    }
+
+    private void Wire(ISessionBackend backend)
+    {
+        backend.EventReceived += ev => Dispatcher.UIThread.Post(() =>
         {
             // Remote-control acks aren't conversation items — route them to the session's own signal (which
             // still drops a note); everything else folds into the conversation model.
@@ -164,7 +176,14 @@ internal sealed class PerchSession : IDisposable
             else if (ev is RewindFilesEvent rf) OnRewindFiles(rf);
             else Conversation.Apply(ev);
         });
-        controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => OnExited(code, err));
+        backend.Exited += (code, err) => Dispatcher.UIThread.Post(() => OnExited(code, err));
+    }
+
+    // Spawns the controller and wires it into this session. Throws (and disposes the controller) when it can't start.
+    private void Launch(SessionLaunchOptions o)
+    {
+        var controller = new ClaudeSessionController();
+        Wire(controller);
         try
         {
             controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir,
@@ -299,7 +318,7 @@ internal sealed class PerchSession : IDisposable
     /// read this session's transcript (<see cref="TranscriptLocator.ResumableDirs"/>), or the resume finds nothing.</summary>
     public void Restart(string? configDir)
     {
-        if (!IsRunning || SessionId is not { Length: > 0 } id) return;
+        if (!IsRunning || IsRemote || SessionId is not { Length: > 0 } id) return;
         _restartWith = new SessionLaunchOptions(Cwd, Model, PermissionMode, Effort, id, configDir, ResumeAt: _resumeAt);
         Conversation.AddNote($"restarting session {Shorten(id)}…");
         Restarted?.Invoke(this);
@@ -340,7 +359,7 @@ internal sealed class PerchSession : IDisposable
         }
         // Remote Control belongs to a process, so the new one starts without it. Asking again keeps claude.ai on the
         // session (the ack's note says if the link changed).
-        if (RemoteControlEnabled) _controller?.RequestRemoteControl(true);
+        if (RemoteControlEnabled) (_controller as ClaudeSessionController)?.RequestRemoteControl(true);
         Restarted?.Invoke(this);
         ProcessAuthChanged?.Invoke();   // the new process's clocks are being read; drop the old process's banner now
         return true;
@@ -364,7 +383,7 @@ internal sealed class PerchSession : IDisposable
     /// needs no cleanup — the controller has already re-registered under the new id, and this writes to it.</summary>
     private void PublishActivity()
     {
-        if (_controller is null || HasEnded) return;
+        if (_controller is null || IsRemote || HasEnded) return;
         var id = SessionId;
         if (string.IsNullOrEmpty(id)) return;
 
@@ -383,9 +402,11 @@ internal sealed class PerchSession : IDisposable
     public void SendPrompt(string text, IReadOnlyList<MessageAttachment>? attachments)
     {
         if (_controller is not { IsRunning: true } c) return;
-        c.SendPrompt(text, BuildImageContents(attachments));
+        // A remote session's bubble is keyed now, so the CLI's echo of the same prompt (relayed back) doesn't add a second.
+        var uuid = IsRemote ? Guid.NewGuid().ToString() : null;
+        c.SendPrompt(text, BuildImageContents(attachments), uuid);
         _resumeAt = null;   // the CLI writes this prompt onto the kept branch, so the file's own leaf is right again
-        Conversation.AddUserPrompt(text, attachments);
+        Conversation.AddUserPrompt(text, attachments, uuid);
         // Optimistically reflect a /rename in the title (the CLI writes the custom-title record to the transcript).
         if (RenameArg(text) is { } title) SetTitle(title);
     }
@@ -498,7 +519,7 @@ internal sealed class PerchSession : IDisposable
     /// request). The ack arrives asynchronously as a <see cref="RemoteControlEvent"/> → <see cref="OnRemoteControl"/>.</summary>
     public void RequestRemoteControl(bool enabled)
     {
-        if (_controller is not { IsRunning: true } c) return;
+        if (_controller is not ClaudeSessionController { IsRunning: true } c) return;
         c.RequestRemoteControl(enabled);
     }
 
@@ -545,8 +566,9 @@ internal sealed class PerchSession : IDisposable
     /// with <see cref="RewindFilesEvent.CanRewind"/> false and an error. Completes on the UI thread.</summary>
     public async Task<RewindFilesEvent> RewindFilesAsync(string userMessageUuid, bool dryRun)
     {
-        if (_controller is not { IsRunning: true } c)
-            return new RewindFilesEvent("", false, "start the session to rewind code");
+        if (_controller is not ClaudeSessionController { IsRunning: true } c)
+            return new RewindFilesEvent("", false, IsRemote ? "code rewind isn't available for a remote session"
+                                                            : "start the session to rewind code");
         if (c.RewindFiles(userMessageUuid, dryRun) is not { } requestId)
             return new RewindFilesEvent("", false, "this prompt has no usable id");
         var tcs = new TaskCompletionSource<RewindFilesEvent>();
@@ -569,7 +591,7 @@ internal sealed class PerchSession : IDisposable
     /// </summary>
     public bool RewindConversation(UserMessageItem prompt, string keepUuid)
     {
-        if (HasEnded || IsRestarting || string.IsNullOrEmpty(keepUuid)) return false;
+        if (HasEnded || IsRestarting || IsRemote || string.IsNullOrEmpty(keepUuid)) return false;
         _resumeAt = keepUuid;
         if (IsDormant)
         {
@@ -617,7 +639,7 @@ internal sealed class PerchSession : IDisposable
     public void HandBackToTerminal()
     {
         var id = SessionId;
-        if (string.IsNullOrEmpty(id)) return;
+        if (string.IsNullOrEmpty(id) || IsRemote) return;
         Released?.Invoke(this);   // it's a terminal session now, not Perch's to restore
         Conversation.AddNote($"handing session {Shorten(id)} to a terminal…");
         _controller?.Stop();

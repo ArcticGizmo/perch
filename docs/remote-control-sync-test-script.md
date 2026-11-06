@@ -1,6 +1,6 @@
 # Remote Control sync - manual test script
 
-A live check for P1 + P2 of `docs/remote-control-sync-plan.md` (branch `remote-control-sync`). Each test below
+A live check for P1, P2 and P4 of `docs/remote-control-sync-plan.md`. Each test below
 can be run on its own in a fresh Perch session. The prompts are written to trigger one specific thing and nothing
 else, so that one result can't hide another.
 
@@ -92,7 +92,9 @@ Without using any tools, write the numbers from 1 to 150, one per line, then the
 **Expect:**
 - [ ] Perch's overlay goes Busy while it writes and Idle after FINISHED
 - [ ] The session window shows the "working" row while it runs
-- [ ] (Not fixed yet, P4) Your phone prompt doesn't appear as a user bubble in Perch; only the reply does
+- [ ] (P4) Your phone prompt appears once as a user bubble with "↗ via Remote Control" under it
+- [ ] (P4) The status line never shows "1 queued" during this turn
+- [ ] (P4) Prompts typed in Perch (tests 1–4) show once each, with no "via Remote Control" marker
 
 ## Test 6 - Phone turn that needs a permission, answered in Perch (P2 + normal path)
 **Type on the phone:**
