@@ -7,7 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Clicking a session in Windows Terminal now opens its own tab, not just the window
+---
+
+## [v0.6.9] - 2026-11-06
+
+- Focusing a Windows Terminal session picks its tab, not just the window (no more tab roulette)
 
 ---
 
