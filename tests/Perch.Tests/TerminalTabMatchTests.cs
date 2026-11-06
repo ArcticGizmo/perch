@@ -47,4 +47,45 @@ public class TerminalTabMatchTests
     [InlineData("✳ ")]
     public void An_empty_or_glyph_only_title_never_matches(string? title)
         => Assert.Equal(-1, TerminalTabMatch.FindTab(["✳ ", ""], title));
+
+    [Fact]
+    public void Match_reports_a_single_tab_as_found()
+        => Assert.Equal(new TabMatch(TabMatchKind.Found, 2, 1), TerminalTabMatch.Match(Tabs, "◐ Update onboarding docs"));
+
+    [Fact]
+    public void Match_reports_look_alike_tabs_as_ambiguous_with_their_count()
+        => Assert.Equal(
+            new TabMatch(TabMatchKind.Ambiguous, -1, 3),
+            TerminalTabMatch.Match(["✳ Claude Code", "✳ Fix login", "◐ Claude Code", "Claude Code"], "✳ Claude Code"));
+
+    [Fact]
+    public void Match_reports_no_tab_as_none()
+        => Assert.Equal(new TabMatch(TabMatchKind.None, -1, 0), TerminalTabMatch.Match(Tabs, "✳ Renamed"));
+
+    [Fact]
+    public void A_mark_is_a_bird_and_a_token_after_the_title()
+        => Assert.Equal("✳ Claude Code \U0001F4261a2b", TerminalTabMatch.Mark("✳ Claude Code", "1a2b"));
+
+    [Fact]
+    public void A_marked_title_is_found_by_its_marker_alone()
+    {
+        var marked = TerminalTabMatch.Mark("✳ Claude Code", "1a2b");
+        // WT may already show a newer glyph by the time the marker arrives.
+        string[] tabs = ["✳ Claude Code", TerminalTabMatch.Mark("◐ Claude Code", "1a2b"), "✳ Claude Code"];
+        Assert.Equal(1, TerminalTabMatch.FindMarked(tabs, marked));
+    }
+
+    [Fact]
+    public void A_marker_not_yet_shown_finds_nothing()
+        => Assert.Equal(-1, TerminalTabMatch.FindMarked(
+            ["✳ Claude Code", "✳ Claude Code"], TerminalTabMatch.Mark("✳ Claude Code", "1a2b")));
+
+    [Fact]
+    public void A_stranded_marker_is_not_mistaken_for_ours()
+        => Assert.Equal(-1, TerminalTabMatch.FindMarked(
+            [TerminalTabMatch.Mark("✳ Claude Code", "ffff")], TerminalTabMatch.Mark("✳ Claude Code", "1a2b")));
+
+    [Fact]
+    public void A_title_without_a_marker_never_finds_a_tab()
+        => Assert.Equal(-1, TerminalTabMatch.FindMarked(["✳ Claude Code"], "✳ Claude Code"));
 }

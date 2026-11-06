@@ -1,5 +1,6 @@
 ﻿using System.Runtime.InteropServices;
 using System.Text;
+using Perch.Data;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;
@@ -28,9 +29,11 @@ public sealed class WindowActivator : IWindowActivator
     // Win32 can only raise the Windows Terminal *window*, which shows whatever tab was last active, so
     // for a WT host SelectSessionTab first selects the session's own tab through UI Automation.
     //
-    // Returns false when no host window could be resolved at all, so the caller can say so instead of
+    // Raised is false when no host window could be resolved at all, so the caller can say so instead of
     // leaving a click that appears to do nothing.
-    public bool FocusTerminalForProcess(int pid, string? projectHint = null)
+    public bool FocusTerminalForProcess(int pid, string? projectHint = null) => FocusTerminal(pid, projectHint).Raised;
+
+    public TerminalFocus FocusTerminal(int pid, string? projectHint = null)
     {
         // Build the ancestor chain closest-first (claude → cmd → WindowsTerminal → explorer …) from a
         // single process snapshot, assigning each a depth score (0 = the Claude process itself).
@@ -80,10 +83,10 @@ public sealed class WindowActivator : IWindowActivator
                 // whichever way the console was allocated. If that too comes up empty the session has no
                 // reachable window, so return false and let the caller show its "no window" notification.
                 IntPtr viaConsole = ResolveTerminalViaConsole(pid);
-                if (viaConsole == IntPtr.Zero) return false;
-                SelectSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
+                if (viaConsole == IntPtr.Zero) return new(false);
+                var consoleMiss = SelectSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
                 FocusWindow(viaConsole);
-                return true;
+                return new(true, consoleMiss);
             }
         }
 
@@ -101,9 +104,9 @@ public sealed class WindowActivator : IWindowActivator
 
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
-        SelectSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
+        var miss = SelectSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
         FocusWindow(chosen.hWnd);
-        return true;
+        return new(true, miss);
     }
 
     // For every window owned by an ancestor, resolve it to its root owner and keep that, grouped by the
@@ -175,14 +178,23 @@ public sealed class WindowActivator : IWindowActivator
     // The title the session gave its console: Claude Code's status glyph plus the session title, which is
     // also what Windows Terminal shows as that session's tab name. Read live from the console object, like
     // ResolveTerminalViaConsole; null when the console can't be attached (gone, mintty, higher integrity).
-    private static string? ReadConsoleTitle(int pid) => WithConsole(pid, () =>
+    private static string? ReadConsoleTitle(int pid) => WithConsole(pid, () => AttachedConsoleTitle(1024));
+
+    private static bool WriteConsoleTitle(int pid, string title) => WithConsole(pid, () => SetConsoleTitleW(title));
+
+    // Puts original back only while the title is still marked: the session may have set a newer title of its
+    // own in the meantime (Claude Code redraws its title as it works), and that one must stand.
+    private static void RestoreConsoleTitle(int pid, string marked, string original) => WithConsole(pid, () =>
+        AttachedConsoleTitle(marked.Length + 2) == marked && SetConsoleTitleW(original));
+
+    private static string? AttachedConsoleTitle(int capacity)
     {
-        var sb = new StringBuilder(1024);
+        var sb = new StringBuilder(capacity);
         return GetConsoleTitleW(sb, (uint)sb.Capacity) == 0 ? null : sb.ToString();
-    });
+    }
 
     // Runs read while attached to pid's console, under the rules ResolveTerminalViaConsole describes: one
-    // attach at a time, only console reads while attached, always detached again. default(T) when the
+    // attach at a time, only quick console calls while attached, always detached again. default(T) when the
     // attach fails.
     //
     // While attached, Perch is one of that console's processes, so a Ctrl+C or Ctrl+Break typed into the
@@ -222,8 +234,10 @@ public sealed class WindowActivator : IWindowActivator
 
     // When the session's terminal window is Windows Terminal, selects the session's own tab in it before
     // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
-    // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: no title,
-    // no single matching tab, or any UIA failure leaves the tab as it was, and the window is still raised.
+    // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: any failure
+    // leaves the tab as it was, and the window is still raised. Returns a TabMiss when the window has several
+    // tabs and none could be told to be the session's, so the caller can say so; null otherwise, including
+    // when the answer took too long to matter.
     //
     // UI Automation calls block until Windows Terminal answers, and this runs on a click, i.e. on the UI
     // thread: a hung WT would freeze the overlay for UIA's own timeout (tens of seconds). So the walk runs on
@@ -235,32 +249,83 @@ public sealed class WindowActivator : IWindowActivator
     private const int TabSelectLateMs = 2000;
     private static int _tabSelectBusy;
 
-    private static void SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
+    private static TabMiss? SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
     {
         if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
-            return;
+            return null;
         if (Interlocked.Exchange(ref _tabSelectBusy, 1) == 1)
-            return;
+            return null;
 
         long selectBy = Environment.TickCount64 + TabSelectLateMs;
         var walk = Task.Run(() =>
         {
             try
             {
-                var title = ReadConsoleTitle(pid);
-                if (!string.IsNullOrEmpty(title))
-                    WindowsTerminalTabs.TrySelect(terminalWindow, title, selectBy);
+                return SelectTabCore(terminalWindow, pid, selectBy);
             }
             catch
             {
-                // best-effort: the window is still raised by the caller
+                return null; // best-effort: the window is still raised by the caller
             }
             finally
             {
                 Volatile.Write(ref _tabSelectBusy, 0);
             }
         });
-        walk.Wait(TabSelectWait);
+        return walk.Wait(TabSelectWait) ? walk.Result : null;
+    }
+
+    private static TabMiss? SelectTabCore(IntPtr terminalWindow, int pid, long selectBy)
+    {
+        var title = ReadConsoleTitle(pid);
+        if (string.IsNullOrEmpty(title)) return null;
+
+        using var tabs = WindowsTerminalTabs.Open(terminalWindow);
+        if (tabs is null) return null;
+
+        var match = TerminalTabMatch.Match(tabs.ReadNames(), title);
+        switch (match.Kind)
+        {
+            case TabMatchKind.Found:
+                if (Environment.TickCount64 <= selectBy) tabs.Select(match.Index);
+                return null;
+            case TabMatchKind.None:
+                // A lone tab is already the one on show, so there is nothing to apologise for.
+                return tabs.Count > 1 ? new TabMiss(TabMissReason.NotFound, title, tabs.Count, 0) : null;
+            default:
+                return SelectByMarker(tabs, pid, title, selectBy)
+                    ? null
+                    : new TabMiss(TabMissReason.Ambiguous, title, tabs.Count, match.Count);
+        }
+    }
+
+    // Several tabs carry the session's title (typically a few untitled "Claude Code" sessions), so tag the
+    // title for a moment: WT renames exactly the session's tab, the marker is unique, and that tab is the one.
+    // This is the classic way to find a console's window from its title. The original title is put back
+    // whatever happens. No marker turns up when the tab ignores app titles (renamed, or a profile with
+    // suppressApplicationTitle), or when Claude Code redraws its title before WT shows ours.
+    private const int MarkerWaitMs = 400;
+    private const int MarkerPollMs = 25;
+
+    private static bool SelectByMarker(WindowsTerminalTabs tabs, int pid, string title, long selectBy)
+    {
+        var marked = TerminalTabMatch.Mark(title, Guid.NewGuid().ToString("N")[..4]);
+        if (!WriteConsoleTitle(pid, marked)) return false;
+        try
+        {
+            long giveUp = Math.Min(selectBy, Environment.TickCount64 + MarkerWaitMs);
+            while (Environment.TickCount64 < giveUp)
+            {
+                Thread.Sleep(MarkerPollMs);
+                int index = TerminalTabMatch.FindMarked(tabs.ReadNames(), marked);
+                if (index >= 0) return tabs.Select(index);
+            }
+            return false;
+        }
+        finally
+        {
+            RestoreConsoleTitle(pid, marked, title);
+        }
     }
 
     // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
@@ -524,6 +589,10 @@ public sealed class WindowActivator : IWindowActivator
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetConsoleTitleW(StringBuilder lpConsoleTitle, uint nSize);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetConsoleTitleW(string lpConsoleTitle);
 
     private const uint CTRL_C_EVENT = 0;
     private const uint CTRL_BREAK_EVENT = 1;

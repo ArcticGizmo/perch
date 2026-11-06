@@ -4,17 +4,21 @@ using Perch.Data;
 namespace Perch.Platform.Windows;
 
 /// <summary>
-/// Selects a tab in a Windows Terminal window through UI Automation. Win32 can only raise the terminal
+/// The tabs of one Windows Terminal window, through UI Automation. Win32 can only raise the terminal
 /// <em>window</em>, which then shows whatever tab was last active; WT's tabs are UIA <c>TabItem</c>
 /// elements supporting <c>SelectionItemPattern</c>, so UIA can pick the right one. Which tab is the
-/// session's is decided by <see cref="TerminalTabMatch"/> from the session's console title.
+/// session's is decided by <see cref="TerminalTabMatch"/>; this only reads names and selects.
+/// <para>
+/// The tab elements are found once and kept, because <see cref="ReadNames"/> may be called repeatedly while
+/// waiting for a marked title to show up, and re-reading a name is far cheaper than another tree walk.
+/// </para>
 /// <para>
 /// Talks to the OS's own <c>CUIAutomation</c> COM object through the minimal <c>[ComImport]</c> surface
-/// below, rather than pulling in WPF's managed <c>UIAutomationClient</c>. Best-effort throughout: any
-/// failure leaves the tab as it was and the caller still raises the window.
+/// below, rather than pulling in WPF's managed <c>UIAutomationClient</c>. Every member is best-effort and
+/// never throws.
 /// </para>
 /// </summary>
-internal static class WindowsTerminalTabs
+internal sealed class WindowsTerminalTabs : IDisposable
 {
     private const int UIA_ControlTypePropertyId = 30003;
     private const int UIA_TabItemControlTypeId = 50019;
@@ -23,55 +27,85 @@ internal static class WindowsTerminalTabs
 
     private static readonly Guid CLSID_CUIAutomation = new("ff48dba4-60ef-4201-aa87-54103eef594e");
 
-    /// <summary>
-    /// Selects the tab of <paramref name="terminalWindow"/> whose name matches <paramref name="consoleTitle"/>.
-    /// Returns true only when exactly one tab matched and was selected.
-    /// </summary>
-    /// <param name="selectBy">
-    /// An <see cref="Environment.TickCount64"/> past which the tab is no longer selected. A slow Windows
-    /// Terminal can answer the walk long after the click; switching tabs under the user then would be a
-    /// surprise, not a response.
-    /// </param>
-    public static bool TrySelect(IntPtr terminalWindow, string consoleTitle, long selectBy)
+    private readonly IUIAutomation _uia;
+    private readonly List<IUIAutomationElement> _tabs;
+
+    private WindowsTerminalTabs(IUIAutomation uia, List<IUIAutomationElement> tabs)
+    {
+        _uia = uia;
+        _tabs = tabs;
+    }
+
+    public int Count => _tabs.Count;
+
+    /// <summary>The tabs of <paramref name="terminalWindow"/>, or null when it has none or UIA fails.</summary>
+    public static WindowsTerminalTabs? Open(IntPtr terminalWindow)
     {
         IUIAutomation? uia = null;
         try
         {
             var type = Type.GetTypeFromCLSID(CLSID_CUIAutomation);
-            if (type is null) return false;
+            if (type is null) return null;
             uia = Activator.CreateInstance(type) as IUIAutomation;
-            if (uia is null) return false;
+            if (uia is null) return null;
 
-            if (uia.ElementFromHandle(terminalWindow, out var window) != 0 || window is null) return false;
+            if (uia.ElementFromHandle(terminalWindow, out var window) != 0 || window is null) return Fail(uia);
             if (uia.CreatePropertyCondition(UIA_ControlTypePropertyId, UIA_TabItemControlTypeId, out var isTab) != 0
-                || isTab is null) return false;
-            if (window.FindAll(TreeScope_Descendants, isTab, out var found) != 0 || found is null) return false;
-            if (found.get_Length(out int count) != 0 || count == 0) return false;
+                || isTab is null) return Fail(uia);
+            if (window.FindAll(TreeScope_Descendants, isTab, out var found) != 0 || found is null) return Fail(uia);
+            if (found.get_Length(out int count) != 0 || count == 0) return Fail(uia);
 
             var tabs = new List<IUIAutomationElement>(count);
-            var names = new List<string>(count);
             for (int i = 0; i < count; i++)
-            {
-                if (found.GetElement(i, out var tab) != 0 || tab is null) continue;
-                tab.get_CurrentName(out var name);
-                tabs.Add(tab);
-                names.Add(name ?? "");
-            }
+                if (found.GetElement(i, out var tab) == 0 && tab is not null)
+                    tabs.Add(tab);
+            return tabs.Count == 0 ? Fail(uia) : new WindowsTerminalTabs(uia, tabs);
+        }
+        catch
+        {
+            return uia is null ? null : Fail(uia);
+        }
 
-            int index = TerminalTabMatch.FindTab(names, consoleTitle);
-            if (index < 0 || Environment.TickCount64 > selectBy) return false;
+        static WindowsTerminalTabs? Fail(IUIAutomation uia)
+        {
+            Marshal.FinalReleaseComObject(uia);
+            return null;
+        }
+    }
 
-            if (tabs[index].GetCurrentPattern(UIA_SelectionItemPatternId, out var pattern) != 0) return false;
+    /// <summary>Each tab's current name, in tab order; "" for one that can't be read.</summary>
+    public List<string> ReadNames()
+    {
+        var names = new List<string>(_tabs.Count);
+        foreach (var tab in _tabs)
+        {
+            string? name = null;
+            try { tab.get_CurrentName(out name); }
+            catch { /* a tab closed mid-read */ }
+            names.Add(name ?? "");
+        }
+        return names;
+    }
+
+    /// <summary>Selects tab <paramref name="index"/>; true when WT accepted it.</summary>
+    public bool Select(int index)
+    {
+        try
+        {
+            if (index < 0 || index >= _tabs.Count) return false;
+            if (_tabs[index].GetCurrentPattern(UIA_SelectionItemPatternId, out var pattern) != 0) return false;
             return pattern is IUIAutomationSelectionItemPattern selection && selection.Select() == 0;
         }
         catch
         {
-            return false; // best-effort: the window is still raised by the caller
+            return false;
         }
-        finally
-        {
-            if (uia is not null) Marshal.FinalReleaseComObject(uia);
-        }
+    }
+
+    public void Dispose()
+    {
+        try { Marshal.FinalReleaseComObject(_uia); }
+        catch { /* already released */ }
     }
 
     // ── UI Automation COM surface ────────────────────────────────────────────
