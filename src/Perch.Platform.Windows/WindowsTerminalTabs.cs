@@ -87,14 +87,19 @@ internal sealed class WindowsTerminalTabs : IDisposable
         return names;
     }
 
-    /// <summary>Selects tab <paramref name="index"/>; true when WT accepted it.</summary>
+    /// <summary>Selects tab <paramref name="index"/>; true when it is now the selected tab.</summary>
     public bool Select(int index)
     {
         try
         {
             if (index < 0 || index >= _tabs.Count) return false;
             if (_tabs[index].GetCurrentPattern(UIA_SelectionItemPatternId, out var pattern) != 0) return false;
-            return pattern is IUIAutomationSelectionItemPattern selection && selection.Select() == 0;
+            if (pattern is not IUIAutomationSelectionItemPattern selection) return false;
+
+            // Selecting the tab that is already selected changes nothing on screen but leaves keyboard focus
+            // on the tab strip, so the click would take the user's typing away from the session.
+            if (selection.get_CurrentIsSelected(out int isSelected) == 0 && isSelected != 0) return true;
+            return selection.Select() == 0;
         }
         catch
         {
@@ -196,5 +201,11 @@ internal sealed class WindowsTerminalTabs : IDisposable
     {
         [PreserveSig]
         int Select();
+
+        void AddToSelection();
+        void RemoveFromSelection();
+
+        [PreserveSig]
+        int get_CurrentIsSelected(out int isSelected);
     }
 }
