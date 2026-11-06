@@ -184,23 +184,41 @@ public sealed class WindowActivator : IWindowActivator
     // Runs read while attached to pid's console, under the rules ResolveTerminalViaConsole describes: one
     // attach at a time, only console reads while attached, always detached again. default(T) when the
     // attach fails.
+    //
+    // While attached, Perch is one of that console's processes, so a Ctrl+C or Ctrl+Break typed into the
+    // session at that instant would reach Perch too, and the default handler ends the process. SwallowCtrl
+    // absorbs them for the duration of the attach. It is a registered handler rather than
+    // SetConsoleCtrlHandler(null, true) because that flag is inherited by any child process Perch starts
+    // meanwhile (a new session, a git call), which would then ignore Ctrl+C for good.
     private static T? WithConsole<T>(int pid, Func<T> read)
     {
         lock (_consoleLock)
         {
             FreeConsole();
-            if (!AttachConsole((uint)pid))
-                return default;
+            SetConsoleCtrlHandler(SwallowCtrl, true);
             try
             {
-                return read();
+                if (!AttachConsole((uint)pid))
+                    return default;
+                try
+                {
+                    return read();
+                }
+                finally
+                {
+                    FreeConsole();
+                }
             }
             finally
             {
-                FreeConsole();
+                SetConsoleCtrlHandler(SwallowCtrl, false);
             }
         }
     }
+
+    // A static field so the marshalled delegate outlives every native call that can invoke it.
+    private static readonly ConsoleCtrlHandler SwallowCtrl =
+        ctrlType => ctrlType is CTRL_C_EVENT or CTRL_BREAK_EVENT;
 
     // When the session's terminal window is Windows Terminal, selects the session's own tab in it before
     // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
@@ -506,6 +524,17 @@ public sealed class WindowActivator : IWindowActivator
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetConsoleTitleW(StringBuilder lpConsoleTitle, uint nSize);
+
+    private const uint CTRL_C_EVENT = 0;
+    private const uint CTRL_BREAK_EVENT = 1;
+
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private delegate bool ConsoleCtrlHandler(uint ctrlType);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetConsoleCtrlHandler(
+        ConsoleCtrlHandler handler, [MarshalAs(UnmanagedType.Bool)] bool add);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
