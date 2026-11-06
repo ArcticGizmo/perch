@@ -81,7 +81,7 @@ public sealed class WindowActivator : IWindowActivator
                 // reachable window, so return false and let the caller show its "no window" notification.
                 IntPtr viaConsole = ResolveTerminalViaConsole(pid);
                 if (viaConsole == IntPtr.Zero) return false;
-                SelectSessionTab(viaConsole, pid, processes);
+                SelectSessionTab(viaConsole, pid, ExeOwning(viaConsole, processes));
                 FocusWindow(viaConsole);
                 return true;
             }
@@ -101,7 +101,7 @@ public sealed class WindowActivator : IWindowActivator
 
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
-        SelectSessionTab(chosen.hWnd, pid, processes);
+        SelectSessionTab(chosen.hWnd, pid, ExeOwning(chosen.hWnd, processes));
         FocusWindow(chosen.hWnd);
         return true;
     }
@@ -206,17 +206,21 @@ public sealed class WindowActivator : IWindowActivator
     // the window is raised; otherwise WT comes forward on whichever tab was last active. The tab is found
     // by the session's console title (see WindowsTerminalTabs / TerminalTabMatch). Best-effort: no title,
     // no single matching tab, or any UIA failure leaves the tab as it was, and the window is still raised.
-    private static void SelectSessionTab(
-        IntPtr terminalWindow, int pid, Dictionary<int, (int ParentPid, string ExeFile)> processes)
+    private static void SelectSessionTab(IntPtr terminalWindow, int pid, string? hostExe)
     {
-        GetWindowThreadProcessId(terminalWindow, out uint windowPid);
-        if (!processes.TryGetValue((int)windowPid, out var host)
-            || !string.Equals(host.ExeFile, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(hostExe, "WindowsTerminal.exe", StringComparison.OrdinalIgnoreCase))
             return;
 
         var title = ReadConsoleTitle(pid);
         if (!string.IsNullOrEmpty(title))
             WindowsTerminalTabs.TrySelect(terminalWindow, title);
+    }
+
+    // Looked up in the snapshot the ancestry walk already took, so naming the host costs no OpenProcess.
+    private static string? ExeOwning(IntPtr hWnd, Dictionary<int, (int ParentPid, string ExeFile)> processes)
+    {
+        GetWindowThreadProcessId(hWnd, out uint windowPid);
+        return processes.TryGetValue((int)windowPid, out var info) ? info.ExeFile : null;
     }
 
     // Focuses the app that owns pid, where pid may well be a windowless helper process — the case this
