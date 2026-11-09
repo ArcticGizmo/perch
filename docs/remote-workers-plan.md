@@ -211,11 +211,24 @@ Status: built, render-checked (`session_controlled_1x.png`), never run live.
   offline; the worker's Settings row says "Disconnected by you · can reconnect after HH:MM". Keeping one out for good is
   Remove, or turning the worker toggle off. There's no "allow back now"; it was left out to keep this small.
 
-### W6 - Hardening and docs
-Reconnect/liveness (heartbeat every 20 s, drop after 60 s), slots for unauthenticated handshakes counted separately
-from paired connections (today 8 slow handshakes from anyone can hold every slot for 10 s and lock a paired controller
-out; nothing gets in, but it's a nuisance), worker sleep/resume, Perch updates on either side (version
-in `hello`; refuse with a clear message on mismatch), `docs/remote-workers-testing.md`, macOS pass.
+### W6 - Hardening and docs - built 2026-11-09 (Windows; macOS still to do)
+Status: built with tests, not run live.
+- **Liveness.** `RemoteLink` sends a `ping` whenever it has been quiet for 20 s and drops a peer silent for 60 s
+  ("no answer for 60 seconds"), on both sides, once receiving. Pings never reach `FrameReceived`, so `ping` is reserved.
+  A worker that sleeps, or a path that dies without a reset, now goes offline on the controller within a minute and
+  is retried from there.
+- **Sleep on the controller.** `WorkerLinks` watches for the wall clock jumping past its 15 s timer (the machine slept)
+  and retries every offline worker at once, with the backoff reset, instead of waiting out a delay that grew while it
+  slept. No OS hook needed.
+- **Handshake slots.** `WorkerServer` counts connections still in the handshake (up to 32, at most 4 from one address)
+  apart from paired controllers' connections (up to 16). A stranger stalling handshakes holds at most 4 slots for 10 s
+  each, so a paired controller always finds one.
+- **Versions.** Each `hello` carries the Perch version (`app`). A protocol mismatch names both: "studio-pc runs Perch
+  0.7.0 and this machine runs 0.6.9, which can't talk to each other; update both to the same version" (worded for the
+  controller's screen whichever side refuses). A peer from before versions were announced reads as "an older version".
+- **macOS: not done.** `Perch.Platform.Mac.DeviceKeyStore` is still the stub (`IsSupported = false`), so the feature
+  stays hidden there. It needs a login-Keychain key that `SslStream` can use, which can only be built and checked on
+  a Mac (the W0 risk below).
 
 ## Later
 - Start a new session on the worker (folder picker over the link).

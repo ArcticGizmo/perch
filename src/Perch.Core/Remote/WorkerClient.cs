@@ -30,7 +30,8 @@ internal static class WorkerClient
             var reply = await link.ReadFrameAsync(wait.Token).ConfigureAwait(false);
             if (RemoteLink.Str(reply, "t") != "hello") throw new RemoteLinkException(MessageOf(reply, "the worker didn't answer"));
             if (WorkerServer.VersionOf(reply) != RemoteLink.Version)
-                throw new RemoteLinkException("the worker runs a different Perch protocol; update both machines");
+                throw new RemoteLinkException(WorkerServer.VersionMismatch(
+                    RemoteLink.CleanName(RemoteLink.Str(reply, "name") ?? worker.Name), reply));
             link.PeerName = RemoteLink.CleanName(RemoteLink.Str(reply, "name") ?? worker.Name);
             return link;
         }

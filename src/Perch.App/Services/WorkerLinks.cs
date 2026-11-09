@@ -24,6 +24,28 @@ internal sealed class WorkerLinks : IDisposable
     {
         _identity = identity;
         _deviceName = deviceName;
+        _wakeWatch.Tick += (_, _) => NoticeWake();
+        _wakeWatch.Start();
+    }
+
+    // Notices this machine waking from sleep (the clock moved far more than the timer did), with no OS hook: links that
+    // died while it slept go offline through their heartbeat, and the workers are tried again at once rather than
+    // after a retry delay that grew while asleep.
+    private static readonly TimeSpan WakeWatchEvery = TimeSpan.FromSeconds(15);
+    private readonly DispatcherTimer _wakeWatch = new() { Interval = WakeWatchEvery };
+    private DateTime _lastWatchUtc = DateTime.UtcNow;
+
+    private void NoticeWake()
+    {
+        var now = DateTime.UtcNow;
+        bool slept = now - _lastWatchUtc > WakeWatchEvery * 4;
+        _lastWatchUtc = now;
+        if (!slept || _disposed) return;
+        foreach (var w in _workers.Values.Where(w => !w.Online && !w.Connecting))
+        {
+            w.Failures = 0;
+            Retry(w);
+        }
     }
 
     /// <summary>A worker connected or dropped, or its sessions changed.</summary>
@@ -151,6 +173,7 @@ internal sealed class WorkerLinks : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _wakeWatch.Stop();
         foreach (var w in _workers.Values) w.Shut();
         _workers.Clear();
     }

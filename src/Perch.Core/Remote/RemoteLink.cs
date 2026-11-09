@@ -12,10 +12,27 @@ internal sealed class RemoteLinkException(string message, Exception? inner = nul
 /// (docs/remote-workers-plan.md, W2/W3). Every frame is an object with a string <c>t</c> (its type). A frame over
 /// <see cref="MaxFrameBytes"/>, or one that isn't such an object, ends the connection: the peer is paired, so a bad
 /// frame is a bug or an attack, not something to recover from.
-/// <para>Writes are serialised; <see cref="FrameReceived"/> and <see cref="Closed"/> are raised on the receive loop.</para>
+/// <para>Writes are serialised. <see cref="FrameReceived"/> is raised on the receive loop; <see cref="Closed"/> on whichever
+/// background thread noticed (the receive loop, a failed write, the heartbeat).</para>
+/// <para>Once receiving, each side sends a <c>ping</c> whenever it has been quiet for <see cref="HeartbeatEvery"/>, and
+/// drops a peer it hasn't heard from in <see cref="DropAfterSilence"/>. A machine that went to sleep, or a network path
+/// that died without a reset, otherwise leaves a link that looks open forever (W6). Pings never reach
+/// <see cref="FrameReceived"/>.</para>
 /// </summary>
 internal sealed class RemoteLink : IDisposable
 {
+    public static readonly TimeSpan DefaultHeartbeat = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan DefaultDropAfter = TimeSpan.FromSeconds(60);
+
+    /// <summary>How long this side stays quiet before it pings.</summary>
+    public TimeSpan HeartbeatEvery { get; init; } = DefaultHeartbeat;
+
+    /// <summary>How long the peer may stay silent before the link is dropped.</summary>
+    public TimeSpan DropAfterSilence { get; init; } = DefaultDropAfter;
+
+    private long _lastReceivedMs = Environment.TickCount64, _lastSentMs = Environment.TickCount64;
+    private Timer? _heartbeat;
+
     /// <summary>The protocol version both ends announce; a mismatch is refused with a message.</summary>
     public const int Version = 1;
 
@@ -109,6 +126,7 @@ internal sealed class RemoteLink : IDisposable
                     _writeGate.Release();
                 }
                 Interlocked.Add(ref _queuedBytes, -bytes.Length);
+                Volatile.Write(ref _lastSentMs, Environment.TickCount64);
             }
         }
         catch (Exception ex)
@@ -153,14 +171,40 @@ internal sealed class RemoteLink : IDisposable
         return frame;
     }
 
-    /// <summary>Starts the receive loop: every frame to <see cref="FrameReceived"/> until the peer closes or misbehaves.</summary>
-    public void StartReceiving() => Task.Run(async () =>
+    /// <summary>Starts the receive loop (every frame to <see cref="FrameReceived"/> until the peer closes or misbehaves)
+    /// and the heartbeat.</summary>
+    public void StartReceiving()
+    {
+        Volatile.Write(ref _lastReceivedMs, Environment.TickCount64);
+        _heartbeat = new Timer(_ => Beat(), null, HeartbeatEvery / 2, HeartbeatEvery / 2);
+        Task.Run(ReceiveLoop);
+    }
+
+    // Checked twice per heartbeat period, so a ping goes out within half a period of falling quiet.
+    private void Beat()
+    {
+        if (IsClosed) return;
+        long now = Environment.TickCount64;
+        if (now - Volatile.Read(ref _lastReceivedMs) > (long)DropAfterSilence.TotalMilliseconds)
+        {
+            Close($"no answer for {(int)DropAfterSilence.TotalSeconds} seconds");
+            return;
+        }
+        if (now - Volatile.Read(ref _lastSentMs) >= (long)HeartbeatEvery.TotalMilliseconds) TrySend(Frame(PingType));
+    }
+
+    private const string PingType = "ping";
+
+    private async Task ReceiveLoop()
     {
         string? reason = null;
         try
         {
             while (!IsClosed && await ReadFrameAsync().ConfigureAwait(false) is { } frame)
-                FrameReceived?.Invoke(frame);
+            {
+                Volatile.Write(ref _lastReceivedMs, Environment.TickCount64);
+                if (Str(frame, "t") != PingType) FrameReceived?.Invoke(frame);
+            }
         }
         catch (Exception ex)
         {
@@ -168,11 +212,12 @@ internal sealed class RemoteLink : IDisposable
             reason = IsClosed ? null : ex.Message;
         }
         Close(reason);
-    });
+    }
 
     public void Close(string? reason = null)
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        _heartbeat?.Dispose();
         _outbox.Writer.TryComplete();
         try { _stream.Dispose(); } catch { /* already gone */ }
         Closed?.Invoke(reason);

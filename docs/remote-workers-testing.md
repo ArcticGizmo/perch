@@ -121,5 +121,15 @@ With C attached to W's session (open its row on C):
 - [ ] Opening the row on C in that time says W is offline; after the time passes C reconnects by itself
 - [ ] The overlay row menu's and the tray's Disconnect do the same
 
+## W6 - Hardening
+- [ ] Leave C attached to an idle session on W for five minutes → it stays connected (the heartbeat keeps it up)
+- [ ] Pull W's network cable (or turn off its Wi-Fi) with C attached → within about a minute C's rows go "offline" and
+  C's Settings says "no answer for 60 seconds". Reconnect W → C is back within a minute
+- [ ] Put W to sleep with C attached → same as above; wake it → C reconnects
+- [ ] Put C to sleep for a few minutes, wake it → C reconnects to W within about 15 seconds of waking
+- [ ] (If you have two builds of different versions) pair them → the message names both Perch versions
+
+The handshake slot caps are covered by `RemoteWorkerTests.StalledHandshakes_FromOneAddress_AreCapped`.
+
 ## Send back
 Which checks failed, and anything odd in the wording. No logs are needed for W2.

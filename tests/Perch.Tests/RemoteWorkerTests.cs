@@ -64,6 +64,106 @@ public class RemoteWorkerTests
         Assert.Equal(64, RemoteLink.CleanName(new string('n', 200)).Length);
     }
 
+    // ── Liveness and limits (W6) ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task SilentPeer_IsDropped()
+    {
+        var (mine, theirs) = await SocketPair();
+        using var _ = theirs;   // never reads or writes: a peer that went to sleep
+        var link = new RemoteLink(mine, "pin")
+        {
+            HeartbeatEvery = TimeSpan.FromMilliseconds(50), DropAfterSilence = TimeSpan.FromMilliseconds(300),
+        };
+        var closed = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.Closed += r => closed.TrySetResult(r);
+        link.StartReceiving();
+        Assert.Contains("no answer", await closed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task IdlePeers_StayUp_OnPingsTheyNeverSee()
+    {
+        var (a, b) = await SocketPair();
+        RemoteLink Link(Stream s) => new(s, "pin")
+        {
+            HeartbeatEvery = TimeSpan.FromMilliseconds(50), DropAfterSilence = TimeSpan.FromMilliseconds(400),
+        };
+        using var left = Link(a);
+        using var right = Link(b);
+        int frames = 0;
+        left.FrameReceived += _ => Interlocked.Increment(ref frames);
+        right.FrameReceived += _ => Interlocked.Increment(ref frames);
+        left.StartReceiving();
+        right.StartReceiving();
+        await Task.Delay(1200);
+        Assert.False(left.IsClosed);
+        Assert.False(right.IsClosed);
+        Assert.Equal(0, frames);
+    }
+
+    // One address can only hold a few of the handshake slots, so a stranger stalling handshakes can't fill them all.
+    [Fact]
+    public async Task StalledHandshakes_FromOneAddress_AreCapped()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var cert = new CertificateRequest("CN=Perch", key, HashAlgorithmName.SHA256)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        using var server = new WorkerServer(cert, () => "worker-box", _ => null);
+        server.Start(IPAddress.Loopback, 0);
+
+        var stalled = new List<System.Net.Sockets.TcpClient>();
+        try
+        {
+            for (int i = 0; i < WorkerServer.MaxPendingPerAddress; i++)
+            {
+                var c = new System.Net.Sockets.TcpClient();
+                await c.ConnectAsync(IPAddress.Loopback, server.Port);
+                stalled.Add(c);
+            }
+            for (int i = 0; i < 100 && server.PendingCount < WorkerServer.MaxPendingPerAddress; i++) await Task.Delay(20);
+            Assert.Equal(WorkerServer.MaxPendingPerAddress, server.PendingCount);
+
+            using var extra = new System.Net.Sockets.TcpClient();
+            await extra.ConnectAsync(IPAddress.Loopback, server.Port);
+            var read = extra.GetStream().ReadAsync(new byte[1]).AsTask();
+            Assert.Equal(0, await read.WaitAsync(TimeSpan.FromSeconds(5)));   // turned away at once
+            Assert.Equal(WorkerServer.MaxPendingPerAddress, server.PendingCount);
+        }
+        finally
+        {
+            foreach (var c in stalled) c.Dispose();
+        }
+    }
+
+    [Fact]
+    public void VersionMismatch_NamesBothVersions()
+    {
+        var hello = RemoteLink.Frame("hello");
+        hello["app"] = "9.9.9";
+        var message = WorkerServer.VersionMismatch("studio-pc", hello);
+        Assert.Contains("studio-pc runs Perch 9.9.9", message);
+        Assert.Contains(Perch.Data.AppInfo.Version, message);
+        Assert.Contains("an older version", WorkerServer.VersionMismatch("studio-pc", RemoteLink.Frame("hello")));
+    }
+
+    private static async Task<(Stream, Stream)> SocketPair()
+    {
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var client = new System.Net.Sockets.TcpClient();
+            var accept = listener.AcceptTcpClientAsync();
+            await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            return ((await accept).GetStream(), client.GetStream());
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     // ── Over TLS (Windows) ─────────────────────────────────────────────────────
 
     [Fact]
@@ -142,9 +242,9 @@ public class RemoteWorkerTests
         {
             link.FrameReceived += f =>
             {
-                var pong = RemoteLink.Frame("pong");
-                pong["echo"] = RemoteLink.Str(f, "say");
-                link.Send(pong);
+                var reply = RemoteLink.Frame("reply");
+                reply["echo"] = RemoteLink.Str(f, "say");
+                link.Send(reply);
             };
             link.StartReceiving();
         };
@@ -157,12 +257,12 @@ public class RemoteWorkerTests
         var got = new TaskCompletionSource<JsonObject>();
         client.FrameReceived += f => got.TrySetResult(f);
         client.StartReceiving();
-        var ping = RemoteLink.Frame("ping");
-        ping["say"] = "hi";
-        await client.SendAsync(ping);
+        var message = RemoteLink.Frame("message");   // not "ping": the heartbeat keeps that one to itself
+        message["say"] = "hi";
+        await client.SendAsync(message);
 
         var reply = await got.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal("pong", RemoteLink.Str(reply, "t"));
+        Assert.Equal("reply", RemoteLink.Str(reply, "t"));
         Assert.Equal("hi", RemoteLink.Str(reply, "echo"));
     }
 

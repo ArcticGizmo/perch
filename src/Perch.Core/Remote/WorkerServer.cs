@@ -18,7 +18,12 @@ internal sealed record PairingRequest(string Name, string Code, string Pin);
 /// </summary>
 internal sealed class WorkerServer : IDisposable
 {
-    private const int MaxConnections = 8;
+    // Connections still in the handshake (anyone can open one) and connections from paired controllers are counted
+    // apart, so strangers stalling handshakes can't lock a paired controller out of an open slot; one address can hold
+    // only a few of the handshake slots, so one stranger can't take them all either (W6).
+    internal const int MaxPending = 32;
+    internal const int MaxPendingPerAddress = 4;
+    internal const int MaxConnected = 16;
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PairingAnswerTimeout = TimeSpan.FromMinutes(2);
 
@@ -28,7 +33,8 @@ internal sealed class WorkerServer : IDisposable
     private readonly Func<string, PairedDevice?> _findController;
     private TcpListener? _listener;
     private CancellationTokenSource? _stopping;
-    private int _connections;
+    private int _pending, _connected;
+    private readonly Dictionary<IPAddress, int> _pendingByAddress = [];
     private DateTime _pairingUntilUtc;
     private int _pairingBusy;
 
@@ -95,9 +101,9 @@ internal sealed class WorkerServer : IDisposable
             TcpClient tcp;
             try { tcp = await listener.AcceptTcpClientAsync(token).ConfigureAwait(false); }
             catch { return; }   // stopped
-            if (Interlocked.Increment(ref _connections) > MaxConnections)
+            var address = AddressOf(tcp);
+            if (!TakePendingSlot(address))
             {
-                Interlocked.Decrement(ref _connections);
                 tcp.Dispose();
                 continue;
             }
@@ -105,10 +111,42 @@ internal sealed class WorkerServer : IDisposable
             {
                 try { await Handle(tcp, token).ConfigureAwait(false); }
                 catch { tcp.Dispose(); }
-                finally { Interlocked.Decrement(ref _connections); }
+                finally { ReleasePendingSlot(address); }
             }, CancellationToken.None);
         }
     }
+
+    // The peer's address, an IPv4 one as itself rather than mapped into IPv6 (the dual-mode listener reports both ways).
+    private static IPAddress AddressOf(TcpClient tcp)
+    {
+        var address = (tcp.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
+        return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+    }
+
+    private bool TakePendingSlot(IPAddress address)
+    {
+        lock (_pendingByAddress)
+        {
+            int fromAddress = _pendingByAddress.GetValueOrDefault(address);
+            if (_pending >= MaxPending || fromAddress >= MaxPendingPerAddress) return false;
+            _pending++;
+            _pendingByAddress[address] = fromAddress + 1;
+            return true;
+        }
+    }
+
+    private void ReleasePendingSlot(IPAddress address)
+    {
+        lock (_pendingByAddress)
+        {
+            _pending--;
+            if (_pendingByAddress.TryGetValue(address, out var n) && n > 1) _pendingByAddress[address] = n - 1;
+            else _pendingByAddress.Remove(address);
+        }
+    }
+
+    /// <summary>Handshakes in progress now, for tests.</summary>
+    internal int PendingCount { get { lock (_pendingByAddress) return _pending; } }
 
     private async Task Handle(TcpClient tcp, CancellationToken stopping)
     {
@@ -156,7 +194,7 @@ internal sealed class WorkerServer : IDisposable
         {
             if (VersionOf(first!) != RemoteLink.Version)
             {
-                await Refuse(link, $"this machine runs a different Perch protocol (v{RemoteLink.Version}); update both");
+                await Refuse(link, RefuseVersion(first));
                 return;
             }
             if (RefuseReason?.Invoke(link.PeerPin) is { } why)
@@ -164,6 +202,13 @@ internal sealed class WorkerServer : IDisposable
                 await Refuse(link, why);
                 return;
             }
+            if (Interlocked.Increment(ref _connected) > MaxConnected)
+            {
+                Interlocked.Decrement(ref _connected);
+                await Refuse(link, "this machine has too many controllers connected");
+                return;
+            }
+            link.Closed += _ => Interlocked.Decrement(ref _connected);
             link.PeerName = RemoteLink.CleanName(RemoteLink.Str(first, "name") ?? controller.Name);
             await link.SendAsync(Hello(_deviceName())).ConfigureAwait(false);
             ControllerConnected?.Invoke(link);
@@ -193,7 +238,7 @@ internal sealed class WorkerServer : IDisposable
         {
             if (VersionOf(request) != RemoteLink.Version)
             {
-                await Refuse(link, $"this machine runs a different Perch protocol (v{RemoteLink.Version}); update both");
+                await Refuse(link, RefuseVersion(request));
                 return;
             }
             var name = RemoteLink.CleanName(RemoteLink.Str(request, "name"));
@@ -236,8 +281,26 @@ internal sealed class WorkerServer : IDisposable
         var hello = RemoteLink.Frame("hello");
         hello["v"] = RemoteLink.Version;
         hello["name"] = name;
+        hello["app"] = Perch.Data.AppInfo.Version;
         return hello;
     }
+
+    /// <summary>What a controller tells its user when the worker speaks another protocol version: both Perch versions,
+    /// since updating is the fix.</summary>
+    internal static string VersionMismatch(string otherName, JsonObject? otherHello) =>
+        $"{otherName} runs Perch {AppOf(otherHello)} and this machine runs {Perch.Data.AppInfo.Version}, which can't talk " +
+        "to each other; update both to the same version";
+
+    // The worker's refusal of a controller on another protocol version, worded for the controller's screen.
+    private string RefuseVersion(JsonObject? theirHello) =>
+        $"{_deviceName()} runs Perch {Perch.Data.AppInfo.Version} and this machine runs {AppOf(theirHello)}, which can't " +
+        "talk to each other; update both to the same version";
+
+    // The Perch version a hello announces, made safe to show; one from before versions were announced says so.
+    private static string AppOf(JsonObject? hello) =>
+        RemoteLink.Str(hello, "app") is { Length: > 0 and <= 40 } app
+            ? new string(app.Where(c => !char.IsControl(c)).ToArray())
+            : "an older version";
 
     internal static int VersionOf(JsonObject? frame)
     {
