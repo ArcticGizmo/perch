@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 
 namespace Perch.Remote;
 
@@ -62,12 +63,58 @@ internal sealed class RemoteLink : IDisposable
         }
     }
 
-    /// <summary>Fire-and-forget <see cref="SendAsync"/>: a failed write closes the link (and says so via <see cref="Closed"/>).</summary>
-    public void Send(JsonObject frame)
+    /// <summary>How much may wait to be written before the peer counts as stalled. A session's stream can outrun a slow
+    /// network; past this the link closes rather than holding an ever-growing backlog in memory.</summary>
+    public const long MaxQueuedBytes = 64L * 1024 * 1024;
+
+    private readonly Channel<byte[]> _outbox = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true });
+    private long _queuedBytes;
+    private int _writerStarted;
+
+    /// <summary>Queues a frame; frames go out in the order queued. False when the link is closed or the frame is over
+    /// <see cref="MaxFrameBytes"/> (nothing is sent; the link stays up). A failed write, or a backlog past
+    /// <see cref="MaxQueuedBytes"/>, closes the link.</summary>
+    public bool TrySend(JsonObject frame)
     {
-        if (IsClosed) return;
-        SendAsync(frame).ContinueWith(t => Close(t.Exception?.GetBaseException().Message),
-            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        if (IsClosed) return false;
+        var bytes = Encoding.UTF8.GetBytes(frame.ToJsonString() + "\n");
+        if (bytes.Length > MaxFrameBytes) return false;
+        if (Interlocked.Add(ref _queuedBytes, bytes.Length) > MaxQueuedBytes)
+        {
+            Close("the other machine isn't keeping up");
+            return false;
+        }
+        _outbox.Writer.TryWrite(bytes);
+        if (Interlocked.Exchange(ref _writerStarted, 1) == 0) Task.Run(WriteLoop);
+        return true;
+    }
+
+    /// <summary><see cref="TrySend"/>, for frames that can't be too large.</summary>
+    public void Send(JsonObject frame) => TrySend(frame);
+
+    private async Task WriteLoop()
+    {
+        try
+        {
+            await foreach (var bytes in _outbox.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                await _writeGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await _stream.WriteAsync(bytes).ConfigureAwait(false);
+                    await _stream.FlushAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _writeGate.Release();
+                }
+                Interlocked.Add(ref _queuedBytes, -bytes.Length);
+            }
+        }
+        catch (Exception ex)
+        {
+            Close(IsClosed ? null : ex.Message);
+        }
     }
 
     /// <summary>The next frame, or null when the peer closed cleanly between frames. Throws
@@ -115,8 +162,9 @@ internal sealed class RemoteLink : IDisposable
             while (!IsClosed && await ReadFrameAsync().ConfigureAwait(false) is { } frame)
                 FrameReceived?.Invoke(frame);
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException or OperationCanceledException)
+        catch (Exception ex)
         {
+            // A handler's own failure ends the link too, rather than leaving it open with nobody reading.
             reason = IsClosed ? null : ex.Message;
         }
         Close(reason);
@@ -125,6 +173,7 @@ internal sealed class RemoteLink : IDisposable
     public void Close(string? reason = null)
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        _outbox.Writer.TryComplete();
         try { _stream.Dispose(); } catch { /* already gone */ }
         Closed?.Invoke(reason);
     }

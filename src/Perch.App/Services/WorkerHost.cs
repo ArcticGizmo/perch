@@ -10,8 +10,8 @@ namespace Perch.Avalonia.Services;
 
 /// <summary>
 /// This machine's part in remote workers (docs/remote-workers-plan.md): its device identity, the worker listener
-/// (started and stopped with <see cref="AppSettings.WorkerEnabled"/>), the pairing window and the paired-machine list.
-/// The session protocol on top of a connected link is W3; for now a controller that connects is accepted and held.
+/// (started and stopped with <see cref="AppSettings.WorkerEnabled"/>), the pairing window, the paired-machine list, and
+/// the live sessions it offers connected controllers (<see cref="Offer"/>, served by a <see cref="WorkerSessionHub"/>).
 /// <para>Raises <see cref="Changed"/> on the UI thread.</para>
 /// </summary>
 internal sealed class WorkerHost : IDisposable
@@ -24,13 +24,16 @@ internal sealed class WorkerHost : IDisposable
     private bool _identityTried;
     private WorkerServer? _server;
     private (string? Bind, int Port)? _listeningOn;
-    private readonly List<RemoteLink> _controllers = [];
+    private readonly WorkerSessionHub _hub = new() { MaxImageBytes = PerchSession.MaxImageBytes };
+    private readonly Dictionary<PerchSession, WorkerSessionAdapter> _offered = [];
+    private List<WorkerSessionInfo> _lastOffered = [];
     private DispatcherTimer? _pairingTimer;
 
     public WorkerHost(AppSettings settings, IDeviceKeyStore keys)
     {
         _settings = settings;
         _keys = keys;
+        _hub.ControllersChanged += () => Dispatcher.UIThread.Post(() => Changed?.Invoke());
     }
 
     /// <summary>Whether this head can take part at all (a device key it can use for TLS).</summary>
@@ -53,7 +56,7 @@ internal sealed class WorkerHost : IDisposable
     public bool IsListening => _server?.IsListening == true;
     public bool PairingOpen => _server?.PairingOpen == true;
     public DateTime PairingClosesUtc { get; private set; }
-    public int ConnectedControllers { get { lock (_controllers) return _controllers.Count; } }
+    public int ConnectedControllers => _hub.ConnectedNames().Count;
 
     public IReadOnlyList<PairedDevice> Paired(PairedRole role) =>
         (_settings.PairedDevices ?? []).Where(d => d.Role == role).OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
@@ -72,6 +75,7 @@ internal sealed class WorkerHost : IDisposable
     public void Apply()
     {
         bool want = IsSupported && _settings.WorkerEnabled;
+        SessionJournal.RecordingEnabled = want;
         var target = (Bind: string.IsNullOrWhiteSpace(_settings.WorkerBindAddress) ? null : _settings.WorkerBindAddress!.Trim(),
                       Port: _settings.WorkerPort);
         if (want && IsListening && _listeningOn == target) return;
@@ -104,7 +108,7 @@ internal sealed class WorkerHost : IDisposable
             ApprovePairing = ApprovePairing,
         };
         server.Paired += device => Dispatcher.UIThread.Post(() => Remember(device));
-        server.ControllerConnected += OnControllerConnected;
+        server.ControllerConnected += _hub.Serve;
         try
         {
             server.Start(address, target.Port);
@@ -126,11 +130,7 @@ internal sealed class WorkerHost : IDisposable
         _server = null;
         _listeningOn = null;
         ClosePairing();
-        lock (_controllers)
-        {
-            foreach (var link in _controllers.ToList()) link.Close();
-            _controllers.Clear();
-        }
+        _hub.DisconnectAll();
     }
 
     private PairedDevice? FindController(string pin) =>
@@ -196,9 +196,7 @@ internal sealed class WorkerHost : IDisposable
         _settings.PairedDevices?.RemoveAll(d => d.Pin == device.Pin && d.Role == device.Role);
         if (_settings.PairedDevices is { Count: 0 }) _settings.PairedDevices = null;
         _settings.Save();
-        if (device.Role == PairedRole.Controller)
-            lock (_controllers)
-                foreach (var link in _controllers.Where(l => l.PeerPin == device.Pin).ToList()) link.Close();
+        if (device.Role == PairedRole.Controller) _hub.Disconnect(device.Pin);
         Changed?.Invoke();
     }
 
@@ -216,18 +214,34 @@ internal sealed class WorkerHost : IDisposable
         Changed?.Invoke();
     }
 
-    // ── Connected controllers ───────────────────────────────────────────────────
+    // ── Offered sessions ────────────────────────────────────────────────────────
 
-    private void OnControllerConnected(RemoteLink link)
+    /// <summary>Offers a live Perch session on this machine to connected controllers (UI thread), until it ends. Its
+    /// title, id, model, mode and effort follow it. Sessions this machine drives on another one aren't offered.</summary>
+    public void Offer(PerchSession session)
     {
-        lock (_controllers) _controllers.Add(link);
-        link.Closed += _ =>
+        if (session.IsRemote || session.HasEnded || _offered.ContainsKey(session)) return;
+        _offered[session] = new WorkerSessionAdapter(session);
+        session.TitleChanged += Republish;
+        session.Conversation.StateChanged += Republish;
+        session.Restarted += _ => Republish();
+        session.Ended += s =>
         {
-            lock (_controllers) _controllers.Remove(link);
-            Dispatcher.UIThread.Post(() => Changed?.Invoke());
+            _offered.Remove(s);
+            Republish();
         };
-        link.StartReceiving();
-        Dispatcher.UIThread.Post(() => Changed?.Invoke());
+        Republish();
+    }
+
+    // Sends controllers the list when what they'd see changed. StateChanged fires at every turn boundary, so the list is
+    // compared first.
+    private void Republish()
+    {
+        var adapters = _offered.Values.ToList();
+        var infos = adapters.Select(a => a.Info()).ToList();
+        if (infos.SequenceEqual(_lastOffered)) return;
+        _lastOffered = infos;
+        _hub.SetSessions([.. infos.Zip(adapters, (i, a) => (i, (IWorkerSession)a))]);
     }
 
     private void SetStatus(string status)

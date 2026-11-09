@@ -116,6 +116,7 @@ public partial class App
             session.Ended += OnHeldEnded;
         }
         TrackHeld(session);
+        _workerHost?.Offer(session);   // paired controllers can attach to it (docs/remote-workers-plan.md)
     }
 
     private void TrackHeld(Services.PerchSession session)

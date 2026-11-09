@@ -110,6 +110,15 @@ internal sealed record SessionStateEvent(string State) : SessionEvent;
 /// <paramref name="OriginKind"/> is the record's <c>origin.kind</c> (<c>human</c> for a remote prompt).</summary>
 internal sealed record UserPromptEchoEvent(string? Uuid, string Text, string? OriginKind) : SessionEvent;
 
+/// <summary>A session hosted on another machine sent the transcript it loaded on resume (docs/remote-workers-plan.md,
+/// W3). Loaded in front of the live items, as a local resume's history is. <paramref name="Truncated"/>: earlier
+/// messages weren't sent.</summary>
+internal sealed record TranscriptHistoryEvent(IReadOnlyList<string> Lines, bool Truncated) : SessionEvent;
+
+/// <summary>Something the session's backend itself has to say (a remote link dropped, a prompt was too large to send),
+/// shown as a note in the thread.</summary>
+internal sealed record BackendNoteEvent(string Text, bool IsError = false) : SessionEvent;
+
 /// <summary>Acknowledgement of a <c>set_permission_mode</c> control request.</summary>
 internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 

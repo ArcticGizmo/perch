@@ -53,5 +53,9 @@ Click **Allow** on W.
 - [ ] Change the port to 41541 → status follows; the old port closes
 - [ ] Search "worker" in Settings finds the toggle, port, address and machine name
 
+## W3 - the session protocol
+Nothing to check by hand yet: the controller doesn't connect to its workers until W4, which adds the sessions to its
+overlay. `RemoteSessionTests` cover the protocol end to end over loopback.
+
 ## Send back
 Which checks failed, and anything odd in the wording. No logs are needed for W2.

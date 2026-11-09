@@ -278,6 +278,17 @@ internal sealed class SessionConversation
                 BackgroundTasks.Reported(report.TaskId, report.ToolUseId, report.Report);
                 break;
 
+            case TranscriptHistoryEvent history:
+            {
+                LoadHistory(history.Lines, SessionId);
+                if (history.Truncated) AddNote("earlier messages aren't shown");
+                break;
+            }
+
+            case BackendNoteEvent note:
+                AddNote(note.Text, note.IsError ? NoteKind.Error : NoteKind.Info);
+                break;
+
             case SessionInitEvent init:
             {
                 // A second init with a *different* id means the session was re-based mid-process — the CLI's

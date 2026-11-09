@@ -123,19 +123,43 @@ TLS on loopback (Windows). A controller that connects is held but nothing is exc
   fingerprint, the worker toggle + bind address + port (registry descriptors), "Pair a controller" (opens the window),
   paired machines with Remove, "Add a worker" (host:port → pairing).
 
-### W3 - Protocol
+### W3 - Protocol - built 2026-11-09
+Status: built with tests, not run live (nothing on the controller uses it until W4). Core: `SessionJournal`,
+`WorkerProtocol` (frames + `WorkerSessionInfo`), `WorkerSessionHub` (worker side, over `IWorkerSession`),
+`WorkerConnection` + `RemoteSessionBackend` (controller side). App: `PerchSession.Journal` and its
+`*FromController` commands, `Services/WorkerSessionAdapter`, `WorkerHost.Offer` (called from `HoldSession`).
+`RemoteSessionTests` drive a worker session from a controller end to end over loopback TCP.
+
 NDJSON frames, each `{"t": type, …}`. Versioned in `hello`.
 - Controller → worker: `hello{v, name}`, `list`, `attach{sid}`, `detach{sid}`, `prompt{sid, uuid, text, images?}`,
   `answer{sid, requestId, allow, denyMessage?, updatedInput?}`, `interrupt{sid}`, `mode{sid, mode}`,
   `model{sid, model}`, `effort{sid, level}`, `stopTask{sid, taskId}`.
-- Worker → controller: `hello{v, name}`, `sessions[{sid, title, cwd, model, mode, state, running}]` (sent on `list` and
-  pushed on change), `history{sid, lines[{kind: transcript|stream, line}], truncated}`, `line{sid, raw}`,
-  `ended{sid, exitCode}`, `error{msg}`.
-- **Catch-up.** Each worker `PerchSession` keeps a journal of what fed its conversation: the transcript lines it loaded
-  on resume, then raw stdout lines minus `stream_event` partials (their final records follow). Capped at 16 MB per
-  session, oldest dropped (`truncated` → "earlier messages not shown"). `attach` snapshots the journal and subscribes
-  under one lock, so no line is missed or doubled.
+- Worker → controller: `hello{v, name}`, `sessions{sessions[{sid, sessionId, title, cwd, model, mode, effort, running}]}`
+  (sent on `list` and pushed when anything in it changes), `history{sid, transcript[], lines[], truncated, done}`,
+  `line{sid, raw}`, `ended{sid, exitCode}`, `error{sid?, msg}`.
+- **`sid` is the worker's handle**, fixed for the session's life; `sessionId` is Claude's, which `/clear` changes. The
+  controller follows the new id from the stream's `init`.
+- **Catch-up.** Each worker `PerchSession` keeps a `SessionJournal`: the transcript lines it loaded on resume, then raw
+  stdout lines minus `stream_event` partials (their final records follow; partials are still relayed live). Capped at
+  16M characters, oldest dropped (`truncated` → "earlier messages aren't shown"). `attach` snapshots the journal and
+  subscribes under one lock, queuing the history frames inside it, so no line is missed, doubled or reordered. History
+  goes in chunks of at most 1M characters (JSON escaping can grow that six-fold and still fit the 8 MiB frame);
+  `done` marks the last. A resume's transcript that lands after an attach goes as a second `history`.
+- **The journal records only while "Let paired machines control this one" is on**, so a machine that never uses this
+  holds no extra memory. A session that ran while it was off catches up from the point it was turned on, marked
+  truncated.
+- **The controller attaches in two steps**: `WorkerConnection.Attach` makes the backend, `RemoteSessionBackend.Start`
+  asks for the stream, so the consumer wires its events in between and misses nothing.
+- **Stopping a remote session on the controller detaches**; the session keeps running on the worker.
+- **What the worker refuses**: switching to `bypassPermissions` (only someone at the worker turns every check off), an
+  unknown mode or effort level, a model or task id that isn't a bare token, a prompt image of the wrong type, not
+  base64 or over 5 MB, edited tool input on anything but an AskUserQuestion card. Each comes back as `error`, shown as a
+  note in the controller's thread.
+- **Back-pressure.** Frames go out through one ordered queue per link; past 64 MB waiting the link closes ("the other
+  machine isn't keeping up"). A single line too large for a frame is left out of the relay.
 - Unknown frame types are ignored (forward compatibility); a malformed frame closes the connection.
+- **Known gap:** a rewind on the worker restarts its process, but the journal keeps the dropped branch, so a controller
+  that attaches afterwards sees it. Rewind isn't reachable from a controller.
 
 ### W4 - Controller UI
 - Remote sessions as overlay rows (synthesised like the not-running rows in `App.DormantRows.cs`), labelled with the

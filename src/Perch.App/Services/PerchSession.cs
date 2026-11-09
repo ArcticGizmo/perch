@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using Perch.Data;
 using Perch.Data.Control;
 using Perch.Platform;
+using Perch.Remote;
 
 namespace Perch.Avalonia.Services;
 
@@ -28,6 +29,11 @@ internal sealed class PerchSession : IDisposable
     public bool IsRemote => _controller?.IsRemote == true;
 
     public SessionConversation Conversation { get; } = new();
+
+    /// <summary>What fed this session's conversation, for a paired controller that attaches (docs/remote-workers-plan.md).
+    /// Records only while this machine lets paired machines control it.</summary>
+    public SessionJournal Journal { get; } = new();
+
     public string Cwd { get; }
     /// <summary>The model as launched or last switched to (the CLI reports the launch model in init only).</summary>
     public string? Model { get; private set; }
@@ -184,6 +190,7 @@ internal sealed class PerchSession : IDisposable
     {
         var controller = new ClaudeSessionController();
         Wire(controller);
+        controller.LineReceived += Journal.Append;
         try
         {
             controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir,
@@ -274,6 +281,7 @@ internal sealed class PerchSession : IDisposable
                 return;
             }
             var (lines, clipped, contextTokens, title) = t.Result;
+            Journal.SetTranscript(lines, clipped);
             int n = Conversation.LoadHistory(lines, sessionId);
             Conversation.SeedContextTokens(contextTokens);
             SetTitle(title);
@@ -348,6 +356,7 @@ internal sealed class PerchSession : IDisposable
             _rewindingFrom = null;
             HasEnded = true;
             ExitCode = code;
+            Journal.End(code);
             Ended?.Invoke(this);
             return true;
         }
@@ -375,6 +384,7 @@ internal sealed class PerchSession : IDisposable
         Conversation.StateChanged -= PublishActivity;
         Conversation.SessionEnded(code, stderrTail);
         _controller?.Dispose();
+        Journal.End(code);
         Ended?.Invoke(this);
     }
 
@@ -513,6 +523,43 @@ internal sealed class PerchSession : IDisposable
     public void StopTask(BackgroundTask task)
     {
         if (task.IsRunning && IsRunning) _controller?.StopTask(task.TaskId);
+    }
+
+    // ── Commands from a paired controller (docs/remote-workers-plan.md, W3) ──────────────────────────────────────
+
+    /// <summary>A prompt a paired controller sent, under its uuid: the controller already shows it, and the CLI's echo
+    /// (which this machine drops as its own) reaches the controller with the same id.</summary>
+    internal void SendFromController(string text, IReadOnlyList<ImageContent>? images, string uuid)
+    {
+        if (IsRemote || _controller is not { IsRunning: true } c) return;
+        c.SendPrompt(text, images, uuid);
+        _resumeAt = null;
+        Conversation.AddUserPrompt(text, null, uuid);
+        if (RenameArg(text) is { } title) SetTitle(title);
+    }
+
+    /// <summary>A paired controller's answer to the card <paramref name="requestId"/>, if it is still pending here.
+    /// Edited input is taken only for a question card (its answers); any other tool runs with the input it asked about.</summary>
+    internal void AnswerFromController(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput)
+    {
+        if (IsRemote || _controller is not { IsRunning: true } c) return;
+        var item = Conversation.Items.OfType<PermissionItem>().LastOrDefault(p => p.Request.RequestId == requestId);
+        if (item is not { Resolution: PermissionResolution.Pending }) return;
+        if (allow && item.IsQuestion && updatedInput is not null)
+        {
+            c.RespondToPermission(item.Request, allow: true, updatedInput: updatedInput);
+            Conversation.ResolvePermission(item, allowed: true,
+                answerSummary: AskUserQuestionInput.SummariseReply(item.Request.InputJson, updatedInput.ToJsonString()));
+            return;
+        }
+        c.RespondToPermission(item.Request, allow, denyMessage);
+        Conversation.ResolvePermission(item, allow);
+    }
+
+    /// <summary>Stops a background task by id (a controller names it; this machine's task list may not have it yet).</summary>
+    internal void StopTaskById(string taskId)
+    {
+        if (IsRunning) _controller?.StopTask(taskId);
     }
 
     /// <summary>Enables/disables Remote Control for the live session (the CLI's <c>remote_control</c> control

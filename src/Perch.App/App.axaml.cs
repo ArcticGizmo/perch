@@ -570,6 +570,7 @@ public partial class App : Application
             {
                 _workerHost = new Services.WorkerHost(workerSettings, PlatformServices.DeviceKeys) { AskUser = AskToPairController };
                 _workerHost.Apply();
+                foreach (var s in _perchSessions.Where(s => !s.IsDormant)) _workerHost.Offer(s);
             }
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
