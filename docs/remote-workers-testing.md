@@ -104,5 +104,22 @@ Open the Roost on C (with W's session running).
 - [ ] On W, start a long answer (`count slowly to 200, one number per line`). While it runs, open the row on C → C shows
   what's already there and keeps streaming the rest
 
+## W5 - What the worker sees
+With C attached to W's session (open its row on C):
+- [ ] W's session window shows "⇄ controlled from C" in the bar; W's overlay row reads "controlled from C"
+- [ ] W's tray menu has "Disconnect C"
+- [ ] Prompt from C → on W the bubble has "↗ from C" under it
+- [ ] Allow a permission card from C → W's thread gets a quiet "C allowed Bash"; deny one → "C denied …"
+- [ ] Interrupt from C mid-turn → W shows "C interrupted"
+- [ ] Switch mode to Plan from C → W shows "C switched the permission mode to plan"; model/effort from C → "(from C)"
+- [ ] Close C's window (and C's Roost) → within a moment W's chip and row mark go, and the tray item goes
+
+### W5-2 - Disconnecting
+- [ ] Click W's chip → Disconnect C → C's window says it lost the connection; W's chip goes
+- [ ] C's Settings → Workers says W is offline: "W disconnected this machine; it can reconnect after HH:MM"
+- [ ] W's Settings shows C as "Disconnected by you · can reconnect after HH:MM"
+- [ ] Opening the row on C in that time says W is offline; after the time passes C reconnects by itself
+- [ ] The overlay row menu's and the tray's Disconnect do the same
+
 ## Send back
 Which checks failed, and anything odd in the wording. No logs are needed for W2.

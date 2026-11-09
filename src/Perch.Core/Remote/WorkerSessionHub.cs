@@ -21,10 +21,10 @@ internal interface IWorkerSession
     void Answer(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput, string fromName);
 
     void Interrupt(string fromName);
-    void SetPermissionMode(string mode);
-    void SetModel(string model);
-    void SetEffort(string level);
-    void StopTask(string taskId);
+    void SetPermissionMode(string mode, string fromName);
+    void SetModel(string model, string fromName);
+    void SetEffort(string level, string fromName);
+    void StopTask(string taskId, string fromName);
 }
 
 /// <summary>
@@ -46,6 +46,18 @@ internal sealed class WorkerSessionHub
 
     /// <summary>A controller connected or left (raised on the link's thread).</summary>
     public event Action? ControllersChanged;
+
+    /// <summary>A controller started or stopped following a session (raised on the link's thread).</summary>
+    public event Action? AttachmentsChanged;
+
+    /// <summary>The controllers following the session <paramref name="sid"/> now: each one's name and pinned key, once per
+    /// machine.</summary>
+    public IReadOnlyList<(string Name, string Pin)> ControllersOf(string sid)
+    {
+        Controller[] controllers;
+        lock (_lock) controllers = [.. _controllers];
+        return [.. controllers.Where(c => c.Follows(sid)).Select(c => (c.Link.PeerName, c.Link.PeerPin)).Distinct()];
+    }
 
     /// <summary>The names of the controllers connected now, one per connection.</summary>
     public IReadOnlyList<string> ConnectedNames()
@@ -78,9 +90,16 @@ internal sealed class WorkerSessionHub
             controller.DetachAll();
             lock (_lock) _controllers.Remove(controller);
             ControllersChanged?.Invoke();
+            AttachmentsChanged?.Invoke();
         };
         link.StartReceiving();
         ControllersChanged?.Invoke();
+    }
+
+    /// <summary>The pinned keys of the controllers connected now, once per machine.</summary>
+    public IReadOnlyList<string> ConnectedPins()
+    {
+        lock (_lock) return [.. _controllers.Select(c => c.Link.PeerPin).Distinct()];
     }
 
     /// <summary>Drops every controller (the user's "disconnect remote controllers").</summary>
@@ -116,6 +135,11 @@ internal sealed class WorkerSessionHub
         private readonly Dictionary<string, IDisposable> _attached = new(StringComparer.Ordinal);
 
         public RemoteLink Link { get; } = link;
+
+        public bool Follows(string sid)
+        {
+            lock (_attached) return _attached.ContainsKey(sid);
+        }
 
         public void OnFrame(JsonObject frame)
         {
@@ -183,21 +207,21 @@ internal sealed class WorkerSessionHub
                     // Turning every check off is a decision for someone at the worker, not one a paired machine can make.
                     if (mode == BypassMode) throw new InvalidDataException("bypass permissions can only be turned on at the machine itself");
                     if (!SessionOpenIntent.PermissionModes.Contains(mode)) throw new InvalidDataException("unknown permission mode");
-                    session.SetPermissionMode(mode);
+                    session.SetPermissionMode(mode, name);
                     break;
                 }
                 case "model":
-                    session.SetModel(Token(RemoteLink.Str(frame, "model"), "model"));
+                    session.SetModel(Token(RemoteLink.Str(frame, "model"), "model"), name);
                     break;
                 case "effort":
                 {
                     var level = RemoteLink.Str(frame, "level") ?? "";
                     if (level != "auto" && !ClaudeSessionController.IsEffortLevel(level)) throw new InvalidDataException("unknown effort level");
-                    session.SetEffort(level);
+                    session.SetEffort(level, name);
                     break;
                 }
                 case "stopTask":
-                    session.StopTask(Token(RemoteLink.Str(frame, "taskId"), "task"));
+                    session.StopTask(Token(RemoteLink.Str(frame, "taskId"), "task"), name);
                     break;
             }
         }
@@ -223,12 +247,15 @@ internal sealed class WorkerSessionHub
                     if (snapshot.ExitCode is { } code) listener.OnEnded(code);
                 }, listener);
             }
+            hub.AttachmentsChanged?.Invoke();
         }
 
         private void Detach(string sid)
         {
+            bool removed;
             lock (_attached)
-                if (_attached.Remove(sid, out var sub)) sub.Dispose();
+                if (removed = _attached.Remove(sid, out var sub)) sub!.Dispose();
+            if (removed) hub.AttachmentsChanged?.Invoke();
         }
 
         public void DetachAll()

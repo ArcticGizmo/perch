@@ -290,12 +290,21 @@ public class RemoteSessionTests
         connection.Start();
         await listed.Task.WaitAsync(Timeout);
 
+        // The worker knows who follows which session (its "controlled from" chip), as soon as they attach.
+        var following = new BlockingCollection<int>();
+        hub.AttachmentsChanged += () => following.Add(hub.ControllersOf(session.Sid).Count);
+        workerLink.PeerName = "controller-box";
+
         var first = connection.Attach(connection.Sessions[0]);
         first.Start();
+        Assert.Equal(1, following.Take(new CancellationTokenSource(Timeout).Token));
+        Assert.Equal(("controller-box", "controller-pin"), Assert.Single(hub.ControllersOf(session.Sid)));
+
         var stopped = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         first.Exited += (code, _) => stopped.TrySetResult(code);
         first.Stop();
         Assert.Equal(0, await stopped.Task.WaitAsync(Timeout));
+        Assert.Equal(0, following.Take(new CancellationTokenSource(Timeout).Token));   // detached: no longer followed
         Assert.False(session.HasCommands);   // nothing was sent to end the worker's session
 
         var second = connection.Attach(connection.Sessions[0]);
@@ -305,6 +314,7 @@ public class RemoteSessionTests
         second.Exited += (_, why) => lost.TrySetResult(why);
         hub.DisconnectAll();
         Assert.Contains("lost the connection to worker-box", await lost.Task.WaitAsync(Timeout));
+        Assert.Empty(hub.ControllersOf(session.Sid));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -368,9 +378,9 @@ public class RemoteSessionTests
         public void Answer(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput, string fromName) =>
             _commands.Add(("answer", $"{requestId}|{allow}|{denyMessage}"));
         public void Interrupt(string fromName) => _commands.Add(("interrupt", fromName));
-        public void SetPermissionMode(string mode) => _commands.Add(("mode", mode));
-        public void SetModel(string model) => _commands.Add(("model", model));
-        public void SetEffort(string level) => _commands.Add(("effort", level));
-        public void StopTask(string taskId) => _commands.Add(("stopTask", taskId));
+        public void SetPermissionMode(string mode, string fromName) => _commands.Add(("mode", mode));
+        public void SetModel(string model, string fromName) => _commands.Add(("model", model));
+        public void SetEffort(string level, string fromName) => _commands.Add(("effort", level));
+        public void StopTask(string taskId, string fromName) => _commands.Add(("stopTask", taskId));
     }
 }

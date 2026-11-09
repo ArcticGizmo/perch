@@ -46,6 +46,10 @@ internal sealed class WorkerServer : IDisposable
     /// <summary>Asks the user whether to pair (raised off the UI thread; the handler marshals). Unset denies.</summary>
     public Func<PairingRequest, Task<bool>>? ApprovePairing { get; set; }
 
+    /// <summary>Why a paired controller may not connect right now (the user just disconnected it), or null to let it in.
+    /// Checked after its hello, so it hears the reason.</summary>
+    public Func<string, string?>? RefuseReason { get; set; }
+
     /// <summary>The user allowed a controller: persist it.</summary>
     public event Action<PairedDevice>? Paired;
 
@@ -153,6 +157,11 @@ internal sealed class WorkerServer : IDisposable
             if (VersionOf(first!) != RemoteLink.Version)
             {
                 await Refuse(link, $"this machine runs a different Perch protocol (v{RemoteLink.Version}); update both");
+                return;
+            }
+            if (RefuseReason?.Invoke(link.PeerPin) is { } why)
+            {
+                await Refuse(link, why);
                 return;
             }
             link.PeerName = RemoteLink.CleanName(RemoteLink.Str(first, "name") ?? controller.Name);

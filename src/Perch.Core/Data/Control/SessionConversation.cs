@@ -21,6 +21,9 @@ internal sealed class UserMessageItem(string text, IReadOnlyList<MessageAttachme
 
     /// <summary>Typed on a Remote Control client (claude.ai / the phone), not in a Perch.</summary>
     public bool Remote { get; init; }
+
+    /// <summary>Sent by a paired machine driving this session (docs/remote-workers-plan.md): its name.</summary>
+    public string? From { get; init; }
 }
 
 internal enum NoteKind { Info, Error }
@@ -769,9 +772,10 @@ internal sealed class SessionConversation
 
     /// <summary>Records a prompt the user sent (the controller already wrote it to the CLI), with any
     /// attachments for display.</summary>
-    public void AddUserPrompt(string text, IReadOnlyList<MessageAttachment>? attachments = null, string? uuid = null)
+    public void AddUserPrompt(string text, IReadOnlyList<MessageAttachment>? attachments = null, string? uuid = null,
+        string? from = null)
     {
-        Append(new UserMessageItem(text, attachments) { Uuid = uuid });
+        Append(new UserMessageItem(text, attachments) { Uuid = uuid, From = from });
         _suppressNextResultContext = false;   // a genuine new turn: its result's context is real again
         if (TurnActive) QueuedPrompts++; else TurnActive = true;
         // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,

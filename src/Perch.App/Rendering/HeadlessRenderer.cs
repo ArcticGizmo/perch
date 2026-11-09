@@ -2844,6 +2844,22 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // A paired machine driving this session (remote workers W5): the "controlled from" chip in the bar, its prompt
+        // labelled with its name, and the quiet note its answer left.
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.PoseControlledForRender("laptop");
+            w.Show();
+            for (int i = 0; i < 2; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "session_controlled_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         RenderBackgroundTasks(outDir, cwd);
         RenderAgentReport(outDir, cwd);
 

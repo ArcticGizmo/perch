@@ -191,11 +191,25 @@ Roost panes), never run live.
 - **Not done:** notifications (done, input) for remote sessions, since the monitor that raises them only sees this
   machine's scan; dropped *files* in a remote prompt send their local path as text (images travel fine).
 
-### W5 - Worker-side visibility
-- "Controlled from <name>" chip on the worker's session window and overlay row while a controller is attached.
-- Tray/overlay menu: "Disconnect remote controllers".
-- A short log of remote commands (prompt sent, permission answered, interrupt) in the session thread as quiet notes,
-  so the worker's user sees what was done from elsewhere.
+### W5 - Worker-side visibility - built 2026-11-09
+Status: built, render-checked (`session_controlled_1x.png`), never run live.
+- **Who's following.** `WorkerSessionHub` tracks which controller follows which session (`ControllersOf`,
+  `AttachmentsChanged`); `WorkerHost` pushes the names onto each offered `PerchSession.ControlledFrom`, and the app
+  marks the session's row (`ClaudeSession.ControlledFrom`, App.Workers.cs).
+  - Session window: a "⇄ controlled from <name>" chip in the bar; click → Disconnect.
+  - Overlay row: the second line reads "controlled from <name>" (or "from <name> · <activity>"); the row menu has
+    "Disconnect remote controllers".
+  - Roost pane: origin "◆ Perch · from <name>".
+  - Tray: "Disconnect <name>" / "Disconnect N remote controllers", present only while one is connected.
+- **What they did, in the thread.** A controller's prompt carries "↗ from <name>" under the bubble (where Remote Control's
+  "via Remote Control" goes); images it sent add "with N images". Its answers leave "<name> allowed Bash" / "denied" /
+  "answered", an interrupt "<name> interrupted", a stopped task "<name> stopped a background task", a mode switch
+  "<name> switched the permission mode to plan", and model/effort notes gain "(from <name>)".
+- **Disconnect holds them off for 10 minutes.** Without that, the controller's automatic reconnect (and an open Roost
+  re-attaching) would undo the click within seconds. A held-off controller is refused after its hello with
+  "<worker> disconnected this machine; it can reconnect after HH:MM", which its Settings shows as the reason it's
+  offline; the worker's Settings row says "Disconnected by you · can reconnect after HH:MM". Keeping one out for good is
+  Remove, or turning the worker toggle off. There's no "allow back now"; it was left out to keep this small.
 
 ### W6 - Hardening and docs
 Reconnect/liveness (heartbeat every 20 s, drop after 60 s), slots for unauthenticated handshakes counted separately

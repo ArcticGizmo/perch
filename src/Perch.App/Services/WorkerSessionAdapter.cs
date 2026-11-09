@@ -28,16 +28,16 @@ internal sealed class WorkerSessionAdapter(PerchSession session) : IWorkerSessio
     }
 
     public void SendPrompt(string text, IReadOnlyList<ImageContent>? images, string uuid, string fromName) =>
-        Post(() => Session.SendFromController(text, images, uuid));
+        Post(() => Session.SendFromController(text, images, uuid, fromName));
 
     public void Answer(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput, string fromName) =>
-        Post(() => Session.AnswerFromController(requestId, allow, denyMessage, updatedInput));
+        Post(() => Session.AnswerFromController(requestId, allow, denyMessage, updatedInput, fromName));
 
-    public void Interrupt(string fromName) => Post(Session.Interrupt);
-    public void SetPermissionMode(string mode) => Post(() => Session.SetPermissionMode(mode));
-    public void SetModel(string model) => Post(() => Session.SetModel(model));
-    public void SetEffort(string level) => Post(() => Session.SetEffort(level));
-    public void StopTask(string taskId) => Post(() => Session.StopTaskById(taskId));
+    public void Interrupt(string fromName) => Post(() => Session.InterruptFromController(fromName));
+    public void SetPermissionMode(string mode, string fromName) => Post(() => Session.SetPermissionMode(mode, fromName));
+    public void SetModel(string model, string fromName) => Post(() => Session.SetModel(model, fromName));
+    public void SetEffort(string level, string fromName) => Post(() => Session.SetEffort(level, fromName));
+    public void StopTask(string taskId, string fromName) => Post(() => Session.StopTaskFromController(taskId, fromName));
 
     private void Post(Action action) => Dispatcher.UIThread.Post(() =>
     {

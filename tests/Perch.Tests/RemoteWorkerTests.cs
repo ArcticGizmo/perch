@@ -166,6 +166,25 @@ public class RemoteWorkerTests
         Assert.Equal("hi", RemoteLink.Str(reply, "echo"));
     }
 
+    // A controller the worker's user just disconnected is turned away after its hello, and told why.
+    [Fact]
+    public async Task HeldOffController_HearsWhy()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var worker = new TestIdentity();
+        using var controller = new TestIdentity();
+        var known = new PairedDevice { Name = "c", Pin = controller.Pin, Role = PairedRole.Controller };
+        using var server = new WorkerServer(worker.Cert, () => "worker-box", pin => pin == known.Pin ? known : null)
+        {
+            RefuseReason = pin => pin == controller.Pin ? "worker-box disconnected this machine" : null,
+        };
+        server.Start(IPAddress.Loopback, 0);
+
+        var asWorker = new PairedDevice { Host = "127.0.0.1", Port = server.Port, Pin = worker.Pin, Role = PairedRole.Worker };
+        var ex = await Assert.ThrowsAsync<RemoteLinkException>(() => WorkerClient.ConnectAsync(asWorker, controller.Cert, "c"));
+        Assert.Contains("disconnected this machine", ex.Message);
+    }
+
     // The controller pinned the worker's key: a different machine answering at that address is refused.
     [Fact]
     public async Task WorkerWithAnotherKey_IsRefused()

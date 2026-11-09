@@ -537,10 +537,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _moreButton.Click += ShowMoreMenu;
 
         var barLeft = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14, Children = { crumb } };
+        _controlledChip = BuildControlledChip();
         var barRight = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 10, HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { _statusText, _interruptButton, _resumeButton, _endGroup, _moreButton },
+            Children = { _controlledChip, _statusText, _interruptButton, _resumeButton, _endGroup, _moreButton },
         };
         var bar = new DockPanel { Children = { barRight, barLeft } };
         barRight[DockPanel.DockProperty] = Dock.Right;
@@ -934,6 +935,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         session.Woke += OnSessionWoke;
         session.Restarted += OnSessionRestarted;
         session.ProcessAuthChanged += RefreshAuthBanner;
+        session.ControlledFromChanged += RefreshControlledChip;
         StartAuthBannerTimer();
         // A dormant session resumes its own id on the first send, whichever window it's viewed in.
         if (session.IsDormant) _resumeId = session.SessionId;
@@ -948,6 +950,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         ApplyRunState();
         RefreshBar();
         if (session.IsDormant) ShowDormantEstimate(session);
+        RefreshControlledChip();
         RenderTaskChips();
         if (CanCompose) _composer.Focus();
     }
@@ -964,6 +967,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         s.Woke -= OnSessionWoke;
         s.Restarted -= OnSessionRestarted;
         s.ProcessAuthChanged -= RefreshAuthBanner;
+        s.ControlledFromChanged -= RefreshControlledChip;
         StopAuthBannerTimer();
         _authBanner.IsVisible = false;
         _sendAfterWake = false;
@@ -972,6 +976,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         // subscribed (and rendering deltas) after the window closes.
         _thread.Unbind();
         _session = null;
+        RefreshControlledChip();
         ClearAgents();   // its sub-agents (and any agent tab) belong to the session that just went
         ClearTaskChips();
     }

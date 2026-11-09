@@ -356,6 +356,7 @@ public partial class App : Application
             // replay the projector doubles as the process-probe so recorded (dead) pids read as alive.
             _monitorHost = new SessionMonitorHost(sessions =>
             {
+                sessions = WithControlledMarks(sessions);   // "controlled from" a paired machine (App.Workers.cs)
                 _lastSessions = sessions;
                 var roster = WithRemoteRows(WithDormantRows(sessions));   // + Perch sessions not running, + paired workers'
                 _overlay!.Canvas.Update(roster);
@@ -408,6 +409,7 @@ public partial class App : Application
             _overlay.Canvas.SessionActivated += FocusSession;
             // A not-running Perch session's row (App.DormantRows.cs).
             _overlay.Canvas.DormantEndRequested += s => EndDormant(s.SessionId);
+            _overlay.Canvas.DisconnectControllersRequested += () => _workerHost?.DisconnectControllers();
             _overlay.Canvas.DormantTerminalRequested += s => ResumeDormantInTerminal(s.Cwd, s.SessionId);
             _overlay.Canvas.NewSessionRequested += OpenSessionWindow;   // "+ New session" row → rich session window
             _overlay.Canvas.RoostRequested += OpenRoost;                // …its split-panes button → the Roost
@@ -575,6 +577,7 @@ public partial class App : Application
                     PushOverlayRows();
                     RefoldRoost();
                 };
+                _workerHost.ControlledChanged += OnControlledChanged;   // paired machines following sessions here
                 _workerHost.Apply();
                 foreach (var s in _perchSessions.Where(s => !s.IsDormant)) _workerHost.Offer(s);
             }
@@ -2532,6 +2535,7 @@ public partial class App : Application
             ExpectedAccountsProvider = () => _appSettings?.ExpectedAccounts,
             TerminalProvider = () => _appSettings?.ReopenTerminal ?? TerminalApp.Auto,
         };
+        w.DisconnectControllersRequested += () => _workerHost?.DisconnectControllers();
         // The context readout mirrors the floating overlay's context-pressure thresholds so the two read alike
         // (same thermometer glyph, same colour at the same fill).
         var cs = Effective;
@@ -3541,6 +3545,7 @@ public partial class App : Application
             menu.Items.Insert(0, new NativeMenuItem("⚠ " + debugWarning) { IsEnabled = false });
             menu.Items.Insert(1, new NativeMenuItemSeparator());
         }
+        _trayMenu = tray.Menu;   // "Disconnect remote controllers" comes and goes with them (App.Workers.cs)
         // Left-clicking the tray icon opens Settings (matching the WinForms tray); dense mode is toggled
         // via the global hotkey (Alt+Shift+W).
         tray.Clicked += (_, _) => OpenSettings();

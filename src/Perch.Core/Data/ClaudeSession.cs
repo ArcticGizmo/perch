@@ -380,6 +380,10 @@ public record ClaudeSession(
 
     public bool IsRemote => RemoteWorker is not null;
 
+    /// <summary>The paired machines following this machine's own session right now (their names, comma-separated), or
+    /// null. Set by the app, not the scan: someone elsewhere can prompt it and answer its permission cards.</summary>
+    public string? ControlledFrom { get; init; }
+
     /// <summary>The row key of a remote session: its worker's handle behind a mark no pid can start with.</summary>
     public static string RemoteKey(string workerSid) => RemotePrefix + workerSid;
 

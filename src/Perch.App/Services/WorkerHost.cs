@@ -33,7 +33,12 @@ internal sealed class WorkerHost : IDisposable
     {
         _settings = settings;
         _keys = keys;
-        _hub.ControllersChanged += () => Dispatcher.UIThread.Post(() => Changed?.Invoke());
+        _hub.ControllersChanged += () => Dispatcher.UIThread.Post(() =>
+        {
+            RefreshControlledFrom();
+            Changed?.Invoke();
+        });
+        _hub.AttachmentsChanged += () => Dispatcher.UIThread.Post(RefreshControlledFrom);
         Workers = new WorkerLinks(Identity, () => DeviceName);
         Workers.Changed += () => Changed?.Invoke();
     }
@@ -118,6 +123,7 @@ internal sealed class WorkerHost : IDisposable
         var server = new WorkerServer(identity, () => DeviceName, FindController)
         {
             ApprovePairing = ApprovePairing,
+            RefuseReason = RefuseHeldOut,
         };
         server.Paired += device => Dispatcher.UIThread.Post(() => Remember(device));
         server.ControllerConnected += _hub.Serve;
@@ -246,6 +252,55 @@ internal sealed class WorkerHost : IDisposable
             Republish();
         };
         Republish();
+    }
+
+    /// <summary>Which paired machines follow which session, or how many are connected, changed (UI thread).</summary>
+    public event Action? ControlledChanged;
+
+    /// <summary>The names of the controllers connected now, one per connection.</summary>
+    public IReadOnlyList<string> ConnectedControllerNames => _hub.ConnectedNames();
+
+    /// <summary>How long a controller the user disconnected is turned away: long enough that its automatic reconnect (and
+    /// an open Roost re-attaching) doesn't undo the click, short enough not to need an "allow back" control. Keeping
+    /// one out for good is Remove in Settings, or the toggle.</summary>
+    public static readonly TimeSpan DisconnectHold = TimeSpan.FromMinutes(10);
+
+    private readonly Dictionary<string, DateTime> _heldOutUntilUtc = new(StringComparer.Ordinal);
+
+    /// <summary>Drops every connected controller (the user's "disconnect remote controllers") and holds them off for
+    /// <see cref="DisconnectHold"/>. Their open views end.</summary>
+    public void DisconnectControllers()
+    {
+        var until = DateTime.UtcNow + DisconnectHold;
+        lock (_heldOutUntilUtc)
+            foreach (var pin in _hub.ConnectedPins()) _heldOutUntilUtc[pin] = until;
+        _hub.DisconnectAll();
+        Changed?.Invoke();
+    }
+
+    /// <summary>When a controller the user disconnected may connect again, or null when it isn't held off.</summary>
+    public DateTime? HeldOutUntilUtc(string pin)
+    {
+        lock (_heldOutUntilUtc)
+        {
+            if (!_heldOutUntilUtc.TryGetValue(pin, out var until)) return null;
+            if (until > DateTime.UtcNow) return until;
+            _heldOutUntilUtc.Remove(pin);
+            return null;
+        }
+    }
+
+    // Called on the listener's thread for each paired controller's hello.
+    private string? RefuseHeldOut(string pin) => HeldOutUntilUtc(pin) is { } until
+        ? $"{DeviceName} disconnected this machine; it can reconnect after {until.ToLocalTime():t}"
+        : null;
+
+    // Tells each offered session which machines follow it, for its "controlled from" chip.
+    private void RefreshControlledFrom()
+    {
+        foreach (var a in _offered.Values)
+            a.Session.SetControlledFrom([.. _hub.ControllersOf(a.Sid).Select(c => c.Name).Distinct()]);
+        ControlledChanged?.Invoke();
     }
 
     // Sends controllers the list when what they'd see changed. StateChanged fires at every turn boundary, so the list is

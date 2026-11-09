@@ -960,7 +960,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
                 ? new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Children = { bubble, tray } }
                 : tray;
         }
-        if (u.Remote)
+        if (u.From is not null || u.Remote)
             middle = new StackPanel
             {
                 HorizontalAlignment = HorizontalAlignment.Right,
@@ -969,7 +969,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
                     middle,
                     new TextBlock
                     {
-                        Text = "↗ via Remote Control", FontSize = 11, Foreground = _p.Faint,
+                        Text = u.From is { } from ? $"↗ from {from}" : "↗ via Remote Control", FontSize = 11, Foreground = _p.Faint,
                         HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 3, 2, 0),
                     },
                 },

@@ -251,6 +251,12 @@ internal sealed partial class SettingsWindow
                 Text = $"{detail}key {DeviceTrust.Fingerprint(d.Pin)} · paired {d.AddedUtc.ToLocalTime():d MMM yyyy}",
                 FontSize = 12, Foreground = Palette.MutedBrush,
             });
+            if (d.Role == PairedRole.Controller && host.HeldOutUntilUtc(d.Pin) is { } until)
+                text.Children.Add(new TextBlock
+                {
+                    Text = $"Disconnected by you · can reconnect after {until.ToLocalTime():t}",
+                    FontSize = 12, Foreground = Palette.MutedBrush,
+                });
             if (d.Role == PairedRole.Worker && host.Workers.ByPin(d.Pin) is { } link)
                 text.Children.Add(new TextBlock
                 {

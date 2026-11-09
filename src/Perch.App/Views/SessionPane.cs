@@ -344,6 +344,7 @@ internal sealed class SessionPane : Border
         _dot.Fill = _p.PaneDot(pane);
 
         var (origin, perch) = s.RemoteWorker is { } worker ? ($"◆ Perch · {worker}", true)
+            : s.ControlledFrom is { } from ? ($"◆ Perch · from {from}", true)
             : s.IsPerchControlled ? ("◆ Perch", true)
             : s.IdeHost is { } ide ? (ShortIde(ide), false)
             : s.IsDesktop ? ("Desktop", false)

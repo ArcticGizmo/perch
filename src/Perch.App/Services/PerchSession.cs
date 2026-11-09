@@ -487,31 +487,32 @@ internal sealed class PerchSession : IDisposable
     /// <summary>Switches the permission mode for the rest of the session. The displayed mode updates
     /// optimistically (the CLI defers the <c>set_permission_mode</c> ack until the next turn, so waiting on it
     /// leaves the pill stale); the ack's own "permission mode → X" note still lands when it arrives.</summary>
-    public void SetPermissionMode(string mode)
+    public void SetPermissionMode(string mode, string? by = null)
     {
         if (_controller is not { IsRunning: true } c) return;
         c.SetPermissionMode(mode);
         PermissionMode = mode;
+        if (by is not null) Conversation.AddNote($"{by} switched the permission mode to {mode}");
         Conversation.SetSessionId(SessionId);   // nudge StateChanged so the mode pill refreshes now
     }
 
     /// <summary>Switches the model for the rest of the session (control request; no ack is surfaced).</summary>
-    public void SetModel(string model)
+    public void SetModel(string model, string? by = null)
     {
         if (_controller is not { IsRunning: true } c) return;
         c.SetModel(model);
         Model = model;
-        Conversation.AddNote($"model → {model}");
+        Conversation.AddNote(by is null ? $"model → {model}" : $"model → {model} (from {by})");
         Conversation.SetSessionId(SessionId);   // nudge StateChanged so pills refresh
     }
 
     /// <summary>Sets the effort level for the rest of the session (sends <c>/effort &lt;level&gt;</c>).</summary>
-    public void SetEffort(string level)
+    public void SetEffort(string level, string? by = null)
     {
         if (_controller is not { IsRunning: true } c) return;
         c.SetEffort(level);
         Effort = level == "auto" ? null : level;
-        Conversation.AddNote($"effort → {level}");
+        Conversation.AddNote(by is null ? $"effort → {level}" : $"effort → {level} (from {by})");
         Conversation.SetSessionId(SessionId);
     }
 
@@ -530,20 +531,24 @@ internal sealed class PerchSession : IDisposable
 
     // ── Commands from a paired controller (docs/remote-workers-plan.md, W3) ──────────────────────────────────────
 
+    // What a paired controller does here is shown in the thread, so the person at this machine can see it: its prompts
+    // carry its name, and everything else leaves a quiet note.
+
     /// <summary>A prompt a paired controller sent, under its uuid: the controller already shows it, and the CLI's echo
     /// (which this machine drops as its own) reaches the controller with the same id.</summary>
-    internal void SendFromController(string text, IReadOnlyList<ImageContent>? images, string uuid)
+    internal void SendFromController(string text, IReadOnlyList<ImageContent>? images, string uuid, string from)
     {
         if (IsRemote || _controller is not { IsRunning: true } c) return;
         c.SendPrompt(text, images, uuid);
         _resumeAt = null;
-        Conversation.AddUserPrompt(text, null, uuid);
+        Conversation.AddUserPrompt(text, null, uuid, from);
+        if (images is { Count: > 0 } sent) Conversation.AddNote(sent.Count == 1 ? "with 1 image" : $"with {sent.Count} images");
         if (RenameArg(text) is { } title) SetTitle(title);
     }
 
     /// <summary>A paired controller's answer to the card <paramref name="requestId"/>, if it is still pending here.
     /// Edited input is taken only for a question card (its answers); any other tool runs with the input it asked about.</summary>
-    internal void AnswerFromController(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput)
+    internal void AnswerFromController(string requestId, bool allow, string? denyMessage, JsonNode? updatedInput, string from)
     {
         if (IsRemote || _controller is not { IsRunning: true } c) return;
         var item = Conversation.Items.OfType<PermissionItem>().LastOrDefault(p => p.Request.RequestId == requestId);
@@ -553,16 +558,42 @@ internal sealed class PerchSession : IDisposable
             c.RespondToPermission(item.Request, allow: true, updatedInput: updatedInput);
             Conversation.ResolvePermission(item, allowed: true,
                 answerSummary: AskUserQuestionInput.SummariseReply(item.Request.InputJson, updatedInput.ToJsonString()));
+            Conversation.AddNote($"{from} answered");
             return;
         }
         c.RespondToPermission(item.Request, allow, denyMessage);
         Conversation.ResolvePermission(item, allow);
+        Conversation.AddNote($"{from} {(allow ? "allowed" : "denied")} {item.Request.ToolName}");
+    }
+
+    /// <summary>A paired controller interrupted the turn.</summary>
+    internal void InterruptFromController(string from)
+    {
+        if (IsRemote || !IsRunning) return;
+        if (Conversation.TurnActive) Conversation.AddNote($"{from} interrupted");
+        Interrupt();
     }
 
     /// <summary>Stops a background task by id (a controller names it; this machine's task list may not have it yet).</summary>
-    internal void StopTaskById(string taskId)
+    internal void StopTaskFromController(string taskId, string from)
     {
-        if (IsRunning) _controller?.StopTask(taskId);
+        if (IsRemote || !IsRunning) return;
+        Conversation.AddNote($"{from} stopped a background task");
+        _controller?.StopTask(taskId);
+    }
+
+    /// <summary>The paired machines following this session now, by name; empty when none. Drives the "controlled
+    /// from" chip on its window and its overlay row.</summary>
+    public IReadOnlyList<string> ControlledFrom { get; private set; } = [];
+
+    /// <summary><see cref="ControlledFrom"/> changed (UI thread).</summary>
+    public event Action? ControlledFromChanged;
+
+    internal void SetControlledFrom(IReadOnlyList<string> names)
+    {
+        if (names.SequenceEqual(ControlledFrom)) return;
+        ControlledFrom = names;
+        ControlledFromChanged?.Invoke();
     }
 
     /// <summary>Enables/disables Remote Control for the live session (the CLI's <c>remote_control</c> control

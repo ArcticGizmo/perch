@@ -1636,6 +1636,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// holding it, and the row goes.</summary>
     public event Action<ClaudeSession>? DormantEndRequested;
 
+    /// <summary>"Disconnect remote controllers" on a row a paired machine is driving (docs/remote-workers-plan.md, W5).</summary>
+    public event Action? DisconnectControllersRequested;
+
     /// <summary>"Resume in terminal" on a not-running Perch session's row: <c>claude --resume</c> in a terminal.</summary>
     public event Action<ClaudeSession>? DormantTerminalRequested;
 
@@ -1855,9 +1858,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string? activity = running
             ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
             : awaiting ? "waiting on you" : null;
-        // A session on a paired worker always says which machine it's on.
+        // A session on a paired worker always says which machine it's on; one of this machine's says who else drives it.
         if (session.RemoteWorker is { } worker)
             activity = activity is null || session.RemoteOffline ? $"on {worker}" : $"{worker} · {activity}";
+        else if (session.ControlledFrom is { } from)
+            activity = activity is null ? $"controlled from {from}" : $"from {from} · {activity}";
         string? elapsed  = running ? session.RunningElapsedLabel()
                          : awaiting ? session.AwaitingElapsedLabel() : null;
         return (activity, elapsed);
@@ -5058,6 +5063,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // 1. Primary view. History works on any row (a sub-agent resolves to its parent). QR for a
             //    remote-controlled session.
             var view = new List<Control> { MenuItem("View history", () => HistoryRequested?.Invoke(s.SessionId)) };
+            if (s.ControlledFrom is not null)
+                view.Add(MenuItem("Disconnect remote controllers", () => DisconnectControllersRequested?.Invoke()));
             if (s.RemoteControlled)
                 view.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
             // Read state: an idle session can be flagged "done" again to come back to later; a done one can be
