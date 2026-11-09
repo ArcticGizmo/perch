@@ -636,6 +636,14 @@ internal sealed partial class RoostWindow : Window
                 feed.Dispose();
                 _feeds.Remove(pane.Key);
             }
+            // A session on a paired worker: none yet (its worker was offline), or its link dropped. Once the worker is
+            // reachable again the pane attaches afresh; while it isn't, the old view stays up with its last messages.
+            if (pane.Session.IsRemote && !pane.Ended && !pane.Session.RemoteOffline
+                && _feeds.TryGetValue(pane.Key, out var remote) && remote is null or { IsStale: true })
+            {
+                remote?.Dispose();
+                _feeds.Remove(pane.Key);
+            }
             if (!_feeds.ContainsKey(pane.Key)) _feeds[pane.Key] = _feedFactory(pane);
 
             if (!_views.ContainsKey(pane.Key))

@@ -343,7 +343,8 @@ internal sealed class SessionPane : Border
         _name.Text = s.DisplayName;
         _dot.Fill = _p.PaneDot(pane);
 
-        var (origin, perch) = s.IsPerchControlled ? ("◆ Perch", true)
+        var (origin, perch) = s.RemoteWorker is { } worker ? ($"◆ Perch · {worker}", true)
+            : s.IsPerchControlled ? ("◆ Perch", true)
             : s.IdeHost is { } ide ? (ShortIde(ide), false)
             : s.IsDesktop ? ("Desktop", false)
             : ("▣ terminal", false);
@@ -375,6 +376,7 @@ internal sealed class SessionPane : Border
         var s = pane.Session;
         if (pane.Dormant is { } dormant) return DormantPillText(dormant);
         if (pane.EndedAt is { } ended) return $"Ended {Ago(ended)}";
+        if (s.RemoteOffline) return "Offline";
         var status = s.Status switch
         {
             SessionStatus.AwaitingInput => s.AwaitingElapsedLabel() is { } w ? $"Needs your input · {w}" : "Needs your input",
@@ -593,7 +595,10 @@ internal sealed class SessionPane : Border
         _miniLines.Children.Clear();
         if (_feed is null || _feed.IsLoading)
         {
-            _miniLines.Children.Add(MiniLine("", _feed is null ? "No transcript found" : "Loading…", _p.Faint, _p.Faint));
+            var empty = _feed is not null ? "Loading…"
+                : _pane?.Session.RemoteWorker is { } worker ? $"Waiting for {worker} to be reachable"
+                : "No transcript found";
+            _miniLines.Children.Add(MiniLine("", empty, _p.Faint, _p.Faint));
             return;
         }
         bool running = _pane is { Ended: false, Session.Status: SessionStatus.Running };
@@ -645,10 +650,14 @@ internal sealed class SessionPane : Border
         if (_pane is not { } pane) return;
         bool perch = pane.Session.IsPerchControlled;                        // by origin: opens its window
         bool dormant = pane.IsDormant;
-        bool canReply = dormant ? CanWake : perch && !pane.Ended && _feed is { IsControlled: true };
+        // A session on a paired worker takes replies only while its link is up.
+        bool linked = !pane.Session.RemoteOffline && _feed is not { IsStale: true };
+        bool canReply = dormant ? CanWake : perch && !pane.Ended && linked && _feed is { IsControlled: true };
         _composer.IsVisible = canReply;
         _footerNote.IsVisible = !canReply;
-        _footerNote.Text = dormant ? "Not running" : pane.Ended ? "Session ended" : perch ? "Perch session" : "Tailing · read-only";
+        _footerNote.Text = dormant ? "Not running" : pane.Ended ? "Session ended"
+            : pane.Session.RemoteWorker is { } worker ? (linked ? $"Perch session on {worker}" : $"{worker} is offline")
+            : perch ? "Perch session" : "Tailing · read-only";
         ToolTip.SetTip(_composer, dormant ? "Claude isn't running — your first message resumes this session" : null);
         if (dormant)
             _composer.PlaceholderText = IsWaking ? "Starting Claude…" : "Message to resume…";

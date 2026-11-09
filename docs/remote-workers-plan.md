@@ -161,8 +161,9 @@ NDJSON frames, each `{"t": type, …}`. Versioned in `hello`.
 - **Known gap:** a rewind on the worker restarts its process, but the journal keeps the dropped branch, so a controller
   that attaches afterwards sees it. Rewind isn't reachable from a controller.
 
-### W4 - Controller UI - built 2026-11-09 (overlay and session window; Roost still to do)
-Status: built, render-checked (`render` shows an online and an offline remote row), never run live.
+### W4 - Controller UI - built 2026-11-09
+Status: built, render-checked (`render` shows an online and an offline remote row, and `roost_remote_1x.png` the two as
+Roost panes), never run live.
 - **Connections.** `Services/WorkerLinks` (owned by `WorkerHost`) keeps a link to every paired worker while Perch runs;
   pairing is the opt-in, so there's no separate switch. A failed or dropped link retries after 2 s, 5 s, 15 s, 30 s,
   then every minute. Settings → Workers shows each worker as connected (with its session count), connecting, or
@@ -180,9 +181,15 @@ Status: built, render-checked (`render` shows an online and an offline remote ro
   Resume, hand-back, open folder/terminal, the changed-files panel, the branch pill, the account chip, `@`-mention file
   scan, file-ref clicks, rewind/fork, and `/rewind`, `/fork`, `/rc`, `/login`, `/logout` (each says it works at the
   worker). A lost link ends the view with "lost the connection to <worker>".
-- **Not done:** remote panes in the Roost; notifications (done, input) for remote sessions, since the monitor that
-  raises them only sees this machine's scan; dropped *files* in a remote prompt send their local path as text (images
-  travel fine).
+- **The Roost.** Remote rows join the roster with every scan and whenever a worker's list changes, so each gets a
+  pane (and a rail entry) like a Perch session here: the header's origin reads "◆ Perch · <worker>", replies, cards,
+  Enter-to-allow and Esc-to-interrupt go over the link. The pane's feed is the same shared `PerchSession` a window
+  uses (`App.RemoteSessionFor`), and counts as a viewer, so the link stays attached while a pane shows it and detaches
+  once neither a pane nor a window does. Offline: the pill says "Offline", the composer goes, and a pane that never
+  attached reads "Waiting for <worker> to be reachable". When the worker is back, a pane whose link dropped
+  (`RoostFeed.IsStale`) attaches afresh. A session the worker ends lingers as an ended pane, as a local one does.
+- **Not done:** notifications (done, input) for remote sessions, since the monitor that raises them only sees this
+  machine's scan; dropped *files* in a remote prompt send their local path as text (images travel fine).
 
 ### W5 - Worker-side visibility
 - "Controlled from <name>" chip on the worker's session window and overlay row while a controller is attached.

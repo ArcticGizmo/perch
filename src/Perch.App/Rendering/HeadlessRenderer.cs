@@ -1070,6 +1070,7 @@ internal static class HeadlessRenderer
         // The Roost window (docs/roost-tabs-plan.md): rail + tab strip + the active tab's regions over the sample
         // roster — every status, Perch and terminal/IDE origins, tab lights, empty regions and the Focus tab.
         RenderRoost(outDir);
+        RenderRoostRemote(outDir);
 
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
@@ -2063,12 +2064,13 @@ internal static class HeadlessRenderer
     }
 
     // The sample roster as the Roost sees it (autonomous runs excluded), with "api" made a Perch-driven session
-    // blocked on a permission, and live timers so the pills read like the real thing.
+    // blocked on a permission, and live timers so the pills read like the real thing. Remote workers' sessions have their
+    // own capture (RenderRoostRemote).
     internal static IReadOnlyList<ClaudeSession> RoostSampleSessions()
     {
         var now = Clock.Now;
         return SampleData.Sessions()
-            .Where(s => !s.IsBackground)
+            .Where(s => !s.IsBackground && !s.IsRemote)
             .Select(s => s.ProjectName switch
             {
                 "api" => s with { PerchControlled = true, AwaitingSince = now.AddMinutes(-2), Model = "claude-opus-5" },
@@ -2143,6 +2145,38 @@ internal static class HeadlessRenderer
     private static void PumpRoost()
     {
         for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+    }
+
+    // Remote workers in the Roost (docs/remote-workers-plan.md, W4): a reachable worker's session takes replies, and its
+    // footer names the machine; an offline worker's pane waits for it.
+    private static void RenderRoostRemote(string outDir)
+    {
+        var now = Clock.Now;
+        var sessions = new List<ClaudeSession>
+        {
+            new(ClaudeSession.RemoteKey("r1"), "s12", SessionStatus.Running, @"C:\src\mobile", "mobile", now,
+                Title: "Push notifications", PerchControlled: true) { RemoteWorker = "studio-pc" },
+            new(ClaudeSession.RemoteKey("r2"), "s13", SessionStatus.Idle, "/Users/sam/src/site", "site", now,
+                PerchControlled: true) { RemoteWorker = "macbook", RemoteOffline = true },
+        };
+        var roster = new Perch.Data.Roost.RoostRoster();
+        roster.Update(sessions, now);
+        var tabs = new Perch.Data.Roost.RoostTabSet();
+        tabs.Sync(roster.Panes);
+        tabs.Activate(tabs.CreateDefault(roster.Panes, 1.6)!.Id);
+        var w = new Windows.RoostWindow(roster, tabs,
+            pane => pane.Session.RemoteOffline ? null
+                : RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId, controlled: true),
+            SessionPalette.For(true))
+        { Width = 1100, Height = 600 };
+        w.Show();
+        PumpRoost();
+        if (w.CaptureRenderedFrame() is { } frame)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "roost_remote_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
     }
 
     private static void RenderRoost(string outDir)

@@ -44,20 +44,24 @@ public partial class App
     /// <summary>A remote row's click: its session in a window, attaching to it on first open.</summary>
     private void OpenRemoteRow(ClaudeSession row)
     {
-        if (ClaudeSession.RemoteSidOf(row.Pid) is not { } sid) return;
-        if (_remoteSessions.TryGetValue(sid, out var open) && !open.HasEnded)
-        {
-            ShowSessionView(open);
-            return;
-        }
-        if (_workerHost?.Workers.FindSession(sid) is not { } found) return;
+        if (RemoteSessionFor(row, sayIfOffline: true) is { } session) ShowSessionView(session);
+    }
+
+    /// <summary>The remote session behind a row, shared by every window and Roost pane showing it: the one already
+    /// attached, else a new attach. Null when its worker isn't connected or no longer lists it.</summary>
+    private PerchSession? RemoteSessionFor(ClaudeSession row, bool sayIfOffline = false)
+    {
+        if (ClaudeSession.RemoteSidOf(row.Pid) is not { } sid) return null;
+        if (_remoteSessions.TryGetValue(sid, out var open) && !open.HasEnded) return open;
+        if (_workerHost?.Workers.FindSession(sid) is not { } found) return null;
         var (worker, info) = found;
         if (worker.Connection is not { IsConnected: true } connection)
         {
-            _notifier?.Show($"{worker.Name} is offline",
-                $"Perch keeps trying to reach it{(worker.Problem is { Length: > 0 } why ? $" (last time: {why})" : "")}. " +
-                "Its sessions open once it's back.", ToastLevel.Info, null, null);
-            return;
+            if (sayIfOffline)
+                _notifier?.Show($"{worker.Name} is offline",
+                    $"Perch keeps trying to reach it{(worker.Problem is { Length: > 0 } why ? $" (last time: {why})" : "")}. " +
+                    "Its sessions open once it's back.", ToastLevel.Info, null, null);
+            return null;
         }
         var backend = connection.Attach(info);
         var session = PerchSession.ForBackend(backend, new SessionLaunchOptions(info.Cwd, info.Model, info.Mode, info.Effort),
@@ -66,16 +70,35 @@ public partial class App
         session.Ended += s =>
         {
             if (_remoteSessions.TryGetValue(sid, out var current) && ReferenceEquals(current, s)) _remoteSessions.Remove(sid);
+            _remoteFeeds.Remove(s);
         };
         backend.Start();   // after ForBackend wired its events, so the catch-up lands in the conversation
-        ShowSessionView(session);
+        return session;
     }
 
-    // A remote session nobody is looking at stops following its worker: there's no process here to keep alive, and the
-    // overlay row reads its state from the worker's list, not from this stream. Opening the row again re-attaches.
+    // How many Roost panes show each remote session: a pane is a view too, so its session stays attached.
+    private readonly Dictionary<PerchSession, int> _remoteFeeds = [];
+
+    /// <summary>A Roost pane's feed for a remote row: the shared session's live conversation. Null while its worker is
+    /// offline; the Roost asks again once it's back.</summary>
+    private RoostFeed? RemoteRoostFeed(ClaudeSession row)
+    {
+        if (RemoteSessionFor(row) is not { } session) return null;
+        _remoteFeeds[session] = _remoteFeeds.GetValueOrDefault(session) + 1;
+        return RoostFeed.ForControlled(session, () =>
+        {
+            if (_remoteFeeds.TryGetValue(session, out var n) && --n > 0) _remoteFeeds[session] = n;
+            else _remoteFeeds.Remove(session);
+            DetachUnviewedRemoteSessions();
+        });
+    }
+
+    // A remote session nobody is looking at (no window, no Roost pane) stops following its worker: there's no process
+    // here to keep alive, and the overlay row reads its state from the worker's list, not from this stream. Opening it
+    // again re-attaches.
     private void DetachUnviewedRemoteSessions()
     {
         foreach (var s in _remoteSessions.Values.ToList())
-            if (!_sessionWindows.Any(w => ReferenceEquals(w.Session, s))) s.End();
+            if (!_remoteFeeds.ContainsKey(s) && !_sessionWindows.Any(w => ReferenceEquals(w.Session, s))) s.End();
     }
 }

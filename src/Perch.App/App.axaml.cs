@@ -569,7 +569,12 @@ public partial class App : Application
             if (_appSettings is { } workerSettings)
             {
                 _workerHost = new Services.WorkerHost(workerSettings, PlatformServices.DeviceKeys) { AskUser = AskToPairController };
-                _workerHost.Workers.Changed += PushOverlayRows;   // the sessions on this machine's workers (App.RemoteRows.cs)
+                // The sessions on this machine's workers, between scans (App.RemoteRows.cs): overlay rows and Roost panes.
+                _workerHost.Workers.Changed += () =>
+                {
+                    PushOverlayRows();
+                    RefoldRoost();
+                };
                 _workerHost.Apply();
                 foreach (var s in _perchSessions.Where(s => !s.IsDormant)) _workerHost.Offer(s);
             }
@@ -1842,7 +1847,8 @@ public partial class App : Application
     // The dormant panes (App.RoostDormant.cs) fold in with every scan too.
     private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
     {
-        var live = sessions.Where(s => !s.IsBackground).ToList();
+        // Sessions on paired workers get panes too (App.RemoteRows.cs).
+        var live = WithRemoteRows(sessions).Where(s => !s.IsBackground).ToList();
         _roostRoster.Update(live, Clock.Now, RoostDormantSessions(live));
         // Before the window's own sync: a take-over (or a dormant pane waking, or a process ending) re-keys a pane, and
         // its region must follow the new key. Persisted cells wait for the dormant set before they're settled.
@@ -1955,17 +1961,20 @@ public partial class App : Application
         s.Save();
     }
 
-    // A Perch-driven session reads its live in-memory conversation; anything else (or a Perch session this
-    // app doesn't own) tails its transcript from disk.
+    // A Perch-driven session reads its live in-memory conversation; one on a paired worker reads it over the link (its
+    // transcript is on that machine); anything else (or a Perch session this app doesn't own) tails its transcript
+    // from disk.
     private RoostFeed? CreateRoostFeed(Perch.Data.Roost.RoostPane pane) =>
-        PerchSessionFor(pane.Session.SessionId) is { } owned
-            ? RoostFeed.ForControlled(owned)
-            : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
+        pane.Session.IsRemote ? RemoteRoostFeed(pane.Session)
+        : PerchSessionFor(pane.Session.SessionId) is { } owned ? RoostFeed.ForControlled(owned)
+        : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
 
-    // The Perch session driving a live (monitor-seen) pane. A dormant one never is: it has no process, and if the same
-    // id is live in a terminal the pane must tail that, not the dormant copy.
+    // The Perch session driving a live (monitor-seen) pane, or a remote one this machine is attached to. A dormant one
+    // never is: it has no process, and if the same id is live in a terminal the pane must tail that, not the dormant copy.
     private Services.PerchSession? PerchSessionFor(string? sessionId) =>
-        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId && !s.IsDormant);
+        sessionId is null ? null
+        : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId && !s.IsDormant)
+          ?? _remoteSessions.Values.FirstOrDefault(s => s.SessionId == sessionId && !s.HasEnded);
 
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,

@@ -77,8 +77,17 @@ internal sealed class RoostFeed : IDisposable
 
     public event Action? Changed;
 
-    public static RoostFeed ForControlled(PerchSession session) =>
-        new(session.Conversation, controlled: true, session.SessionId ?? "");
+    /// <param name="onDispose">Told when the pane lets the session go: a remote session's link is only held while
+    /// something shows it.</param>
+    public static RoostFeed ForControlled(PerchSession session, Action? onDispose = null) =>
+        new(session.Conversation, controlled: true, session.SessionId ?? "") { _session = session, _onDispose = onDispose };
+
+    private PerchSession? _session;
+    private Action? _onDispose;
+
+    /// <summary>A remote session's view whose link has gone: once its worker is back, the pane needs a new feed on a
+    /// fresh attach (docs/remote-workers-plan.md).</summary>
+    public bool IsStale => _session is { IsRemote: true, HasEnded: true };
 
     public static RoostFeed ForFixed(SessionConversation conversation, string sessionId, bool controlled = false) =>
         new(conversation, controlled, sessionId);
@@ -228,5 +237,6 @@ internal sealed class RoostFeed : IDisposable
         Detach(Conversation);
         _tail?.Dispose();
         Changed = null;
+        _onDispose?.Invoke();
     }
 }

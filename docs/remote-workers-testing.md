@@ -89,6 +89,17 @@ Prompt from C: `write the word hello to a file called remote-check.txt`.
   connection. Settings → Workers on C says Offline with the reason
 - [ ] Turn it back on → within a minute C reconnects and the rows come back
 
+### W4-5 - The Roost
+Open the Roost on C (with W's session running).
+- [ ] W's session has a pane and a rail entry; its header reads "◆ Perch · W"
+- [ ] Type a reply in the pane → it runs on W; a permission card in the pane answers with Enter (allow) / Esc (deny)
+- [ ] Esc while it works interrupts it
+- [ ] "Open window" (or the pane menu's Open full window) shows the same conversation in a session window
+- [ ] Close that window → the pane keeps streaming. Close the Roost too → reopen the row: it catches up again
+- [ ] Take W offline → the pane's pill says "Offline" and its composer goes; bring W back → the pane streams again
+  without reopening the Roost
+- [ ] End the session on W → the pane greys to "Ended" and drops after ten minutes
+
 ### W4-4 - Mid-session attach
 - [ ] On W, start a long answer (`count slowly to 200, one number per line`). While it runs, open the row on C → C shows
   what's already there and keeps streaming the rest
