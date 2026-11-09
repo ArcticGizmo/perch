@@ -34,6 +34,17 @@ internal sealed class WorkerHost : IDisposable
         _settings = settings;
         _keys = keys;
         _hub.ControllersChanged += () => Dispatcher.UIThread.Post(() => Changed?.Invoke());
+        Workers = new WorkerLinks(Identity, () => DeviceName);
+        Workers.Changed += () => Changed?.Invoke();
+    }
+
+    /// <summary>This machine's connections to the workers it controls.</summary>
+    public WorkerLinks Workers { get; }
+
+    // Connects to every paired worker and drops the removed ones. Pairing is the opt-in, so there's no separate switch.
+    private void SyncWorkers()
+    {
+        if (IsSupported) Workers.Sync(_settings.PairedDevices ?? []);
     }
 
     /// <summary>Whether this head can take part at all (a device key it can use for TLS).</summary>
@@ -74,6 +85,7 @@ internal sealed class WorkerHost : IDisposable
     /// <summary>Starts, restarts or stops the listener to match the settings. Idempotent.</summary>
     public void Apply()
     {
+        SyncWorkers();
         bool want = IsSupported && _settings.WorkerEnabled;
         SessionJournal.RecordingEnabled = want;
         var target = (Bind: string.IsNullOrWhiteSpace(_settings.WorkerBindAddress) ? null : _settings.WorkerBindAddress!.Trim(),
@@ -187,6 +199,7 @@ internal sealed class WorkerHost : IDisposable
         list.RemoveAll(d => d.Pin == device.Pin && d.Role == device.Role);
         list.Add(device);
         _settings.Save();
+        SyncWorkers();
         Changed?.Invoke();
     }
 
@@ -197,12 +210,14 @@ internal sealed class WorkerHost : IDisposable
         if (_settings.PairedDevices is { Count: 0 }) _settings.PairedDevices = null;
         _settings.Save();
         if (device.Role == PairedRole.Controller) _hub.Disconnect(device.Pin);
+        SyncWorkers();
         Changed?.Invoke();
     }
 
     /// <summary>Makes a new device key: every machine paired with this one has to pair again.</summary>
     public void ResetIdentity()
     {
+        Workers.Sync([]);   // every link uses the old key
         StopServer();
         _keys.Reset();
         _identity?.Dispose();
@@ -252,6 +267,7 @@ internal sealed class WorkerHost : IDisposable
 
     public void Dispose()
     {
+        Workers.Dispose();
         StopServer();
         _identity?.Dispose();
     }

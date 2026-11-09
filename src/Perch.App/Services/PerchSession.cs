@@ -162,11 +162,14 @@ internal sealed class PerchSession : IDisposable
         Woke?.Invoke(this);
     }
 
+    /// <summary>The paired machine a remote session runs on, by name; null for a session on this machine.</summary>
+    public string? WorkerName { get; private init; }
+
     /// <summary>A session another Perch hosts, driven through <paramref name="backend"/>. The backend supplies the
     /// conversation so far itself (its catch-up), so nothing is read from disk here.</summary>
-    internal static PerchSession ForBackend(ISessionBackend backend, SessionLaunchOptions o)
+    internal static PerchSession ForBackend(ISessionBackend backend, SessionLaunchOptions o, string? workerName = null)
     {
-        var session = new PerchSession(backend, o);
+        var session = new PerchSession(backend, o) { WorkerName = workerName };
         session.Wire(backend);
         session.Conversation.SetSessionId(backend.SessionId);
         return session;

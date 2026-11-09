@@ -16,7 +16,16 @@ internal sealed class WorkerSessionAdapter(PerchSession session) : IWorkerSessio
 
     /// <summary>What controllers are told about the session now (UI thread).</summary>
     public WorkerSessionInfo Info() => new(Sid, Session.SessionId, Session.Title, Session.Cwd, Session.Model,
-        Session.PermissionMode, Session.Effort, Session.IsRunning);
+        Session.PermissionMode, Session.Effort, Session.IsRunning, State());
+
+    // As the overlay reads a local Perch session: blocked on someone, mid-turn, or settled.
+    private string State()
+    {
+        var conv = Session.Conversation;
+        return conv.PendingPermission is not null || conv.WaitingElsewhere ? WorkerProtocol.Waiting
+             : conv.TurnActive ? WorkerProtocol.Busy
+             : WorkerProtocol.Idle;
+    }
 
     public void SendPrompt(string text, IReadOnlyList<ImageContent>? images, string uuid, string fromName) =>
         Post(() => Session.SendFromController(text, images, uuid));

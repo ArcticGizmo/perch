@@ -146,6 +146,29 @@ public class RemoteSessionTests
         Assert.Throws<InvalidDataException>(() => WorkerProtocol.ParseImages(ok, 3));   // "hello" is 5 bytes
     }
 
+    [Fact]
+    public void SessionList_RoundTrips_AndReadsAnUnknownStateAsIdle()
+    {
+        var sent = new WorkerSessionInfo("w1", "sess-1", "t", @"C:\p", "m", "plan", "high", true, WorkerProtocol.Waiting);
+        var back = Assert.Single(WorkerProtocol.ParseSessions(WorkerProtocol.SessionsFrame([sent])));
+        Assert.Equal(sent, back);
+
+        var odd = WorkerProtocol.SessionsFrame([sent]);
+        ((JsonObject)((JsonArray)odd["sessions"]!)[0]!)["state"] = "exploding";
+        Assert.Equal(WorkerProtocol.Idle, WorkerProtocol.ParseSessions(odd)[0].State);
+    }
+
+    [Fact]
+    public void RemoteRowKey_RoundTrips_AndIsNeverAPid()
+    {
+        var key = Perch.Data.ClaudeSession.RemoteKey("abc123");
+        Assert.Equal("abc123", Perch.Data.ClaudeSession.RemoteSidOf(key));
+        Assert.Null(Perch.Data.ClaudeSession.RemoteSidOf("12345"));
+        Assert.Null(Perch.Data.ClaudeSession.RemoteSidOf("~dormant"));
+        Assert.Null(Perch.Data.ClaudeSession.RemoteSidOf(null));
+        Assert.False(int.TryParse(key, out _));
+    }
+
     // ── End to end ──────────────────────────────────────────────────────────────
 
     [Fact]

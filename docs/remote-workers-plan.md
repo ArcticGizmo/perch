@@ -161,11 +161,28 @@ NDJSON frames, each `{"t": type, …}`. Versioned in `hello`.
 - **Known gap:** a rewind on the worker restarts its process, but the journal keeps the dropped branch, so a controller
   that attaches afterwards sees it. Rewind isn't reachable from a controller.
 
-### W4 - Controller UI
-- Remote sessions as overlay rows (synthesised like the not-running rows in `App.DormantRows.cs`), labelled with the
-  worker's name; Roost panes the same way.
-- Clicking opens the normal `SessionWindow` on a `PerchSession` backed by `RemoteSessionBackend`.
-- A worker that's unreachable greys its rows ("<name> offline") rather than dropping them; reconnect restores them.
+### W4 - Controller UI - built 2026-11-09 (overlay and session window; Roost still to do)
+Status: built, render-checked (`render` shows an online and an offline remote row), never run live.
+- **Connections.** `Services/WorkerLinks` (owned by `WorkerHost`) keeps a link to every paired worker while Perch runs;
+  pairing is the opt-in, so there's no separate switch. A failed or dropped link retries after 2 s, 5 s, 15 s, 30 s,
+  then every minute. Settings → Workers shows each worker as connected (with its session count), connecting, or
+  offline with the reason.
+- **Rows.** `App.RemoteRows.cs` adds a row per offered session after the not-running rows. Its key is
+  `ClaudeSession.RemoteKey(sid)` (`@sid`, which no pid can equal); `RemoteWorker` names the machine and
+  `RemoteOffline` fades it. The second line reads "on <worker>" (or "<worker> · <activity>" while it works); status
+  follows the worker's `state` (busy → running, waiting → input). A dropped worker keeps its last list, so its rows
+  stay, faded and "offline", until it reconnects. Offline rows aren't counted in the header tally. The row menu is only
+  Open and Copy session ID: its folder, process and files are on the worker.
+- **Opening one.** The click attaches (`WorkerConnection.Attach` → `PerchSession.ForBackend` → `Start`) and shows the
+  normal session window. One view per remote session: a second click shows it. Closing the last window on it detaches;
+  the next click re-attaches and catches up again.
+- **The session window, remote.** Path and title say "on <worker>". Hidden or inert: End session and its Restart menu,
+  Resume, hand-back, open folder/terminal, the changed-files panel, the branch pill, the account chip, `@`-mention file
+  scan, file-ref clicks, rewind/fork, and `/rewind`, `/fork`, `/rc`, `/login`, `/logout` (each says it works at the
+  worker). A lost link ends the view with "lost the connection to <worker>".
+- **Not done:** remote panes in the Roost; notifications (done, input) for remote sessions, since the monitor that
+  raises them only sees this machine's scan; dropped *files* in a remote prompt send their local path as text (images
+  travel fine).
 
 ### W5 - Worker-side visibility
 - "Controlled from <name>" chip on the worker's session window and overlay row while a controller is attached.

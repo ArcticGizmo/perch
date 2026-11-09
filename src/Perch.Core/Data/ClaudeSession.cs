@@ -369,6 +369,27 @@ public record ClaudeSession(
     public bool IsDormant { get; init; }
 
     /// <summary>
+    /// The name of the paired machine this session runs on, when it isn't this one (docs/remote-workers-plan.md). It
+    /// isn't from a scan; the app adds it from the worker's session list. Its <see cref="Pid"/> is a
+    /// <see cref="RemoteKey"/>, so nothing that acts on a local process or folder applies to it.
+    /// </summary>
+    public string? RemoteWorker { get; init; }
+
+    /// <summary>A <see cref="RemoteWorker"/> session whose machine can't be reached right now: the row stays, faded.</summary>
+    public bool RemoteOffline { get; init; }
+
+    public bool IsRemote => RemoteWorker is not null;
+
+    /// <summary>The row key of a remote session: its worker's handle behind a mark no pid can start with.</summary>
+    public static string RemoteKey(string workerSid) => RemotePrefix + workerSid;
+
+    /// <summary>The worker's handle in a <see cref="RemoteKey"/>, or null for any other key.</summary>
+    public static string? RemoteSidOf(string? key) =>
+        key is { Length: > 1 } && key.StartsWith(RemotePrefix, StringComparison.Ordinal) ? key[RemotePrefix.Length..] : null;
+
+    private const string RemotePrefix = "@";
+
+    /// <summary>
     /// The editor/IDE hosting this session — VS Code, Cursor, Windsurf, a JetBrains IDE, … — when it runs
     /// inside one (or inside that IDE's integrated / an embedded terminal), or null for a plain terminal.
     /// Unlike <see cref="IsDesktop"/>/<see cref="IsBackground"/> this can't be read from the session file

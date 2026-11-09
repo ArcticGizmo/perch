@@ -770,9 +770,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _thread.PermissionAnswered += (item, allow, switchMode) => { _session?.AnswerPermission(item, allow, switchMode); _composer.Focus(); };
         _thread.QuestionAnswered += (item, answers) => { _session?.AnswerQuestion(item, answers); _composer.Focus(); };
         // File references in tool cards route their open/diff intents up to the app (which owns those windows).
-        _thread.OpenFileRequested += p => OpenFileInViewerRequested?.Invoke(p);
+        // A remote session's paths name files on its worker, so they never open here (an absolute one could match a
+        // different file on this machine).
+        _thread.OpenFileRequested += p => { if (_session is not { IsRemote: true }) OpenFileInViewerRequested?.Invoke(p); };
         _thread.StopTaskRequested += t => _session?.StopTask(t);
-        _thread.ViewDiffRequested += p => ViewFileDiffRequested?.Invoke(p);
+        _thread.ViewDiffRequested += p => { if (_session is not { IsRemote: true }) ViewFileDiffRequested?.Invoke(p); };
         _thread.RewindRequested += u => OpenRewind(u);
         // Live theme swap: the shared palette's brushes are re-tinted in place (so chrome and text follow with
         // no work here), but the thread's markdown baked its code-syntax for the old light/dark side — rebuild it.
@@ -925,8 +927,10 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         session.Ended += OnSessionEnded;
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         session.Conversation.BackgroundTaskChanged += OnBackgroundTaskChanged;   // the RUNNING row's shell/monitor chips
-        _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
-        _thread.CanRewind = true;
+        // Set before Bind so tool cards built during materialisation arm file refs. A remote session's files are on its
+        // worker, so its refs stay plain text, and its rewind would need the worker's process and checkpoints.
+        _thread.Cwd = session.IsRemote ? "" : session.Cwd;
+        _thread.CanRewind = !session.IsRemote;
         session.Woke += OnSessionWoke;
         session.Restarted += OnSessionRestarted;
         session.ProcessAuthChanged += RefreshAuthBanner;
@@ -936,7 +940,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _thread.Bind(session.Conversation);
         ScanProjectFilesAsync();     // warm the "@"-mention file list for this project
         ShowThread();
-        if (_changesOpen) RefreshChangesNow();
+        if (_changesOpen)
+        {
+            if (session.IsRemote) ToggleChanges();   // its toggle is hidden: the panel would read this machine's tree
+            else RefreshChangesNow();
+        }
         ApplyRunState();
         RefreshBar();
         if (session.IsDormant) ShowDormantEstimate(session);
@@ -985,10 +993,13 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             : "Session ended — Resume to pick it back up";
         _dormantNote.IsVisible = dormant;
         // A dormant one can be ended too: it's how a Perch session that isn't running stops coming back. One mid-restart
-        // can be ended as well (that cancels the restart). Only a running process has anything to restart.
-        _endGroup.IsVisible = running || dormant || restarting;
+        // can be ended as well (that cancels the restart). Only a running process has anything to restart. A remote
+        // session isn't this machine's to end or resume: it runs on its worker, and closing the window lets it go here.
+        bool remote = _session is { IsRemote: true };
+        _endGroup.IsVisible = !remote && (running || dormant || restarting);
         SetEndMenuVisible(running);
-        _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
+        _resumeButton.IsVisible = !remote && _session is { HasEnded: true } && _session.SessionId is not null;
+        if (remote && _session is { HasEnded: true }) _composer.PlaceholderText = "Not connected to this session — open its row again if it's still running";
         _thread.CanStopTasks = running || _renderLive;   // a background task's Stop needs the live process
         HideToast();
         RefreshAuthBanner();   // running, dormant and ended each read a different clock (or none)
@@ -2060,6 +2071,12 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     // route the same way (docs/slash-command-group-a-plan.md, Step 0).
     private bool RunNativeCommand(string name, string? arg = null)
     {
+        // These act on the session's own process, files or sign-in, which for a remote session are on its worker.
+        if (_session is { IsRemote: true } && name is "rewind" or "fork" or "remote-control" or "rc" or "login" or "logout")
+        {
+            Conv.AddNote($"/{name} works at {_session.WorkerName}, where this session runs", NoteKind.Error);
+            return true;
+        }
         switch (name)
         {
             case "model":  ShowModelMenu();  return true;
@@ -3064,7 +3081,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void ScanProjectFilesAsync()
     {
         var cwd = _cwd;
-        if (string.IsNullOrEmpty(cwd) || cwd == _projectFilesFor) return;
+        // A remote session's folder is on its worker: a folder here with the same path isn't it.
+        if (string.IsNullOrEmpty(cwd) || cwd == _projectFilesFor || _session is { IsRemote: true }) return;
         _projectFilesFor = cwd;
         Task.Run(() => ProjectFileScan.Scan(cwd)).ContinueWith(t =>
         {
@@ -3265,7 +3283,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _launcher.IsVisible = false;
         _thread.IsVisible = !AgentViewOpen;
         _composerDock.IsVisible = true;
-        _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
+        // The changed-files toggle rides with the thread, not the launcher; a remote session's git tree is on its worker.
+        _changesToggle.IsVisible = _session is not { IsRemote: true };
         RefreshBranchAsync();              // surface the repo's current branch in the bar
         RefreshAccountChipAsync();         // …and which account the session runs under
         UpdateJumpButtons();
@@ -3277,7 +3296,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     {
         var cwd = _session?.Cwd ?? _cwd;
         int gen = ++_branchGen;
-        if (string.IsNullOrEmpty(cwd)) { _branchPill.IsVisible = false; return; }
+        if (string.IsNullOrEmpty(cwd) || _session is { IsRemote: true }) { _branchPill.IsVisible = false; return; }
         Task.Run(() => GitRepoService.IsRepo(cwd) ? new GitRepoService().GetStatus(cwd) : null)
             .ContinueWith(t => Dispatcher.UIThread.Post(() =>
             {
@@ -3394,10 +3413,11 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         _projectText.Inlines?.Add(new Run(label) { FontWeight = FontWeight.Bold, Foreground = _p.Title });
         if (title is { Length: > 0 })
             _projectText.Inlines?.Add(new Run($"  ·  {title}") { FontWeight = FontWeight.Normal, Foreground = _p.Muted });
-        _pathText.Text = _cwd.Length > 0 ? _cwd : "choose a project to begin";
+        var worker = _session?.WorkerName;
+        _pathText.Text = _cwd.Length > 0 ? (worker is null ? _cwd : $"{_cwd}  on {worker}") : "choose a project to begin";
         _pathText.IsVisible = true;
         Title = _cwd.Length > 0
-            ? $"{project}{(title is { Length: > 0 } ? $" · {title}" : "")} — Perch session"
+            ? $"{project}{(title is { Length: > 0 } ? $" · {title}" : "")} — {(worker is null ? "Perch session" : $"on {worker}")}"
             : "Perch session";
 
         var conv = Conv;
@@ -3805,7 +3825,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         int gen = ++_accountChipGen;
         _dormantAccountDir = null;
         _accountSwitch = ResumeAccountSet.None;
-        if (!ClaudeConfigSet.Instance.IsMulti) { _accountChip.IsVisible = false; return; }
+        // A remote session runs under its worker's account, which this machine can't see.
+        if (!ClaudeConfigSet.Instance.IsMulti || _session is { IsRemote: true }) { _accountChip.IsVisible = false; return; }
         var root = _session?.ConfigDir;   // null = inherited → primary account
         // Dormant, or ended (its Resume button wakes it the same way): it runs next under the account a resume picks.
         var dormantId = _session is { IsDormant: true } or { HasEnded: true } ? _session.SessionId : null;
@@ -3988,6 +4009,15 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
         };
         var fresh = new MenuItem { Header = "New session in another folder…" };
         fresh.Click += (_, _) => NewSessionRequested?.Invoke();
+        if (_session is { IsRemote: true })
+        {
+            // Its process and folder are on the worker; the resume command is still useful typed there.
+            flyout.Items.Add(copy);
+            flyout.Items.Add(new Separator());
+            flyout.Items.Add(fresh);
+            flyout.ShowAt(_moreButton);
+            return;
+        }
         flyout.Items.Add(handBack);
         flyout.Items.Add(copy);
         flyout.Items.Add(folder);

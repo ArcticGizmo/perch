@@ -29,10 +29,10 @@ public partial class App
         return rows;
     }
 
-    /// <summary>Re-feeds the overlay its rows when the not-running set changes between scans.</summary>
+    /// <summary>Re-feeds the overlay its rows when the not-running set, or a paired worker's sessions, change between scans.</summary>
     private void PushOverlayRows()
     {
-        _overlay?.Canvas.Update(WithDormantRows(_lastSessions));
+        _overlay?.Canvas.Update(WithRemoteRows(WithDormantRows(_lastSessions)));
     }
 
     /// <summary>A not-running row's click: its conversation in a window, still not running until the first reply.</summary>

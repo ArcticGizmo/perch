@@ -5,9 +5,12 @@ using Perch.Data.Control;
 namespace Perch.Remote;
 
 /// <summary>One live session a worker offers, as its controllers list it. <paramref name="Sid"/> is the worker's handle
-/// for it, fixed for the session's life; <paramref name="SessionId"/> is Claude's id, which a <c>/clear</c> changes.</summary>
+/// for it, fixed for the session's life; <paramref name="SessionId"/> is Claude's id, which a <c>/clear</c> changes.
+/// <paramref name="State"/> is where its turn stands: <see cref="WorkerProtocol.Busy"/>, <see cref="WorkerProtocol.Waiting"/>
+/// (on a permission or question) or <see cref="WorkerProtocol.Idle"/>.</summary>
 internal sealed record WorkerSessionInfo(
-    string Sid, string? SessionId, string? Title, string Cwd, string? Model, string? Mode, string? Effort, bool Running);
+    string Sid, string? SessionId, string? Title, string Cwd, string? Model, string? Mode, string? Effort, bool Running,
+    string State = WorkerProtocol.Idle);
 
 /// <summary>
 /// The session frames two paired Perch machines exchange once connected (docs/remote-workers-plan.md, W3). Every frame
@@ -22,6 +25,10 @@ internal sealed record WorkerSessionInfo(
 /// </summary>
 internal static class WorkerProtocol
 {
+    public const string Busy = "busy";
+    public const string Waiting = "waiting";
+    public const string Idle = "idle";
+
     /// <summary>How much catch-up goes in one <c>history</c> frame, in characters. JSON escaping can grow text up to six
     /// times (non-ASCII as <c>\uXXXX</c>), which still fits <see cref="RemoteLink.MaxFrameBytes"/>.</summary>
     public const int HistoryChunkChars = 1024 * 1024;
@@ -46,6 +53,7 @@ internal static class WorkerProtocol
                 ["mode"] = s.Mode,
                 ["effort"] = s.Effort,
                 ["running"] = s.Running,
+                ["state"] = s.State,
             });
         var frame = RemoteLink.Frame("sessions");
         frame["sessions"] = list;
@@ -63,7 +71,12 @@ internal static class WorkerProtocol
             if (node is not JsonObject o || RemoteLink.Str(o, "sid") is not { Length: > 0 } sid) continue;
             result.Add(new WorkerSessionInfo(sid, RemoteLink.Str(o, "sessionId"), RemoteLink.Str(o, "title"),
                 RemoteLink.Str(o, "cwd") ?? "", RemoteLink.Str(o, "model"), RemoteLink.Str(o, "mode"),
-                RemoteLink.Str(o, "effort"), Bool(o, "running")));
+                RemoteLink.Str(o, "effort"), Bool(o, "running"), RemoteLink.Str(o, "state") switch
+                {
+                    Busy => Busy,
+                    Waiting => Waiting,
+                    _ => Idle,
+                }));
         }
         return result;
     }

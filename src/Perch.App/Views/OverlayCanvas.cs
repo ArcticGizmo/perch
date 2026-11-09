@@ -1755,9 +1755,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // A not-running Perch session keeps its row but isn't a running session: the header tally and the dense strip
         // count only what has a process.
-        _countedSessions = daemonIds is null && !sessions.Any(s => s.IsDormant)
+        // A worker's session counts while its machine is reachable; an offline one is in the same spot as a not-running one.
+        _countedSessions = daemonIds is null && !sessions.Any(s => s.IsDormant || s.RemoteOffline)
             ? sessions
-            : sessions.Where(s => !s.IsDormant && daemonIds?.Contains(s.SessionId) != true).ToList();
+            : sessions.Where(s => !s.IsDormant && !s.RemoteOffline && daemonIds?.Contains(s.SessionId) != true).ToList();
 
         // Interactive sessions render at the top (terminal *and* Claude Desktop sessions — both have a
         // human driving them); only background/SDK-driven ones group under the collapsible "Autonomous"
@@ -1854,6 +1855,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string? activity = running
             ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
             : awaiting ? "waiting on you" : null;
+        // A session on a paired worker always says which machine it's on.
+        if (session.RemoteWorker is { } worker)
+            activity = activity is null || session.RemoteOffline ? $"on {worker}" : $"{worker} · {activity}";
         string? elapsed  = running ? session.RunningElapsedLabel()
                          : awaiting ? session.AwaitingElapsedLabel() : null;
         return (activity, elapsed);
@@ -2836,7 +2840,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // A Perch session with no process behind it (Perch closed, or lost it) keeps its row, faded: the hover wash
         // above stays full strength so it still reads as clickable.
-        using var dim = ctx.PushOpacity(session.IsDormant ? DormantRowOpacity : 1);
+        using var dim = ctx.PushOpacity(session.IsDormant || session.RemoteOffline ? DormantRowOpacity : 1);
 
         bool running = session.Status == SessionStatus.Running;
         // When the waiting timer is off, an awaiting row keeps its "input ↩" status but drops the "waiting
@@ -2911,14 +2915,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 }
             }
             _originRects[rowIndex]  = new Rect(dotCx - 8, nameMidY - 8, 16, 16);
-            _originLabels[rowIndex] = session.IsPerchControlled ? "Perch session" : session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
+            _originLabels[rowIndex] = session.RemoteWorker is { } worker ? $"Perch session on {worker}"
+                : session.IsPerchControlled ? "Perch session" : session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
         }
         else
         {
             ctx.DrawEllipse(OverlayDraw.Brush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
         }
 
-        string statusText = session.IsDormant ? "not running" : session.Status switch
+        string statusText = session.IsDormant ? "not running" : session.RemoteOffline ? "offline" : session.Status switch
         {
             SessionStatus.Running        => "running",
             SessionStatus.NeedsAttention => "done ↩",
@@ -5023,7 +5028,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
         bool subRow = sessionRow && _rows[row].IsSubAgent;
 
-        if (sessionRow && _rows[row].Session is { IsDormant: true } dormant)
+        if (sessionRow && _rows[row].Session is { IsRemote: true } remote)
+        {
+            // A session on a paired worker: its folder, process and files are on that machine, so only opening it
+            // here applies.
+            AddMenuGroups(items,
+                [MenuItem("Open", () => SessionActivated?.Invoke(remote))],
+                [MenuItem("Copy session ID", () => CopyToClipboard(remote.SessionId))]);
+        }
+        else if (sessionRow && _rows[row].Session is { IsDormant: true } dormant)
         {
             // A not-running Perch session: there's no process to act on, so it's open (the click), pick it up in a
             // terminal, or end it — which is the only thing that takes the row away.

@@ -357,7 +357,7 @@ public partial class App : Application
             _monitorHost = new SessionMonitorHost(sessions =>
             {
                 _lastSessions = sessions;
-                var roster = WithDormantRows(sessions);   // + Perch sessions that aren't running
+                var roster = WithRemoteRows(WithDormantRows(sessions));   // + Perch sessions not running, + paired workers'
                 _overlay!.Canvas.Update(roster);
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
@@ -569,6 +569,7 @@ public partial class App : Application
             if (_appSettings is { } workerSettings)
             {
                 _workerHost = new Services.WorkerHost(workerSettings, PlatformServices.DeviceKeys) { AskUser = AskToPairController };
+                _workerHost.Workers.Changed += PushOverlayRows;   // the sessions on this machine's workers (App.RemoteRows.cs)
                 _workerHost.Apply();
                 foreach (var s in _perchSessions.Where(s => !s.IsDormant)) _workerHost.Offer(s);
             }
@@ -801,6 +802,7 @@ public partial class App : Application
         foreach (var w in _sessionWindows.ToArray()) w.Close();
         // An update restarts the tray: the processes must not be orphaned. Sessions stay resumable on disk.
         foreach (var s in _perchSessions.ToArray()) s.End();
+        foreach (var s in _remoteSessions.Values.ToArray()) s.End();   // detaches; they keep running on their workers
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
         _froggerWindow?.Close();
@@ -827,6 +829,13 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
+        // A session on a paired worker: its conversation, over the link.
+        if (session.IsRemote)
+        {
+            OpenRemoteRow(session);
+            return;
+        }
+
         // A Perch session that isn't running: its conversation, waiting for a reply to start it.
         if (session.IsDormant)
         {
@@ -2577,6 +2586,7 @@ public partial class App : Application
             // `w`, because the window has already detached its session by the time Closed fires.
             if (_perchSessions.RemoveAll(s => s.IsDormant && !_sessionWindows.Any(o => ReferenceEquals(o.Session, s))) > 0)
                 RefoldRoost();
+            DetachUnviewedRemoteSessions();
         };
         return w;
     }

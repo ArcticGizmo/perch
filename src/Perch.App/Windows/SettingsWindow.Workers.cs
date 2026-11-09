@@ -217,6 +217,20 @@ internal sealed partial class SettingsWindow
         FillDeviceList(_workersList, host.Paired(PairedRole.Worker), host, "This machine doesn't control any workers yet.");
     }
 
+    // How this machine's link to a worker stands, in a line.
+    private static string LinkState(WorkerLinks.Worker link) => link switch
+    {
+        { Online: true } => link.Sessions.Count switch
+        {
+            0 => "Connected · no Perch sessions running there",
+            1 => "Connected · 1 session",
+            var n => $"Connected · {n} sessions",
+        },
+        { Connecting: true } => "Connecting…",
+        { Problem: { Length: > 0 } why } => $"Offline: {why}. Trying again shortly.",
+        _ => "Not connected yet",
+    };
+
     private void FillDeviceList(StackPanel? list, IReadOnlyList<PairedDevice> devices, WorkerHost host, string empty)
     {
         if (list is null) return;
@@ -237,6 +251,11 @@ internal sealed partial class SettingsWindow
                 Text = $"{detail}key {DeviceTrust.Fingerprint(d.Pin)} · paired {d.AddedUtc.ToLocalTime():d MMM yyyy}",
                 FontSize = 12, Foreground = Palette.MutedBrush,
             });
+            if (d.Role == PairedRole.Worker && host.Workers.ByPin(d.Pin) is { } link)
+                text.Children.Add(new TextBlock
+                {
+                    Text = LinkState(link), FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap,
+                });
             var remove = SettingsUi.FlatButton("Remove");
             remove.VerticalAlignment = VerticalAlignment.Center;
             remove.Click += async (_, _) =>

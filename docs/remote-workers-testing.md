@@ -53,9 +53,45 @@ Click **Allow** on W.
 - [ ] Change the port to 41541 → status follows; the old port closes
 - [ ] Search "worker" in Settings finds the toggle, port, address and machine name
 
-## W3 - the session protocol
-Nothing to check by hand yet: the controller doesn't connect to its workers until W4, which adds the sessions to its
-overlay. `RemoteSessionTests` cover the protocol end to end over loopback.
+## W3/W4 - driving a worker's session
+Pair W and C first (W2-2). On W keep **Let paired machines control this one** on, and start a Perch session in some
+folder (`+ New session`). On C you don't start anything.
+
+### W4-1 - The link and the rows
+- [ ] C: Settings → Workers lists W as "Connected · 1 session"
+- [ ] C's overlay has a row for W's session, with the Perch mark, its project/title, and "on W" underneath
+- [ ] Hovering the Perch mark says "Perch session on W"
+- [ ] On W, start a second Perch session → a second row appears on C within a couple of seconds
+- [ ] Right-click the row on C → only **Open** and **Copy session ID**
+
+### W4-2 - Catching up and driving it
+Before you open it on C, give W's session a turn so it has history: ask it to `list the files here`.
+
+Click the row on C.
+- [ ] A session window opens titled "<project> — on W", path line ending "on W"
+- [ ] The thread shows the earlier prompt and answer, tool cards included
+- [ ] No End session button, no changed-files toggle, no branch pill; ⋯ offers only Copy resume command and New session
+
+Prompt from C: `write the word hello to a file called remote-check.txt`.
+- [ ] The prompt shows once on C, and on W's window too
+- [ ] The answer streams on both; C's row reads "running" while it works
+- [ ] The Write permission card shows on both. Click **Allow** on C → W's card settles as allowed, and the file appears on W
+- [ ] On the next prompt, deny on **W** → C's card settles as denied
+- [ ] Interrupt from C mid-answer → the turn stops on both
+- [ ] Switch mode to Plan from C's pill → W's pill follows. Try Bypass permissions from C → a note says it can only be
+  turned on at W, and W's mode doesn't change
+- [ ] `/rewind` on C → a note says it works at W
+
+### W4-3 - Closing, ending, dropping
+- [ ] Close C's window → W's session keeps running; click the row again → the window comes back caught up
+- [ ] End the session on W → C's row disappears; an open window on C shows the session ended
+- [ ] Turn W's toggle off (or quit Perch on W) → C's rows fade to "offline"; an open window says it lost the
+  connection. Settings → Workers on C says Offline with the reason
+- [ ] Turn it back on → within a minute C reconnects and the rows come back
+
+### W4-4 - Mid-session attach
+- [ ] On W, start a long answer (`count slowly to 200, one number per line`). While it runs, open the row on C → C shows
+  what's already there and keeps streaming the rest
 
 ## Send back
 Which checks failed, and anything odd in the wording. No logs are needed for W2.

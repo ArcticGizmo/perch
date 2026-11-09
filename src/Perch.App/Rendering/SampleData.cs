@@ -127,6 +127,11 @@ internal static class SampleData
             // A Perch session with no process (Perch closed while it was open): faded, "not running", plan mode kept.
             new ClaudeSession("~s11", "s11", SessionStatus.Idle, @"C:\src\billing", "billing", now.AddHours(-3),
                 Mode: PermissionMode.Plan, Title: "Invoice export", PerchControlled: true) { IsDormant = true },
+            // Perch sessions on paired workers: one reachable and working, one whose machine is offline.
+            new ClaudeSession(ClaudeSession.RemoteKey("r1"), "s12", SessionStatus.Running, @"C:\src\mobile", "mobile", now,
+                Title: "Push notifications", PerchControlled: true) { RemoteWorker = "studio-pc" },
+            new ClaudeSession(ClaudeSession.RemoteKey("r2"), "s13", SessionStatus.Idle, "/Users/sam/src/site", "site", now,
+                PerchControlled: true) { RemoteWorker = "macbook", RemoteOffline = true },
         ];
     }
 
