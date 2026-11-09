@@ -1,0 +1,148 @@
+using System.Text;
+using System.Text.Json.Nodes;
+
+namespace Perch.Remote;
+
+/// <summary>A connection that failed in a way worth telling the user about ("the worker refused the pairing").</summary>
+internal sealed class RemoteLinkException(string message, Exception? inner = null) : Exception(message, inner);
+
+/// <summary>
+/// One authenticated connection between two paired Perch machines: newline-delimited JSON frames over a TLS stream
+/// (docs/remote-workers-plan.md, W2/W3). Every frame is an object with a string <c>t</c> (its type). A frame over
+/// <see cref="MaxFrameBytes"/>, or one that isn't such an object, ends the connection: the peer is paired, so a bad
+/// frame is a bug or an attack, not something to recover from.
+/// <para>Writes are serialised; <see cref="FrameReceived"/> and <see cref="Closed"/> are raised on the receive loop.</para>
+/// </summary>
+internal sealed class RemoteLink : IDisposable
+{
+    /// <summary>The protocol version both ends announce; a mismatch is refused with a message.</summary>
+    public const int Version = 1;
+
+    /// <summary>The largest frame either side accepts: a prompt with a few images, base64-encoded.</summary>
+    public const int MaxFrameBytes = 8 * 1024 * 1024;
+
+    private readonly Stream _stream;
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly byte[] _buffer = new byte[64 * 1024];
+    private int _start, _end;
+    private int _closed;
+
+    public RemoteLink(Stream stream, string peerPin)
+    {
+        _stream = stream;
+        PeerPin = peerPin;
+    }
+
+    /// <summary>The peer's pinned key (<see cref="DeviceTrust.PinOf"/>).</summary>
+    public string PeerPin { get; }
+
+    /// <summary>The peer's device name, from its hello.</summary>
+    public string PeerName { get; internal set; } = "";
+
+    public bool IsClosed => Volatile.Read(ref _closed) != 0;
+
+    public event Action<JsonObject>? FrameReceived;
+
+    /// <summary>The connection ended; the argument says why when it wasn't a clean close.</summary>
+    public event Action<string?>? Closed;
+
+    public async Task SendAsync(JsonObject frame, CancellationToken ct = default)
+    {
+        var bytes = Encoding.UTF8.GetBytes(frame.ToJsonString() + "\n");
+        if (bytes.Length > MaxFrameBytes) throw new RemoteLinkException("message too large to send");
+        await _writeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+            await _stream.FlushAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>Fire-and-forget <see cref="SendAsync"/>: a failed write closes the link (and says so via <see cref="Closed"/>).</summary>
+    public void Send(JsonObject frame)
+    {
+        if (IsClosed) return;
+        SendAsync(frame).ContinueWith(t => Close(t.Exception?.GetBaseException().Message),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+    }
+
+    /// <summary>The next frame, or null when the peer closed cleanly between frames. Throws
+    /// <see cref="InvalidDataException"/> for an oversized or malformed frame.</summary>
+    public async Task<JsonObject?> ReadFrameAsync(CancellationToken ct = default)
+    {
+        using var line = new MemoryStream();
+        while (true)
+        {
+            if (_start == _end)
+            {
+                _start = 0;
+                _end = await _stream.ReadAsync(_buffer, ct).ConfigureAwait(false);
+                if (_end == 0)
+                {
+                    if (line.Length == 0) return null;
+                    throw new InvalidDataException("connection closed mid-message");
+                }
+            }
+            int newline = Array.IndexOf(_buffer, (byte)'\n', _start, _end - _start);
+            int take = (newline < 0 ? _end : newline) - _start;
+            if (line.Length + take > MaxFrameBytes) throw new InvalidDataException("message too large");
+            line.Write(_buffer, _start, take);
+            _start += take;
+            if (newline >= 0)
+            {
+                _start++;
+                break;
+            }
+        }
+        JsonNode? node;
+        try { node = JsonNode.Parse(line.GetBuffer().AsSpan(0, (int)line.Length)); }
+        catch (Exception ex) { throw new InvalidDataException("malformed message", ex); }
+        if (node is not JsonObject frame || frame["t"]?.GetValueKind() != System.Text.Json.JsonValueKind.String)
+            throw new InvalidDataException("message has no type");
+        return frame;
+    }
+
+    /// <summary>Starts the receive loop: every frame to <see cref="FrameReceived"/> until the peer closes or misbehaves.</summary>
+    public void StartReceiving() => Task.Run(async () =>
+    {
+        string? reason = null;
+        try
+        {
+            while (!IsClosed && await ReadFrameAsync().ConfigureAwait(false) is { } frame)
+                FrameReceived?.Invoke(frame);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ObjectDisposedException or OperationCanceledException)
+        {
+            reason = IsClosed ? null : ex.Message;
+        }
+        Close(reason);
+    });
+
+    public void Close(string? reason = null)
+    {
+        if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        try { _stream.Dispose(); } catch { /* already gone */ }
+        Closed?.Invoke(reason);
+    }
+
+    public void Dispose() => Close();
+
+    /// <summary>A string field of a peer's frame, or null when absent or not a string.</summary>
+    public static string? Str(JsonObject? frame, string key) =>
+        frame?[key] is JsonValue v && v.GetValueKind() == System.Text.Json.JsonValueKind.String ? v.GetValue<string>() : null;
+
+    /// <summary>A frame of type <paramref name="type"/>.</summary>
+    public static JsonObject Frame(string type) => new() { ["t"] = type };
+
+    /// <summary>A peer-supplied name made safe to show: no control characters, trimmed, at most 64 characters.</summary>
+    public static string CleanName(string? name)
+    {
+        var s = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (s.Length > 64) s = s[..64];
+        return s.Length > 0 ? s : "unnamed machine";
+    }
+}

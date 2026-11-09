@@ -138,6 +138,12 @@ internal sealed class SettingsHooks
 
     /// <summary>Check every feed now (the Feeds page's "Check all now"); a no-op while feeds are off.</summary>
     public Action? FeedsRefresh;
+
+    /// <summary>The remote-workers host behind the Workers page.</summary>
+    public Func<Services.WorkerHost?>? Workers;
+
+    /// <summary>A worker listener setting changed: start, restart or stop the listener to match.</summary>
+    public Action? WorkersChanged;
 }
 
 /// <summary>
@@ -250,6 +256,8 @@ internal sealed partial class SettingsWindow : Window
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "feeds",        "Feeds",           BuildFeedsPage);
         AddPage(nav, "configdirs",   "Config directories", BuildConfigDirsPage);
+        if (PlatformServices.Supports(PlatformFeature.RemoteWorkers))
+            AddPage(nav, "workers",  "Workers",         BuildWorkersPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);

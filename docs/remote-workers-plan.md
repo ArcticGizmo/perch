@@ -104,7 +104,13 @@ moved to W4, where a remote session first exists to show.
 - Local-only `PerchSession` features (rewind, fork, restart, hand-back, Remote Control, account switch) report
   unavailable when `IsRemote`, and the session window hides their controls.
 
-### W2 - Identity, pairing, transport
+### W2 - Identity, pairing, transport - built 2026-11-06
+Status: built, not run live. Core: `IDeviceKeyStore` (Windows CNG store in `Perch.Platform.Windows/DeviceKeyStore.cs`,
+macOS stub), `Perch.Remote.DeviceTrust` (pins, pairing code, `PairedDevice`), `RemoteLink` (framing, one 8 MiB cap for
+every frame, which is simpler than two), `WorkerServer`, `WorkerClient`. App: `Services/WorkerHost`, the Workers page
+(`SettingsWindow.Workers.cs`), the pairing prompt (`App.Workers.cs`). `RemoteWorkerTests` pairs and connects over real
+TLS on loopback (Windows). A controller that connects is held but nothing is exchanged yet (W3). Manual checks:
+`docs/remote-workers-testing.md`.
 - `IDeviceKeyStore` (Core interface; Windows CNG implementation, macOS stub) and `DeviceIdentity` (Core): makes/loads
   the certificate; `Fingerprint`; a friendly device name (machine name, editable).
 - `PairedDevices` (Core, persisted on `AppSettings`): name, pinned key hash, role (controls me / I control it),
@@ -144,7 +150,9 @@ NDJSON frames, each `{"t": type, …}`. Versioned in `hello`.
   so the worker's user sees what was done from elsewhere.
 
 ### W6 - Hardening and docs
-Reconnect/liveness (heartbeat every 20 s, drop after 60 s), worker sleep/resume, Perch updates on either side (version
+Reconnect/liveness (heartbeat every 20 s, drop after 60 s), slots for unauthenticated handshakes counted separately
+from paired connections (today 8 slow handshakes from anyone can hold every slot for 10 s and lock a paired controller
+out; nothing gets in, but it's a nuisance), worker sleep/resume, Perch updates on either side (version
 in `hello`; refuse with a clear message on mismatch), `docs/remote-workers-testing.md`, macOS pass.
 
 ## Later

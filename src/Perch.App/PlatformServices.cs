@@ -46,6 +46,9 @@ internal static class PlatformServices
     public static ISecretStore SecretStore { get; } = new Impl.WindowsSecretStore();
     // Windows Do Not Disturb / Focus Assist quiet hours (SHQueryUserNotificationState).
     public static IDoNotDisturb DoNotDisturb { get; } = new Impl.WindowsDoNotDisturb();
+    // Remote workers' device identity: a named, non-exportable CNG key, one per profile so dev and release don't share it.
+    public static IDeviceKeyStore DeviceKeys { get; } =
+        new Impl.DeviceKeyStore(Perch.Data.AppProfile.IsDev ? "Perch-Device-Key-Dev" : "Perch-Device-Key");
 #else
     public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
@@ -57,6 +60,8 @@ internal static class PlatformServices
     public static ISecretStore SecretStore { get; } = new Impl.KeychainSecretStore();
     // macOS Focus / Do Not Disturb (stub for now — reports not-active).
     public static IDoNotDisturb DoNotDisturb { get; } = new Impl.MacDoNotDisturb();
+    // Remote workers aren't offered on macOS yet (Keychain identity unverified).
+    public static IDeviceKeyStore DeviceKeys { get; } = new Impl.DeviceKeyStore();
 #endif
 
     /// <summary>Whether the OS capability a <see cref="Perch.Data.SettingDescriptor"/> depends on exists on
@@ -66,6 +71,7 @@ internal static class PlatformServices
     {
         Perch.Data.PlatformFeature.EdgeReservation => EdgeReservation.IsSupported,
         Perch.Data.PlatformFeature.DoNotDisturbToggle => DoNotDisturb.CanToggle,
+        Perch.Data.PlatformFeature.RemoteWorkers => DeviceKeys.IsSupported,
         _ => true,
     };
 

@@ -90,6 +90,10 @@ internal enum PlatformFeature
     /// <summary>Needs <c>IDoNotDisturb.CanToggle</c> to switch the OS Do Not Disturb on and off — Windows only,
     /// which is why the header's DND button isn't offered on macOS.</summary>
     DoNotDisturbToggle,
+
+    /// <summary>Needs <c>IDeviceKeyStore.IsSupported</c>: a device key TLS can use from the OS key store. Windows
+    /// only for now. See <c>docs/remote-workers-plan.md</c>.</summary>
+    RemoteWorkers,
 }
 
 /// <summary>

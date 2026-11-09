@@ -561,6 +561,34 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.ShowLargeReactions),
             s => s.ShowLargeReactions, (s, v) => s.ShowLargeReactions = v, playful: true),
 
+        // ── Remote workers (docs/remote-workers-plan.md) ─────────────────────
+        Toggle("worker-enabled", "Let paired machines control this one",
+            "Listen for Perch on your other machines, so the ones you paired on the Workers page can drive this machine's Perch sessions: prompts, permissions, interrupt. Off means no listener at all.",
+            SettingSurface.Advanced, ["worker", "remote", "control", "other machine", "device", "pair", "listen", "tailscale", "lan", "network"],
+            PreviewTarget.None, nameof(AppSettings.WorkerEnabled),
+            s => s.WorkerEnabled, (s, v) => s.WorkerEnabled = v)
+            with { Requires = PlatformFeature.RemoteWorkers },
+
+        Info("worker-port", "Worker port",
+            "The TCP port this machine listens on for paired controllers (41540 unless changed).",
+            SettingSurface.Advanced, SettingKind.Field,
+            ["worker", "port", "remote", "listen", "network", "firewall"], PreviewTarget.None, nameof(AppSettings.WorkerPort))
+            with { Requires = PlatformFeature.RemoteWorkers },
+
+        Info("worker-bind-address", "Worker listen address",
+            "One local address to listen on, such as this machine's Tailscale address. Blank listens on every network.",
+            SettingSurface.Advanced, SettingKind.Field,
+            ["worker", "bind", "address", "interface", "ip", "tailscale", "remote", "network"], PreviewTarget.None,
+            nameof(AppSettings.WorkerBindAddress))
+            with { Requires = PlatformFeature.RemoteWorkers },
+
+        Info("device-name", "This machine's name",
+            "How paired machines see this one. Blank uses the computer's name.",
+            SettingSurface.Advanced, SettingKind.Field,
+            ["device", "name", "machine", "computer", "worker", "remote", "pair"], PreviewTarget.None,
+            nameof(AppSettings.DeviceName))
+            with { Requires = PlatformFeature.RemoteWorkers },
+
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",

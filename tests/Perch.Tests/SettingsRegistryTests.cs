@@ -95,6 +95,7 @@ public class SettingsRegistryTests
         nameof(AppSettings.SessionAutoCompactThresholdPercent),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
+        nameof(AppSettings.PairedDevices),   // managed on the Workers page
         nameof(AppSettings.PendingUpdateVersion),
         nameof(AppSettings.LastSeenVersion),
         // First-run onboarding bookkeeping: whether the Quick Start has been completed, and the last starter

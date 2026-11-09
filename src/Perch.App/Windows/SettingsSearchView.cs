@@ -32,6 +32,7 @@ internal static class SettingsLiveApply
             case "include-subprocess-metrics": hooks.MetricsChanged?.Invoke(); break;
             case "upside-down-quick-links":    hooks.QuickLinksChanged?.Invoke(); break;
             case "feeds":                      hooks.FeedsChanged?.Invoke(); break;
+            case "worker-enabled":             hooks.WorkersChanged?.Invoke(); break;
         }
 
         // Always re-push the overlay display gates: cheap, idempotent, and covers the git/stuck/PR data-layer

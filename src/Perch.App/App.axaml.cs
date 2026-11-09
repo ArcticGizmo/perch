@@ -105,6 +105,7 @@ public partial class App : Application
     // GitHub alerts: the poller behind the overlay's one-line GitHub strip, and the reused list window it opens.
     private Services.GitHubAlertsMonitorHost? _gitHubHost;
     private Services.FeedsMonitorHost? _feedsHost;
+    private Services.WorkerHost? _workerHost;
     private readonly Services.FeedIconCache _feedIcons = new();
     private FeedStoryWindow? _feedStoryWindow;
     private GitHubAlertsWindow? _gitHubWindow;
@@ -207,6 +208,7 @@ public partial class App : Application
                 _todoHost?.Dispose();
                 _gitHubHost?.Dispose();
                 _feedsHost?.Dispose();
+                _workerHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -563,6 +565,12 @@ public partial class App : Application
             {
                 if (_feedsHost?.Head(id)?.SiteUrl is { } site) PlatformServices.UrlOpener.Open(site);
             };
+            // Remote workers: listens only while "Let paired machines control this one" is on (docs/remote-workers-plan.md).
+            if (_appSettings is { } workerSettings)
+            {
+                _workerHost = new Services.WorkerHost(workerSettings, PlatformServices.DeviceKeys) { AskUser = AskToPairController };
+                _workerHost.Apply();
+            }
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
@@ -3766,6 +3774,8 @@ public partial class App : Application
             FeedStatus = id => _feedsHost?.Head(id),
             FeedsMarkAllRead = () => _feedsHost?.MarkAllRead(),
             FeedsRefresh = () => _feedsHost?.RefreshNow(),
+            Workers = () => _workerHost,
+            WorkersChanged = () => _workerHost?.Apply(),
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

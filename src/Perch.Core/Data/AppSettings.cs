@@ -538,6 +538,26 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? RecentEmojis { get; set; }
 
+    // ── Remote workers (docs/remote-workers-plan.md) ────────────────────────────────
+    // Off means no listener at all. When on, paired controllers can drive this machine's Perch sessions.
+    public bool WorkerEnabled { get; set; }
+
+    // The TCP port the worker listens on.
+    public int WorkerPort { get; set; } = Remote.DeviceTrust.DefaultPort;
+
+    // One local address to listen on (e.g. this machine's Tailscale 100.x address); null = every interface.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkerBindAddress { get; set; }
+
+    // This machine's name as paired machines see it; null = the machine name.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DeviceName { get; set; }
+
+    // Machines paired from the Workers page (both directions), recognised by their pinned key. Managed there, not a
+    // registry setting (see SettingsRegistryTests.NotSettings).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Remote.PairedDevice>? PairedDevices { get; set; }
+
     /// <summary>How many recently-used emoji the picker remembers (see <see cref="RecentEmojis"/>).</summary>
     public const int RecentEmojiCap = 24;
 
