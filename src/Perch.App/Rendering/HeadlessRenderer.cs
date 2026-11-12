@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -3253,6 +3254,17 @@ internal static class HeadlessRenderer
         var alive = Enumerable.Range(0, windows.Count).Where(i => windows[i].IsAlive).ToList();
         Console.WriteLine($"leak check: {alive.Count}/{windows.Count} closed session windows still reachable" +
                           (alive.Count > 0 ? $" (#{string.Join(", #", alive)})" : ""));
+
+        // PF1: an open session window keeps several spinners under hidden ancestors; none of them may tick.
+        var open = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+        open.Attach(session);
+        open.Show();
+        Dispatcher.UIThread.RunJobs();
+        var spinners = open.GetVisualDescendants().OfType<Views.LoadingSpinner>().ToList();
+        int hiddenTicking = spinners.Count(s => s.IsSpinning && !s.IsEffectivelyVisible);
+        Console.WriteLine($"spinners: {spinners.Count} in an open session window, {spinners.Count(s => s.IsSpinning)} animating, " +
+                          $"{hiddenTicking} animating while hidden");
+        open.Close();
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         static void OpenAndClose(Services.PerchSession s, List<WeakReference> refs)
