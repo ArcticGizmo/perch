@@ -175,8 +175,8 @@ internal sealed class SessionWorktree
     // A write's paired tool_result follows it, so a failed one is dropped as soon as its is_error arrives.
     private static void StepWrites(WritesState s, string line)
     {
-        bool maybeWrite = line.Contains("tool_use") && (line.Contains("file_path") || line.Contains("notebook_path"));
-        if (!maybeWrite && !line.Contains("is_error"))
+        bool maybeWrite = TranscriptJson.MayHoldToolUse(line) && (line.Contains("file_path") || line.Contains("notebook_path"));
+        if (!maybeWrite && !TranscriptJson.MayHoldErrorResult(line))
             return;
 
         try

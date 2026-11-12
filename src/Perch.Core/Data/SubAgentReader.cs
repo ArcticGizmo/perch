@@ -474,19 +474,20 @@ internal sealed class SubAgentReader
         return declared > ShellMaxTimeout ? ShellMaxTimeout : declared;
     }
 
-    // Collect every Task tool_use and the set of tool_use ids that already have a result;
-    // a Task whose id never gets a result is a sub-agent still running.
+    // Collect every Task tool_use still waiting for its result; a Task whose id never gets a result is a
+    // sub-agent still running. A result always follows its call, so only results for pending ids matter.
     private sealed class LegacyState
     {
-        public readonly Dictionary<string, (string Desc, string Type)> TaskUses = new();
-        public readonly HashSet<string> ResultIds = new();
+        // Ordered: removals must not reorder later launches, which are listed in launch order.
+        public readonly OrderedDictionary<string, (string Desc, string Type)> Pending = new();
     }
 
     private static void StepLegacy(LegacyState s, string line)
     {
-        // Cheap pre-filter: only the (rare) lines that could carry a sub-agent tool_use or
-        // any tool_result are worth parsing as JSON. Most transcript lines match neither.
-        if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !line.Contains("tool_result"))
+        // Cheap pre-filter: a sub-agent launch names its tool; a result only matters when it answers a pending
+        // launch, whose id it must then contain. Tool results are most of a transcript, and usually nothing is
+        // pending, so almost none of them reach the parser.
+        if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !AnswersPending(s, line))
             return;
 
         try
@@ -507,13 +508,13 @@ internal sealed class SubAgentReader
                     var input = block["input"];
                     var desc = input?["description"]?.GetValue<string>() ?? "";
                     var atype = input?["subagent_type"]?.GetValue<string>() ?? "";
-                    s.TaskUses[id] = (desc, atype);
+                    s.Pending[id] = (desc, atype);
                 }
                 else if (type == "tool_result")
                 {
                     var rid = block!["tool_use_id"]?.GetValue<string>();
                     if (rid != null)
-                        s.ResultIds.Add(rid);
+                        s.Pending.Remove(rid);
                 }
             }
         }
@@ -523,19 +524,23 @@ internal sealed class SubAgentReader
         }
     }
 
+    private static bool AnswersPending(LegacyState s, string line)
+    {
+        if (s.Pending.Count == 0 || !line.Contains("tool_result", StringComparison.Ordinal))
+            return false;
+        foreach (var id in s.Pending.Keys)
+            if (line.Contains(id, StringComparison.Ordinal))
+                return true;
+        return false;
+    }
+
     private static IReadOnlyList<SubAgent> FinishLegacy(LegacyState s)
     {
-        var taskUses = s.TaskUses;
-        var resultIds = s.ResultIds;
-        var running = new List<SubAgent>();
-        foreach (var (id, info) in taskUses)
-        {
-            if (resultIds.Contains(id))
-                continue;
-            // Store the raw description and type; the overlay row owns the display fallback so both
-            // the legacy and background paths read the same.
+        var running = new List<SubAgent>(s.Pending.Count);
+        // Store the raw description and type; the overlay row owns the display fallback so both the legacy and
+        // background paths read the same.
+        foreach (var (id, info) in s.Pending)
             running.Add(new SubAgent(id, info.Desc, info.Type));
-        }
         return running;
     }
 }

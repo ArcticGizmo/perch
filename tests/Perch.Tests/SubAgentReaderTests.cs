@@ -46,6 +46,42 @@ public class SubAgentReaderTests
         Assert.Equal("Explore", sub.AgentType);
     }
 
+    // The legacy fold parses a tool_result only when it names a pending launch. Results for other tools (most of a
+    // transcript) must not disturb it, a result naming a pending id must retire it, and later launches keep their
+    // launch order after an earlier one retires.
+    [Fact]
+    public void LegacyAt_ResultsRetirePendingLaunches_AndOrderIsLaunchOrder()
+    {
+        static string Use(string id, string name, string desc) =>
+            $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"{{{id}}}","name":"{{{name}}}","input":{"description":"{{{desc}}}","subagent_type":"Explore"}}]}}""";
+        static string Result(string id) =>
+            $$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"{{{id}}}","content":"ok","is_error":false}]}}""";
+
+        var path = Path.Combine(Path.GetTempPath(), $"perch-legacy-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            File.WriteAllLines(path,
+            [
+                Result("toolu_read0"),                  // nothing pending yet
+                Use("toolu_a", "Agent", "first"),
+                Use("toolu_read1", "Read", "not an agent"),
+                Result("toolu_read1"),                  // a result for an unrelated tool
+                Use("toolu_b", "Task", "second"),
+                Result("toolu_a"),
+                Use("toolu_c", "Agent", "third"),
+            ]);
+            var running = new SubAgentReader().LegacyAt(path);
+            Assert.Equal(["toolu_b", "toolu_c"], running.Select(r => r.AgentId));
+
+            File.AppendAllLines(path, [Result("toolu_c")]);
+            Assert.Equal(["toolu_b"], new SubAgentReader().LegacyAt(path).Select(r => r.AgentId));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void GetRunning_BackgroundLayout_ReadsSubagentsDirAndMeta()
     {

@@ -50,6 +50,17 @@ internal static class TranscriptJson
         catch { return false; }
     }
 
+    /// <summary>Substring pre-filter for a line that may hold a tool_use block. Quoted, because every tool_result
+    /// carries <c>"tool_use_id"</c>, which a bare <c>tool_use</c> would match.</summary>
+    public static bool MayHoldToolUse(string line) => line.Contains("\"tool_use\"", StringComparison.Ordinal);
+
+    /// <summary>Substring pre-filter for a line that may hold a failed tool_result. Every successful result
+    /// carries <c>"is_error":false</c> too, and tool results are most of a transcript's bytes, so matching the
+    /// bare key would send them all to the JSON parser. Tolerates one space after the colon.</summary>
+    public static bool MayHoldErrorResult(string line) =>
+        line.Contains("\"is_error\":true", StringComparison.Ordinal)
+        || line.Contains("\"is_error\": true", StringComparison.Ordinal);
+
     /// <summary>Reads a node as a string, returning null rather than throwing when it holds something
     /// else (a block array, a number). Transcript fields change shape between Claude Code versions —
     /// <c>message.content</c> is a plain string in some records and an array in others — so any read of

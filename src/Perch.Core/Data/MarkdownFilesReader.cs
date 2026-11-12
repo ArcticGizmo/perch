@@ -74,11 +74,10 @@ internal sealed class MarkdownFilesReader
 
     private static void StepSets(SetsState s, string line)
     {
-        // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result carries
-        // the "is_error" flag we need to discard a failed write. (A successful result usually omits
-        // is_error entirely, so it's simply absent from the errored set — which is correct.)
-        bool maybeTouch = line.Contains("tool_use") && line.Contains(".md");
-        bool maybeError = line.Contains("is_error");
+        // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result is needed to
+        // discard a failed write.
+        bool maybeTouch = TranscriptJson.MayHoldToolUse(line) && line.Contains(".md");
+        bool maybeError = TranscriptJson.MayHoldErrorResult(line);
         if (!maybeTouch && !maybeError)
             return;
 
