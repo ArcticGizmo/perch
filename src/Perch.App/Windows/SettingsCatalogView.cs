@@ -312,7 +312,7 @@ internal sealed class SettingsCatalogView : StackPanel
 
         var box = SettingsUi.ThemedTextBox(get() ?? "");
         box.PlaceholderText = placeholder;
-        box.TextChanged += (_, _) =>
+        SettingsUi.CommitWhenTypingPauses(box, () =>
         {
             // Avalonia raises TextChanged asynchronously, so the *initial* programmatic assignment above
             // still reaches this handler after it's attached. Only persist a real edit — the echo of the
@@ -322,7 +322,7 @@ internal sealed class SettingsCatalogView : StackPanel
             set(box.Text);
             _settings.Save();
             if (live) _hooks.DisplayChanged?.Invoke();
-        };
+        });
         return box;
     }
 
