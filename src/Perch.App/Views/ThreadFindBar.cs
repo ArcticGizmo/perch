@@ -28,6 +28,9 @@ internal sealed class ThreadFindBar : Border
     private static readonly TimeSpan TypingPause = TimeSpan.FromMilliseconds(150);
     private const int MinLiveQuery = 2;
     private readonly DispatcherTimer _typing;
+    // Avalonia raises TextChanged asynchronously, so a programmatic set arrives after _quiet is cleared; that echo
+    // searches at once, as typing used to, rather than waiting out the typing pause.
+    private string? _echo;
 
     /// <summary>Raised after the bar closes (✕, Esc), so the host can put focus back where it belongs.</summary>
     public event Action? Closed;
@@ -102,6 +105,7 @@ internal sealed class ThreadFindBar : Border
     {
         IsVisible = true;
         _quiet = true;
+        _echo = query;
         try { _box.Text = query; } finally { _quiet = false; }
         int n = _thread.Search(query);
         if (n > 0) _thread.ShowMatch(_thread.FirstMatchFrom(near));
@@ -113,6 +117,15 @@ internal sealed class ThreadFindBar : Border
     private void OnTyped()
     {
         _typing.Stop();
+        if (_echo is { } echo)
+        {
+            _echo = null;
+            if ((_box.Text ?? "") == echo)
+            {
+                Run(jumpToFirst: true);
+                return;
+            }
+        }
         if ((_box.Text ?? "").Trim().Length >= MinLiveQuery)
         {
             _typing.Start();
