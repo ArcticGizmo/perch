@@ -4099,7 +4099,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (overToggle != _hoveredDockToggle) { _hoveredDockToggle = overToggle; InvalidateVisual(); }
             int tile = HitTestDockTile(p);
             if (tile != _hoveredDockTile) { _hoveredDockTile = tile; InvalidateVisual(); }
-            Cursor = overToggle || tile >= 0 ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            Cursor = overToggle || tile >= 0 ? HandCursor : Cursor.Default;
             ArmDwell(tile >= 0 ? TipKind.DockTile : TipKind.None, tile);
             base.OnPointerMoved(e);
             return;
