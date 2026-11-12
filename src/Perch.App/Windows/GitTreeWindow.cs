@@ -1090,13 +1090,29 @@ internal sealed partial class GitTreeWindow : Window
         _sessionAt = best;
 
         var shown = best.ToDictionary(kv => kv.Key, kv => SessionView(kv.Value), StringComparer.OrdinalIgnoreCase);
-        _rail.SetSessions(shown);
-        _graph.Canvas.SetSessions(shown);
+        // Scans arrive every couple of seconds while a session works, and the rail rebuilds every row on a set;
+        // most scans change nothing it shows.
+        if (!SameSessions(shown, _shownSessions))
+        {
+            _shownSessions = shown;
+            _rail.SetSessions(shown);
+            _graph.Canvas.SetSessions(shown);
+        }
         bool busyHere = _snap.Current is { } cur && best.TryGetValue(cur.Path, out var here)
                         && here.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
         _isActive = _retargetActive || busyHere;
         UpdateBusyPoll(best.Any(kv => kv.Value.Status == SessionStatus.Running
                                       && !string.Equals(kv.Key, _snap.Current?.Path, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private Dictionary<string, GraphRail.WorktreeSession>? _shownSessions;
+
+    private static bool SameSessions(Dictionary<string, GraphRail.WorktreeSession> a, Dictionary<string, GraphRail.WorktreeSession>? b)
+    {
+        if (b is null || a.Count != b.Count) return false;
+        foreach (var (k, v) in a)
+            if (!b.TryGetValue(k, out var w) || v != w) return false;
+        return true;
     }
 
     private static int Urgency(SessionStatus s) => s switch
