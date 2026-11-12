@@ -429,8 +429,22 @@ static bool IsPerchCommand(JsonNode? command)
     return string.Equals(leaf, "perch-hook", StringComparison.OrdinalIgnoreCase);
 }
 
+// On Windows the tray's single-instance mutex answers this in microseconds; enumerating processes by name
+// snapshots every process on the machine, on the session-start path Claude Code waits for. Either profile's
+// tray counts (installed or dev), matching the by-name check.
 static bool IsPerchRunning()
 {
+    if (OperatingSystem.IsWindows())
+    {
+        foreach (var name in new[] { @"Local\Perch_SingleInstance", @"Local\Perch_SingleInstance_Dev" })
+            if (Mutex.TryOpenExisting(name, out var m))
+            {
+                m.Dispose();
+                return true;
+            }
+        return false;
+    }
+
     Process[] ps;
     try { ps = Process.GetProcessesByName("perch"); }
     catch { return false; }
