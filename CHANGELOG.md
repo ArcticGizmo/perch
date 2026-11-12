@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.10] - 2026-11-12
+
+- Status lines with git counts refresh about 3x faster (it was mostly waiting on git; re-apply your profile)
+
+---
+
 ## [v0.6.9] - 2026-11-06
 
 - Focusing a Windows Terminal session picks its tab, not just the window (no more tab roulette)
