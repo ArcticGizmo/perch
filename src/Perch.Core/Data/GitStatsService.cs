@@ -14,7 +14,7 @@ public readonly record struct GitLineStats(int Added, int Deleted)
 
 /// <summary>
 /// Computes per-directory unstaged git line stats by shelling out to <c>git diff --numstat</c>, cached
-/// with a short TTL and refreshed on a background thread so the hot session scan never blocks on a
+/// (short TTL while the session works, long while it's idle) and refreshed on a background thread so the hot session scan never blocks on a
 /// process spawn. Reads are non-blocking: a missing/stale entry schedules a refresh and returns whatever
 /// is cached (possibly null), then <see cref="StatsUpdated"/> nudges a repaint once the fresh value lands.
 ///
@@ -24,10 +24,12 @@ public readonly record struct GitLineStats(int Added, int Deleted)
 /// </summary>
 internal sealed class GitStatsService : IDisposable
 {
-    // A cached result is served for this long before a scan schedules a background refresh. The working
-    // tree only changes when a session edits files, so a few seconds keeps the overlay glanceably fresh
-    // without spawning git on every scan.
-    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(3);
+    // How long a cached result is served before a scan schedules a background refresh. A working session edits
+    // files, so a few seconds keeps its chip glanceably fresh. An idle session's tree only moves when the user
+    // edits by hand, and every scan of every idle session would otherwise spawn git all day, so it waits much
+    // longer. The first scan after a session stops working refreshes once regardless, to catch its last edits.
+    internal static readonly TimeSpan ActiveTtl = TimeSpan.FromSeconds(3);
+    internal static readonly TimeSpan IdleTtl = TimeSpan.FromMinutes(2);
 
     // Hard ceiling on a single git invocation so a huge or pathological repo can't wedge a worker.
     private const int GitTimeoutMs = 4000;
@@ -38,6 +40,20 @@ internal sealed class GitStatsService : IDisposable
 
     private volatile bool _enabled;
     private volatile bool _disposed;
+
+    private readonly Func<string, GitLineStats?> _runGit;
+    private readonly Func<DateTime> _utcNow;
+
+    public GitStatsService() : this(RunGitDiff, () => DateTime.UtcNow) { }
+
+    internal bool IsRefreshing => !_fetching.IsEmpty;
+
+    /// <summary>Test seam: the git run and the clock.</summary>
+    internal GitStatsService(Func<string, GitLineStats?> runGit, Func<DateTime> utcNow)
+    {
+        _runGit = runGit;
+        _utcNow = utcNow;
+    }
 
     /// <summary>Raised (on a thread-pool thread) when a background refresh changed a directory's stats,
     /// so the owner can re-scan and repaint. Never raised while disabled or disposed.</summary>
@@ -64,35 +80,44 @@ internal sealed class GitStatsService : IDisposable
     /// (which raises <see cref="StatsUpdated"/> when it lands) and the current value is returned as-is.
     /// So the first paint after enabling shows nothing, then fills in a beat later.
     /// </summary>
-    public GitLineStats? Get(string cwd)
+    /// <param name="active">The session in <paramref name="cwd"/> is working, so its tree may be changing.</param>
+    public GitLineStats? Get(string cwd, bool active)
     {
         if (!_enabled || _disposed || string.IsNullOrEmpty(cwd))
             return null;
 
         bool cached = _cache.TryGetValue(cwd, out var entry);
-        if (cached && DateTime.UtcNow - entry.FetchedAt < Ttl)
+        if (cached && !Due(entry, active))
             return entry.Stats;
 
-        ScheduleRefresh(cwd);
+        ScheduleRefresh(cwd, active);
         return cached ? entry.Stats : null;
+    }
+
+    private bool Due(Entry entry, bool active)
+    {
+        if (active)
+            return _utcNow() - entry.FetchedAt >= ActiveTtl;
+        // Fetched while the session was still working: its last edits may have landed after that run.
+        return entry.FetchedActive || _utcNow() - entry.FetchedAt >= IdleTtl;
     }
 
     // Kicks off a single background git run for this directory (a no-op if one is already in flight),
     // updates the cache when it returns, and raises StatsUpdated only when the numbers actually moved.
-    private void ScheduleRefresh(string cwd)
+    private void ScheduleRefresh(string cwd, bool active)
     {
         if (!_fetching.TryAdd(cwd, 0))
             return;
 
         Task.Run(() =>
         {
-            GitLineStats? result = RunGitDiff(cwd);
             try
             {
+                GitLineStats? result = _runGit(cwd);
                 if (_disposed || !_enabled)
                     return;
                 bool changed = !_cache.TryGetValue(cwd, out var old) || !Nullable.Equals(old.Stats, result);
-                _cache[cwd] = new Entry(result, DateTime.UtcNow);
+                _cache[cwd] = new Entry(result, _utcNow(), active);
                 if (changed)
                     StatsUpdated?.Invoke();
             }
@@ -147,5 +172,5 @@ internal sealed class GitStatsService : IDisposable
     }
 
     // One cached directory result: the stats (null = not a repo / unreadable) and when they were fetched.
-    private readonly record struct Entry(GitLineStats? Stats, DateTime FetchedAt);
+    private readonly record struct Entry(GitLineStats? Stats, DateTime FetchedAt, bool FetchedActive);
 }

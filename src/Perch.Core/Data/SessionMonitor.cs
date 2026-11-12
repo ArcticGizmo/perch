@@ -936,7 +936,7 @@ internal sealed class SessionMonitor : IDisposable
             // inside the service: while the experimental toggle is off this returns null without ever
             // launching git. Non-blocking — a stale/missing value schedules a background refresh that
             // triggers a repaint when it lands.
-            var gitStats = _gitStats.Get(cwd);
+            var gitStats = _gitStats.Get(cwd, active: status == SessionStatus.Running);
 
             // The worktree the session is really working in, when that isn't cwd's: Claude Code never moves cwd
             // into a worktree the session made itself and edits by absolute path. Only the branch-scoped lookups
