@@ -44,8 +44,8 @@ public sealed class StatuslineScriptTests
         Assert.Contains("execFileSync", withCounts);   // the git subprocess is present
         // …but by the PATH-resolved absolute path, never the bare name Node would look up in the repo first (CP7).
         Assert.DoesNotContain("execFileSync('git'", withCounts);
-        // …and hardened against the repo's own command hooks (CP11): fsmonitor off, no external diff or textconv.
-        Assert.Contains("execFileSync(git, [...safe, ...args, '--no-ext-diff', '--no-textconv'], opt)", withCounts);
+        // …and hardened against the repo's own command hooks (CP11): fsmonitor off, repo-local filter drivers blanked.
+        Assert.Contains("execFileSync(exe, ['--no-optional-locks', ...safe, 'status', '--porcelain=v2', '-z', '--untracked-files=no'], opt)", withCounts);
         Assert.Contains("'core.fsmonitor=false'", withCounts);
 
         var withoutCounts = StatuslineScript.Generate(new StatuslineProfile
@@ -506,6 +506,119 @@ public sealed class StatuslineScriptTests
         {
             DeleteTree(dir);
         }
+    }
+
+    // Both sides come from one porcelain status: a staged rename is one staged change, a file staged and then edited
+    // again counts on both sides, and untracked files count on neither.
+    [Fact]
+    public void Generated_script_counts_staged_and_unstaged_changes()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-counts-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            InitRepo(git, repo);
+            foreach (var n in new[] { "a.txt", "b.txt", "c.txt" }) File.WriteAllText(Path.Combine(repo, n), n + "\n");
+            RunGit(git, repo, "add", "-A");
+            RunGit(git, repo, "commit", "-q", "-m", "init");
+
+            RunGit(git, repo, "mv", "a.txt", "renamed.txt");                     // staged
+            File.AppendAllText(Path.Combine(repo, "b.txt"), "staged\n");
+            RunGit(git, repo, "add", "b.txt");                                    // staged…
+            File.AppendAllText(Path.Combine(repo, "b.txt"), "and edited again\n");  // …and unstaged
+            File.AppendAllText(Path.Combine(repo, "c.txt"), "unstaged\n");       // unstaged
+            File.WriteAllText(Path.Combine(repo, "untracked.txt"), "x\n");        // neither
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}C{{git.changes}}" }, devMarker: false));
+            Assert.Equal("S2U2C4", RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd = repo })).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // Counts are served stale-while-revalidate from a cache beside the script: a fresh entry is shown without
+    // running git, and a stale one is still shown while a detached refresh recomputes it for the next refresh.
+    // The test steers freshness by editing the entry's timestamp rather than waiting out the TTL.
+    [Fact]
+    public void Generated_script_serves_cached_git_counts_and_refreshes_them_in_the_background()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-cache-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            InitRepo(git, repo);
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "a\n");
+            RunGit(git, repo, "add", "a.txt");
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}" }, devMarker: false));
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { cwd = repo });
+
+            // No entry yet: git runs inline and the result is cached beside the script.
+            Assert.Equal("S1", RunNode(node, scriptPath, payload).Trim());
+            var cacheFile = Assert.Single(Directory.GetFiles(Path.Combine(dir, "perch-statusline-cache"), "git-*.json"));
+
+            File.WriteAllText(Path.Combine(repo, "b.txt"), "b\n");
+            RunGit(git, repo, "add", "b.txt");
+
+            // A fresh entry is served as-is, so the new staged file isn't seen yet.
+            SetCacheTime(cacheFile, DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds());
+            Assert.Equal("S1", RunNode(node, scriptPath, payload).Trim());
+
+            // A stale entry is still served, and a background refresh brings it up to date.
+            SetCacheTime(cacheFile, 0);
+            Assert.Equal("S1", RunNode(node, scriptPath, payload).Trim());
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < deadline && CachedStaged(cacheFile) != 2) System.Threading.Thread.Sleep(100);
+            Assert.Equal(2, CachedStaged(cacheFile));
+            Assert.Equal("S2", RunNode(node, scriptPath, payload).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+
+        static void SetCacheTime(string file, long at)
+        {
+            var entry = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+            entry["at"] = at;
+            entry.Remove("pending");
+            File.WriteAllText(file, entry.ToJsonString());
+        }
+
+        static long? CachedStaged(string file)
+        {
+            try
+            {
+                var counts = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(file))?["counts"];
+                return counts?["staged"]?.GetValue<long>();
+            }
+            catch
+            {
+                return null;   // mid-rename, or not written yet
+            }
+        }
+    }
+
+    private static void InitRepo(string git, string repo)
+    {
+        RunGit(git, repo, "init", "-q");
+        RunGit(git, repo, "config", "user.email", "t@example.com");
+        RunGit(git, repo, "config", "user.name", "t");
+        RunGit(git, repo, "config", "commit.gpgsign", "false");
     }
 
     // git marks its object files read-only, which makes a plain recursive delete fail and leave the temp repo behind.

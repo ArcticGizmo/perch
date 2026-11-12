@@ -116,10 +116,10 @@ internal static class StatuslineScript
         #!/usr/bin/env node
         // Perch statusline — standalone, generated from profile @@NAME@@.@@DEVNOTE@@
         // Self-contained: edit freely; no Perch process is involved at runtime.
-        import { readFileSync, existsSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
-        import { join, dirname, isAbsolute, resolve } from 'node:path';
+        import { readFileSync, existsSync, statSync, openSync, fstatSync, readSync, closeSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+        import { join, dirname, basename, isAbsolute, resolve } from 'node:path';
         import { homedir } from 'node:os';
-        import { execFileSync } from 'node:child_process';
+        import { execFileSync, spawn } from 'node:child_process';
 
         const TEMPLATE = @@TEMPLATE@@;
         const NEED_GIT_COUNTS = @@GITCOUNTS@@;
@@ -489,20 +489,103 @@ internal static class StatuslineScript
           } catch {}   // exit 1 = no filter drivers at all
           return out;
         }
+        // Git for Windows puts a launcher on PATH (<root>\cmd\git.exe, <root>\bin\git.exe) that only starts the
+        // real <root>\<msys>\bin\git.exe — a second process on every call, which is a large share of a refresh
+        // where endpoint security makes each process start expensive. So call the real binary directly, with the
+        // launcher's PATH order (Git's own dirs first) so it finds the same git-lfs / sh the launcher would.
+        function realGit(git) {
+          if (process.platform !== 'win32') return { exe: git, env: undefined };
+          const parent = basename(dirname(git)).toLowerCase();
+          if (parent !== 'cmd' && parent !== 'bin') return { exe: git, env: undefined };
+          const root = dirname(dirname(git));
+          for (const sub of ['ucrt64', 'mingw64', 'clangarm64']) {
+            const exe = join(root, sub, 'bin', 'git.exe');
+            try {
+              if (!existsSync(exe) || !statSync(exe).isFile() || exe.toLowerCase() === git.toLowerCase()) continue;
+            } catch { continue; }
+            const key = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') || 'PATH';
+            const env = Object.assign({}, process.env,
+              { [key]: join(root, sub, 'bin') + ';' + join(root, 'usr', 'bin') + ';' + (process.env[key] || '') });
+            return { exe, env };
+          }
+          return { exe: git, env: undefined };
+        }
         // staged/unstaged file counts — this one does shell out to git (like a classic bash statusline),
-        // but only when the template needs it (NEED_GIT_COUNTS). Any failure yields nothing.
+        // but only when the template needs it (NEED_GIT_COUNTS). One porcelain status gives both sides
+        // (X = index vs HEAD, Y = worktree vs index); untracked files aren't counted. Any failure yields nothing.
         function gitCounts(dir) {
           try {
-            const git = gitExe(); if (!git) return null;
-            const opt = { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 };
-            const safe = gitHardening(git, opt);
-            const count = args => execFileSync(git, [...safe, ...args, '--no-ext-diff', '--no-textconv'], opt)
-              .split('\n').filter(l => l.trim().length > 0).length;
-            const staged = count(['diff', '--cached', '--numstat']);
-            const unstaged = count(['diff', '--numstat']);
+            const found = gitExe(); if (!found) return null;
+            const { exe, env } = realGit(found);
+            const opt = { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, env, windowsHide: true };
+            const safe = gitHardening(exe, opt);
+            const out = execFileSync(exe, ['--no-optional-locks', ...safe, 'status', '--porcelain=v2', '-z', '--untracked-files=no'], opt);
+            let staged = 0, unstaged = 0;
+            const fields = out.split('\0');
+            for (let i = 0; i < fields.length; i++) {
+              const f = fields[i];
+              if (f.startsWith('2 ')) i++;   // a rename/copy carries its original path as the next field
+              if (f.length < 4 || f[1] !== ' ' || (f[0] !== '1' && f[0] !== '2' && f[0] !== 'u')) continue;
+              if (f[2] !== '.') staged++;
+              if (f[3] !== '.') unstaged++;
+            }
             const changes = staged + unstaged;
             return { staged, unstaged, changes, dirty: changes > 0 };
           } catch { return null; }
+        }
+
+        // Even one git call costs a few hundred ms on a machine with endpoint security, and Claude Code refreshes
+        // the line on every message update. So counts are served stale-while-revalidate: the last result is shown
+        // at once and, once it's older than GIT_TTL_MS, a detached copy of this script recomputes it for the next
+        // refresh. Only a directory with no cached result yet pays for git inline. The cache lives beside this
+        // script (a user-owned dir), never a shared temp dir another user could plant files in.
+        const GIT_TTL_MS = 2000;
+        const GIT_PENDING_MS = 10000;   // a refresh still running (or that died) isn't restarted before this
+        const GIT_REFRESH_ARG = '--perch-refresh-git';
+        const SCRIPT_PATH = process.argv[1] ? resolve(process.argv[1]) : null;
+        function gitCacheFile(dir) {
+          if (!SCRIPT_PATH) return null;
+          const s = process.platform === 'linux' ? dir : dir.toLowerCase();
+          let h = 0x811c9dc5;
+          for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+          return join(dirname(SCRIPT_PATH), 'perch-statusline-cache', 'git-' + h.toString(16).padStart(8, '0') + '.json');
+        }
+        function readGitCache(file, dir) {
+          try {
+            const c = JSON.parse(readFileSync(file, 'utf8'));
+            return c && c.dir === dir && typeof c.at === 'number' ? c : null;   // dir check: hash collisions miss
+          } catch { return null; }
+        }
+        function writeGitCache(file, entry) {
+          try {
+            mkdirSync(dirname(file), { recursive: true });
+            const tmp = file + '.' + process.pid + '.tmp';
+            writeFileSync(tmp, JSON.stringify(entry));
+            renameSync(tmp, file);   // readers never see a torn file
+          } catch { }
+        }
+        function refreshGitCache(dir) {
+          const file = gitCacheFile(dir); if (!file) return;
+          writeGitCache(file, { dir, at: Date.now(), counts: gitCounts(dir) });
+        }
+        function cachedGitCounts(dir) {
+          const file = gitCacheFile(dir);
+          if (!file) return gitCounts(dir);
+          const c = readGitCache(file, dir);
+          if (!c) {
+            const counts = gitCounts(dir);
+            writeGitCache(file, { dir, at: Date.now(), counts });
+            return counts;
+          }
+          const now = Date.now();
+          if (now - c.at > GIT_TTL_MS && !(typeof c.pending === 'number' && now - c.pending < GIT_PENDING_MS)) {
+            writeGitCache(file, Object.assign({}, c, { pending: now }));
+            try {
+              spawn(process.execPath, [SCRIPT_PATH, GIT_REFRESH_ARG, dir],
+                { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+            } catch { }
+          }
+          return c.counts;
         }
         function injectGit(p) {
           const cwd = p.cwd || (p.workspace && p.workspace.current_dir) || '';
@@ -510,7 +593,7 @@ internal static class StatuslineScript
           const b = gitBranch(cwd);
           if (b) p.git = Object.assign({}, p.git, { branch: b });
           if (NEED_GIT_COUNTS) {
-            const c = gitCounts(cwd);
+            const c = cachedGitCounts(cwd);
             if (c) p.git = Object.assign({}, p.git, c);
           }
         }
@@ -672,12 +755,17 @@ internal static class StatuslineScript
           p.session = Object.assign({}, p.session, { name: readSessionName(p.transcript_path) });
         }
 
-        let payload = {};
-        try { payload = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { }
-        try { injectGit(payload); } catch { }
-        try { injectAccount(payload); } catch { }
-        try { injectPerch(payload); } catch { }
-        try { injectSession(payload); } catch { }
-        try { let out = render(TEMPLATE, payload); if (DEV) out = DEV_MARKER + out; process.stdout.write(out); } catch { }
+        if (process.argv[2] === GIT_REFRESH_ARG) {
+          const dir = process.argv[3];
+          try { if (NEED_GIT_COUNTS && typeof dir === 'string' && isAbsolute(dir)) refreshGitCache(dir); } catch { }
+        } else {
+          let payload = {};
+          try { payload = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { }
+          try { injectGit(payload); } catch { }
+          try { injectAccount(payload); } catch { }
+          try { injectPerch(payload); } catch { }
+          try { injectSession(payload); } catch { }
+          try { let out = render(TEMPLATE, payload); if (DEV) out = DEV_MARKER + out; process.stdout.write(out); } catch { }
+        }
         """;
 }
