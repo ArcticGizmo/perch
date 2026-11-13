@@ -61,4 +61,26 @@ public sealed class RepoWatchFilterTests
     [InlineData("rebase-merge/msgnum")]
     [InlineData("hooks/pre-commit")]
     public void IgnoredInGitDir(string path) => Assert.False(RepoWatchFilter.IsRelevantInGitDir(path));
+
+    // A file edit or a staging write only moves status; anything that can move commits, refs or worktrees reloads.
+    [Theory]
+    [InlineData("src/a.cs", false, false)]
+    [InlineData("README.md", false, false)]
+    [InlineData(".git/index", false, false)]
+    [InlineData(".git/HEAD", false, true)]
+    [InlineData(".git/refs/heads/main", false, true)]
+    [InlineData(".git/packed-refs", false, true)]
+    [InlineData(".git", false, true)]
+    [InlineData(null, false, true)]
+    [InlineData("index", true, false)]
+    [InlineData("worktrees/perch--feeds/index", true, false)]
+    [InlineData("HEAD", true, true)]
+    [InlineData("refs/heads/feature", true, true)]
+    [InlineData("packed-refs", true, true)]
+    [InlineData("worktrees/perch--feeds", true, true)]
+    [InlineData("worktrees/perch--feeds/HEAD", true, true)]
+    [InlineData("MERGE_HEAD", true, true)]
+    [InlineData(null, true, true)]
+    public void ChangesGraph(string? path, bool inGitDir, bool expected) =>
+        Assert.Equal(expected, RepoWatchFilter.ChangesGraph(path, inGitDir));
 }

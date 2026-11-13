@@ -79,4 +79,18 @@ Compare the installed v0.6.10 (before) with the first release cut from this bran
 | Scrolling a long session | Scroll quickly through a session with many edits. | Brief hitches as edit cards rebuild | Smoother. Each card builds in about a third of the time and never re-diffs. |
 | Bench | `perch bench-resume [path.jsonl]` | — | Per-variant timings; "without edits" now close to "whole" |
 
+## PF13 (git graph refresh)
+
+Open *View tree* on a repo with a session working in it. To count git runs, use Process Monitor with a Process Create filter on `git.exe`.
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Editing a file that's already modified | Let Claude edit an already-changed file, or save one yourself. | `git log`, `for-each-ref`, `stash list`, a `git status` per worktree and 2 whole-tree diffs | One `git status` plus scoped diffs. The shown diff updates if it's that file. |
+| A new file appears | Create an untracked file. | Full reload | Full reload (the WIP count changes). |
+| Commit, checkout, branch | Commit or switch branch in a terminal. | Full reload | Full reload. |
+| Burst of edits | Have Claude make a dozen quick edits. | Overlapping reloads pile up | At most one running, plus one rerun afterwards. |
+| Minimised | Minimise the window while a session works, then restore it after a minute. | Kept reloading | No git runs while minimised; one refresh on restore. |
+| Scrolled-in history | Scroll past 2,000 commits (Load more), then edit a file. | The extra pages were dropped | They stay. |
+| Subfolder | Open View tree from a session whose cwd is a subfolder of the repo, and modify a file elsewhere in the repo. | — | The "≈ no net change" marks are still right. |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

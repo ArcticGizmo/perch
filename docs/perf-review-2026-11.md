@@ -113,7 +113,8 @@ Most of the first group are **S** changes.
 | PF6 | ab3a544 | See below. |
 | PF11 | 44ae7b3 | Compression dropped; ReadyToRun rejected. See below. |
 | PF12 | 8fa903e | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
-| PF17 | (this commit) | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
+| PF17 | 67ce045 | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
+| PF13 | (this commit) | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -169,6 +170,13 @@ PF17 as built. `perch bench-resume [transcript.jsonl]` runs the resume bench hea
 - **The parsed input and the diff are cached on the `ToolCallPart`** (`Input`, `Diff`), so a rebuild after hydrate, rebind or theme change re-derives neither. This matters most for big edits, whose LCS table can be up to 1.6 MB per build. The file-path lookup for a file tool's header reads the cached input too, instead of parsing the JSON again.
 - **Fold cards are still built eagerly.** The bench puts their whole share at about 0.7 s across 800 cards, under 1 ms each. Building them on first expand would mean teaching find (which matches hidden text in collapsed folds), expand-all and sticky-header ordering to build on demand. That's not worth it at that price.
 - What's left of the resume cost is ordinary text layout, about 2.5 s for 800 prose-only items, and only the placeholder idea above avoids it.
+
+PF13 as built (git graph window):
+- **Watcher events are classified** (`RepoWatchFilter.ChangesGraph`). A working-file edit, or a staging write to `index`, can't move commits or refs, so it gets a status-only refresh. That's one `git status`, plus the invisible-change check scoped to the candidate files and a repaint of the shown file if its content changed. If the change set itself moved (a file appeared, left, or moved between staged and unstaged), it falls back to the full reload, which is the only path that rebuilds the WIP row and the worktree counts. HEAD, refs, packed-refs, worktree add/remove and merge/rebase markers reload in full, as before. For scale, on this repo with 1 worktree a warm full reload's git stage takes about 227 ms, plus two whole-tree diffs; each extra worktree adds a `git status`.
+- **Single-flight.** One automatic refresh runs at a time. Requests arriving meanwhile collapse into one rerun of the strongest kind asked for, so a burst of edits can't queue git work in GitRunner (which is shared with everything else).
+- **Paused while minimised.** Watcher and busy-poll refreshes are owed while the window is minimised and run once on restore.
+- **The invisible-change check diffs only its candidate paths** (`GetWorkingTreeDiff(cwd, staged, paths)` with `:(top,literal)` pathspecs, so it works from a subfolder and a file name like `[x].txt` matches only itself). A path list too long for a command line falls back to the whole tree.
+- **A reload keeps the pages already loaded** (`pageSize = max(PageSize, loaded)`), so scrolled-in history no longer vanishes on a refresh.
 
 ## Suggested order
 
