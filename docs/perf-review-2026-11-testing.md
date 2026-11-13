@@ -128,4 +128,13 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Find while streaming | Search for a common word, then send a prompt and watch while it streams. | Stutter as every highlight was rebuilt per frame | Smooth. |
 | Find text inside an edit | Search for a line from an Edit diff far up the thread. | Found | Found. |
 
+## Tier 3
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Transcript search speed | Overlay → Search transcripts, type a word you've used in a few sessions. Note the time in the status line. | Several seconds | Noticeably faster for a big history. |
+| Refining a search | Type `capac`, let it finish, then go on to `capacitor`. | Every transcript searched again | "Searching… N of M" counts only the sessions that matched `capac` (plus any written since), and it finishes almost at once. |
+| Refining picks up new text | With a search finished, say the new word in a live session, then extend the query to it. | — | The live session shows up. |
+| Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

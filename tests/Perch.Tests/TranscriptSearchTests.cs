@@ -156,6 +156,107 @@ public class TranscriptSearchTests : IDisposable
         Assert.Equal("MATCH", s.Text.Substring(s.MatchStart, s.MatchLength));
     }
 
+    private static string Prompt(string uuid, string text) =>
+        $$$"""{"type":"user","uuid":"{{{uuid}}}","message":{"role":"user","content":"{{{text}}}"}}""";
+
+    [Fact]
+    public void ByteScan_HandlesCrlf_Bom_AndAnUnterminatedLastLine()
+    {
+        var path = Path.Combine(_dir, "crlf.jsonl");
+        var body = string.Join("\r\n", Prompt("p0", "the Needle here"), Prompt("p1", "nothing"), Prompt("p2", "NEEDLE last"));
+        File.WriteAllText(path, body, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        var m = TranscriptSearch.SearchFile(path, "needle", false, 10)!;
+        Assert.Equal(["p0", "p2"], m.Hits.Select(h => h.Uuid));
+    }
+
+    [Fact]
+    public void ByteScan_FindsMatchesAcrossBufferBoundaries_AndInLinesLongerThanTheBuffer()
+    {
+        // Lines of mixed length, so line ends fall on both sides of every 1 MB read; one line is 3 MB.
+        var lines = new List<string>();
+        var expected = new List<string>();
+        for (int i = 0; i < 400; i++)
+        {
+            bool hit = i % 7 == 0;
+            string pad = new('x', i == 203 ? 3 << 20 : 1000 + i * 37 % 9000);
+            lines.Add(Prompt($"p{i}", hit ? $"{pad} target é {pad}" : pad));
+            if (hit) expected.Add($"p{i}");
+        }
+        var m = TranscriptSearch.SearchFile(Write([.. lines]), "TARGET", false, maxHits: 1000)!;
+        Assert.Equal(expected.Count, m.Count);
+        Assert.Equal(expected, m.Hits.Select(h => h.Uuid));
+    }
+
+    [Fact]
+    public void NonAsciiQuery_StillMatchesCaseInsensitively()
+    {
+        var m = TranscriptSearch.SearchFile(Write(Prompt("p0", "Meet at the CAFÉ"), Prompt("p1", "cafe")), "café", false, 10)!;
+        Assert.Equal("p0", Assert.Single(m.Hits).Uuid);
+    }
+
+    [Fact]
+    public void ByteScan_SkipsToolOutput_UnlessAsked()
+    {
+        var path = Write(Sample);
+        Assert.Null(TranscriptSearch.SearchFile(path, "new FluxBuffer", false, 10));
+        Assert.Equal("r1", TranscriptSearch.SearchFile(path, "new FluxBuffer", true, 10)!.Hits.Single().Uuid);
+    }
+
+    [Fact]
+    public void IndexOfIgnoreAsciiCase_FindsTheFirstOccurrence()
+    {
+        Assert.Equal(4, TranscriptSearch.IndexOfIgnoreAsciiCase("xxa ABc abc"u8, "abc"u8));
+        Assert.Equal(-1, TranscriptSearch.IndexOfIgnoreAsciiCase("ab"u8, "abc"u8));
+        Assert.Equal(0, TranscriptSearch.IndexOfIgnoreAsciiCase("aBC"u8, "abc"u8));
+        Assert.Equal(-1, TranscriptSearch.IndexOfIgnoreAsciiCase("a{c"u8, "a[c"u8));   // [ and { differ by 0x20
+    }
+
+    [Fact]
+    public void IndexOfIgnoreAsciiCase_MatchesANaiveSearch()
+    {
+        var rng = new Random(7);
+        var alphabet = "abAB_\"\\é"u8.ToArray();
+        for (int round = 0; round < 3000; round++)
+        {
+            var hay = new byte[rng.Next(0, 80)];
+            for (int i = 0; i < hay.Length; i++) hay[i] = alphabet[rng.Next(alphabet.Length)];
+            var pattern = new byte[rng.Next(2, 5)];
+            for (int i = 0; i < pattern.Length; i++) pattern[i] = alphabet[rng.Next(5)];
+            int expected = -1;
+            for (int i = 0; i + pattern.Length <= hay.Length && expected < 0; i++)
+                if (System.Text.Ascii.EqualsIgnoreCase(hay.AsSpan(i, pattern.Length), pattern)) expected = i;
+            Assert.Equal(expected, TranscriptSearch.IndexOfIgnoreAsciiCase(hay, pattern));
+        }
+    }
+
+    private static HistoryEntry Entry(string path, int stamp) =>
+        new("s", "proj", "C:\\p", path, new DateTime(2026, 11, 1).AddMinutes(stamp), false, 100 + stamp);
+
+    [Fact]
+    public void Narrowing_ExtendingTheQuery_SearchesOnlyPastMatchesAndChangedFiles()
+    {
+        var n = new TranscriptSearch.Narrowing();
+        var entries = new[] { Entry("a", 0), Entry("b", 0), Entry("c", 0) };
+        Assert.Equal([0, 1, 2], n.Candidates(entries, "cap", false));
+        n.Completed(entries, "cap", false, ["b"]);
+
+        Assert.Equal([1], n.Candidates(entries, "Capacitor", false));
+        // A file written since, or a new one, is searched again.
+        var later = new[] { Entry("a", 1), Entry("b", 0), Entry("c", 0), Entry("d", 0) };
+        Assert.Equal([0, 1, 3], n.Candidates(later, "capacitor", false));
+    }
+
+    [Fact]
+    public void Narrowing_OtherQueriesOrScopes_SearchEverything()
+    {
+        var n = new TranscriptSearch.Narrowing();
+        var entries = new[] { Entry("a", 0), Entry("b", 0) };
+        n.Completed(entries, "capacitor", false, ["b"]);
+        Assert.Equal([0, 1], n.Candidates(entries, "cap", false));         // shorter: can match more
+        Assert.Equal([0, 1], n.Candidates(entries, "flux", false));        // unrelated
+        Assert.Equal([0, 1], n.Candidates(entries, "capacitors", true));   // wider scope
+    }
+
     [Fact]
     public void RawNeedle_EscapesLikeTheJsonOnDisk()
     {

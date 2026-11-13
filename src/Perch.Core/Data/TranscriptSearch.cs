@@ -1,4 +1,8 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Perch.Data.Control;
@@ -53,28 +57,153 @@ internal static class TranscriptSearch
         var needle = RawNeedle(query);
         int count = 0;
         var hits = new List<TranscriptHit>();
+
+        // False once the cap is reached, which ends the scan.
+        bool Take(string line)
+        {
+            foreach (var hit in MatchLine(line, query, includeTools))
+            {
+                if (hits.Count < maxHits) hits.Add(hit);
+                if (++count >= CountCap) return false;
+            }
+            return true;
+        }
+
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
                 1 << 16, FileOptions.SequentialScan);
-            using var reader = new StreamReader(fs);
-            while (reader.ReadLine() is { } line)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (!line.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
-                // Tool output is the bulk of a transcript; skip it without a parse when it isn't being searched.
-                if (!includeTools && line.Contains("\"type\":\"tool_result\"", StringComparison.Ordinal)) continue;
-                foreach (var hit in MatchLine(line, query, includeTools))
-                {
-                    if (hits.Count < maxHits) hits.Add(hit);
-                    if (++count >= CountCap) return new TranscriptMatches(count, true, hits);
-                }
-            }
+            if (Ascii.IsValid(needle)) ScanBytes(fs, needle, includeTools, Take, ct);
+            else ScanChars(fs, needle, includeTools, Take, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch { /* unreadable right now — report what was found, if anything */ }
-        return count == 0 ? null : new TranscriptMatches(count, false, hits);
+        return count == 0 ? null : new TranscriptMatches(count, count >= CountCap, hits);
     }
+
+    private static ReadOnlySpan<byte> ToolResultTag => "\"type\":\"tool_result\""u8;
+
+    // A transcript is mostly lines that don't match, and decoding them is most of a search's cost (about 2 bytes
+    // of string per byte of file). An ASCII needle can be found in the raw UTF-8, so only the lines it lands in
+    // are decoded. The one difference from a case-insensitive string search: a non-ASCII letter whose upper
+    // case is ASCII (the dotless ı, the long ſ) no longer stands in for its ASCII look-alike.
+    private static void ScanBytes(FileStream fs, string needle, bool includeTools, Func<string, bool> take,
+        CancellationToken ct)
+    {
+        var pattern = Encoding.ASCII.GetBytes(needle);
+        var buffer = ArrayPool<byte>.Shared.Rent(1 << 20);
+        try
+        {
+            int filled = 0;
+            bool eof = false, atStart = true;
+            while (!eof)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (filled == buffer.Length)
+                {
+                    // One line longer than the buffer (a pasted image, a huge tool result): grow to hold it.
+                    var bigger = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                    buffer.AsSpan(0, filled).CopyTo(bigger);
+                    ArrayPool<byte>.Shared.Return(buffer);
+                    buffer = bigger;
+                }
+                int read = fs.Read(buffer, filled, buffer.Length - filled);
+                eof = read == 0;
+                filled += read;
+                int skip = 0;
+                if (atStart && (filled >= 3 || eof))
+                {
+                    if (buffer.AsSpan(0, filled).StartsWith("﻿"u8)) skip = 3;
+                    atStart = false;
+                }
+
+                // The whole lines held so far; at the end of the file, the unterminated last line too.
+                var data = buffer.AsSpan(skip, filled - skip);
+                int complete = eof ? data.Length : data.LastIndexOf((byte)'\n') + 1;
+                var lines = data[..complete];
+                int pos = 0;
+                while (pos < lines.Length)
+                {
+                    int at = IndexOfIgnoreAsciiCase(lines[pos..], pattern);
+                    if (at < 0) break;
+                    at += pos;
+                    int start = lines[..at].LastIndexOf((byte)'\n') + 1;
+                    int nl = lines[at..].IndexOf((byte)'\n');
+                    int end = nl < 0 ? lines.Length : at + nl;
+                    pos = end + 1;
+                    var line = lines[start..end];
+                    if (line.Length > 0 && line[^1] == (byte)'\r') line = line[..^1];
+                    // Tool output is the bulk of a transcript; skip it without a parse when it isn't being searched.
+                    if (!includeTools && line.IndexOf(ToolResultTag) >= 0) continue;
+                    if (!take(Encoding.UTF8.GetString(line))) return;
+                }
+
+                int keep = data.Length - complete;
+                data[complete..].CopyTo(buffer);
+                filled = keep;
+            }
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
+    private static void ScanChars(FileStream fs, string needle, bool includeTools, Func<string, bool> take,
+        CancellationToken ct)
+    {
+        using var reader = new StreamReader(fs);
+        while (reader.ReadLine() is { } line)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!line.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!includeTools && line.Contains("\"type\":\"tool_result\"", StringComparison.Ordinal)) continue;
+            if (!take(line)) return;
+        }
+    }
+
+    /// <summary>Where the ASCII <paramref name="pattern"/> (at least 2 bytes) first occurs in
+    /// <paramref name="haystack"/>, ignoring ASCII case; -1 when it doesn't.</summary>
+    internal static int IndexOfIgnoreAsciiCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> pattern)
+    {
+        int n = pattern.Length;
+        int lastStart = haystack.Length - n;
+        if (lastStart < 0) return -1;
+        byte fLo = AsciiLower(pattern[0]), fUp = AsciiUpper(pattern[0]);
+        int i = 0;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            // A position is a candidate only when both its first and last bytes fit, which in prose and JSON
+            // is rare even for common letters, so the full compare seldom runs.
+            var firstLo = Vector128.Create(fLo);
+            var firstUp = Vector128.Create(fUp);
+            var lastLo = Vector128.Create(AsciiLower(pattern[n - 1]));
+            var lastUp = Vector128.Create(AsciiUpper(pattern[n - 1]));
+            ref byte h = ref MemoryMarshal.GetReference(haystack);
+            for (; i + Vector128<byte>.Count - 1 <= lastStart; i += Vector128<byte>.Count)
+            {
+                var a = Vector128.LoadUnsafe(ref h, (nuint)i);
+                var b = Vector128.LoadUnsafe(ref h, (nuint)(i + n - 1));
+                var hit = (Vector128.Equals(a, firstLo) | Vector128.Equals(a, firstUp))
+                    & (Vector128.Equals(b, lastLo) | Vector128.Equals(b, lastUp));
+                for (uint bits = hit.ExtractMostSignificantBits(); bits != 0; bits &= bits - 1)
+                {
+                    int at = i + BitOperations.TrailingZeroCount(bits);
+                    if (Ascii.EqualsIgnoreCase(haystack.Slice(at, n), pattern)) return at;
+                }
+            }
+        }
+        while (i <= lastStart)
+        {
+            int next = haystack[i..].IndexOfAny(fLo, fUp);
+            if (next < 0) return -1;
+            i += next;
+            if (i > lastStart) return -1;
+            if (Ascii.EqualsIgnoreCase(haystack.Slice(i, n), pattern)) return i;
+            i++;
+        }
+        return -1;
+    }
+
+    private static byte AsciiLower(byte b) => b is >= (byte)'A' and <= (byte)'Z' ? (byte)(b | 0x20) : b;
+    private static byte AsciiUpper(byte b) => b is >= (byte)'a' and <= (byte)'z' ? (byte)(b & ~0x20) : b;
 
     /// <summary>Searches many transcripts in parallel, calling <paramref name="onMatch"/> (from a worker thread)
     /// with each matching file's index into <paramref name="paths"/>, and <paramref name="onScanned"/> after each
@@ -96,6 +225,56 @@ internal static class TranscriptSearch
                 onScanned?.Invoke();
             }
         });
+    }
+
+    /// <summary>Remembers the last finished search so that one which extends it ("capac" → "capacitor") reads
+    /// only the transcripts that can still match. Text holding the longer query holds the shorter one too, so
+    /// a transcript that didn't match before can't match now unless it has been written since.</summary>
+    internal sealed class Narrowing
+    {
+        private readonly object _lock = new();
+        private string? _query;
+        private bool _includeTools;
+        private Dictionary<string, (DateTime LastWrite, long Size)> _seen = new(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> _matched = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The indexes into <paramref name="entries"/> worth searching for <paramref name="query"/>: all
+        /// of them, unless it extends the last finished search with the same scope, in which case only those
+        /// that matched then, plus any written or created since.</summary>
+        public List<int> Candidates(IReadOnlyList<HistoryEntry> entries, string query, bool includeTools)
+        {
+            lock (_lock)
+            {
+                bool narrows = _query is not null && includeTools == _includeTools
+                    && query.Contains(_query, StringComparison.OrdinalIgnoreCase);
+                var picked = new List<int>(narrows ? _matched.Count + 8 : entries.Count);
+                for (int i = 0; i < entries.Count; i++)
+                {
+                    var e = entries[i];
+                    if (!narrows || _matched.Contains(e.Path)
+                        || !_seen.TryGetValue(e.Path, out var was) || was != (e.LastUpdated, e.SizeBytes))
+                        picked.Add(i);
+                }
+                return picked;
+            }
+        }
+
+        /// <summary>Records a search that ran to the end over <paramref name="entries"/> (every one of them either
+        /// searched or ruled out), and the transcripts it matched.</summary>
+        public void Completed(IReadOnlyList<HistoryEntry> entries, string query, bool includeTools,
+            IEnumerable<string> matchedPaths)
+        {
+            var seen = new Dictionary<string, (DateTime, long)>(entries.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var e in entries) seen[e.Path] = (e.LastUpdated, e.SizeBytes);
+            var matched = new HashSet<string>(matchedPaths, StringComparer.OrdinalIgnoreCase);
+            lock (_lock)
+            {
+                _query = query;
+                _includeTools = includeTools;
+                _seen = seen;
+                _matched = matched;
+            }
+        }
     }
 
     /// <summary>The hits in one transcript line, confirmed against the text the viewer shows. Sub-agent lines

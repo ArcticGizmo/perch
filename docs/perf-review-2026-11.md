@@ -219,6 +219,11 @@ PF19 as built (Ctrl+F). Measured with the long-thread bench (240 items), back to
 - **One owner-drawn `FindLayer`** paints every highlight with cached brushes, skipping matches more than 400 DIPs outside the viewport using their item's wrapper bounds. It replaces a `Border` per match, which was rebuilt and re-measured on every reflow (every streamed frame). It repaints on scroll and reflow.
 - What's left of the one-letter case is the walk and glyph mapping over 7,000 matches. Indexing the model text would go further, but it isn't worth it for a one-character query, which only searches on Enter since PF8.
 
+Tier 3, transcript search, as built. Measured single-threaded over this machine's 4.3 GB history (2,352 transcripts), back to back, warm cache:
+- **A transcript is matched in its raw UTF-8 bytes**, and only the lines the query lands in are decoded and parsed. The match anchors on the query's first and last bytes together, 16 positions at a time, so even common letters seldom reach a full compare. Old line pre-filter alone (no parse): 5.0–5.9 s and 8.9 GB allocated per query. New full search: **1.7–2.3 s and 0.14–0.8 GB**, depending on how many lines hold the query. Raw reads alone take 1.1–1.5 s. A query with non-ASCII letters keeps the decoded path. The one difference: a non-ASCII letter whose upper case is ASCII (ı, ſ) no longer matches its look-alike.
+- **A query that extends the last finished one** (same scope) searches only the transcripts that matched before, plus any written or created since (`TranscriptSearch.Narrowing`).
+- **`ListAll` still runs per search.** Its per-file reads are cached by length and mtime, so it's the directory walk and a stat per file; holding it for the window's life would hide sessions started while it's open.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.
