@@ -143,6 +143,10 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Long uptime | Leave Perch running for a working day with sessions starting and ending, and note `perch.exe`'s private memory morning and evening. | Creeps up with every session | Levels off. Rows, task lists and sub-agents of running sessions are unaffected. |
 | Resume after a break | End a session, wait over 40 minutes, resume it. | Its row details return | The same (its transcript is folded again from the start). |
 | File links | In a session, ask Claude to create a new file and name it in its reply; then scroll a long thread up and down. | Links appear | The new file's link still appears (within half a minute if it was named before it was written). Paths that exist stay clickable. |
+| Drag-select across blocks | In a long session window, drag from a heading down through several paragraphs and a code block, including past the bottom edge so it auto-scrolls. Copy. | Works, but heavier on a long thread | The same selection and copied Markdown; smoother on a long thread. |
+| Branch chip | Ask Claude to `git checkout -b` a new branch, and separately to just explain some code. | The chip updates after the checkout | The same; the explanation alone no longer schedules branch reads. |
+| Changed files panel | Open the panel, have Claude edit two files. | The list refreshes | The same, about a second after each edit lands. |
+| Palette and @ hover | Type `/` and move the mouse down the list; then type `@` and do the same. Use ↑/↓ too. | The highlight follows | The same. The list no longer jumps while hovering; arrow keys keep the highlight in view. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

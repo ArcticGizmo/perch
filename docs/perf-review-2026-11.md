@@ -261,6 +261,11 @@ Tier 3, unbounded caches, as built:
 
 Tier 3, file-ref probes, as built: `FileRefResolver` keeps a found path for 10 minutes and a missing one for 30 seconds (both were 5 seconds), and a full cache (now 4,096 spans) drops its least recently used half instead of emptying. Scrolling back through a settled thread no longer stats every inline path again. The probe itself still runs on the UI thread on a cache miss; moving it off would mean re-rendering a span when its answer lands, which isn't worth it for one `File.Exists` per new span.
 
+Tier 3, session window items, as built:
+- **Cross-block selection** (`BlockSelection.Nearest`) keeps each block's on-show rect in the scroll content's space until the next layout pass, so a drag move costs a translation plus arithmetic per block rather than a transform and a walk up the clipping ancestors for each. Linear over cached rects is already cheap, so there's no binary search.
+- **The branch chip and changed-files timers restart only when a tool call newly finishes** (and isn't a read-only tool such as Read, Grep or WebFetch), not on every streamed delta.
+- **The slash palette and @-mention list restyle two rows on hover** instead of rebuilding every row, which also stops a hover from scrolling the list. Arrow keys still scroll the highlighted row into view.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.

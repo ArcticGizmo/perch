@@ -76,10 +76,21 @@ internal sealed partial class SessionWindow
 
     private void RefreshChangesNow() => _changesPanel.Refresh(_session?.Cwd ?? _cwd);
 
+    // Tools whose results can't mean a file was written or the branch moved.
+    private static readonly HashSet<string> ReadOnlyTools = new(StringComparer.Ordinal)
+    {
+        "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch", "TodoWrite", "ToolSearch", "TaskOutput", "BashOutput",
+        "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+    };
+
+    private readonly HashSet<string> _toolResultsSeen = new(StringComparer.Ordinal);
+
     // A tool result landed (a file was likely written, or the branch switched): coalesce a branch re-read
-    // regardless of the panel, and a changed-files refresh while the panel is open.
+    // regardless of the panel, and a changed-files refresh while the panel is open. Streamed text raises the
+    // same event many times a second, so only a newly finished call counts.
     private void OnConversationChangedForChanges(ConversationItem item, ConversationChange change)
     {
+        if (!ToolResultLanded(item)) return;
         _branchRefreshTimer ??= BuildBranchTimer();
         _branchRefreshTimer.Stop();
         _branchRefreshTimer.Start();
@@ -88,6 +99,17 @@ internal sealed partial class SessionWindow
         _changesRefreshTimer ??= BuildChangesTimer();
         _changesRefreshTimer.Stop();
         _changesRefreshTimer.Start();
+    }
+
+    private bool ToolResultLanded(ConversationItem item)
+    {
+        if (item is not AssistantMessageItem message) return false;
+        bool landed = false;
+        foreach (var part in message.Parts)
+            if (part is ToolCallPart { Status: not ToolCallStatus.Running } call && call.ToolUseId.Length > 0
+                && !ReadOnlyTools.Contains(call.ToolName) && _toolResultsSeen.Add(call.ToolUseId))
+                landed = true;
+        return landed;
     }
 
     private DispatcherTimer BuildChangesTimer()

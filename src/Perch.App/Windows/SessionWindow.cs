@@ -2958,8 +2958,22 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void MovePalette(int delta)
     {
         if (_paletteItems.Count == 0) return;
-        _paletteIndex = (_paletteIndex + delta + _paletteItems.Count) % _paletteItems.Count;
-        RenderPalette();
+        _paletteIndex = HighlightRow(_paletteRows, _paletteIndex,
+            (_paletteIndex + delta + _paletteItems.Count) % _paletteItems.Count, bringIntoView: true);
+    }
+
+    // Moves a list's highlight from one row to another by restyling just those two, rather than rebuilding every
+    // row (which a hover used to do on each row it crossed). Returns the new index.
+    private int HighlightRow(Panel rows, int from, int to, bool bringIntoView)
+    {
+        if (from != to && from >= 0 && from < rows.Children.Count && rows.Children[from] is Border old)
+            old.Background = Brushes.Transparent;
+        if (to >= 0 && to < rows.Children.Count && rows.Children[to] is Border row)
+        {
+            row.Background = _p.Raised2;
+            if (bringIntoView) row.BringIntoView();
+        }
+        return to;
     }
 
     private void RenderPalette()
@@ -2997,7 +3011,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             Background = index == _paletteIndex ? _p.Raised2 : Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = row,
         };
-        frame.PointerEntered += (_, _) => { _paletteIndex = index; RenderPalette(); };
+        frame.PointerEntered += (_, _) => _paletteIndex = HighlightRow(_paletteRows, _paletteIndex, index, bringIntoView: false);
         frame.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { _paletteIndex = index; AcceptPalette(run: true); } };
         return frame;
     }
@@ -3133,8 +3147,8 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
     private void MoveMention(int delta)
     {
         if (_mentionItems.Count == 0) return;
-        _mentionIndex = (_mentionIndex + delta + _mentionItems.Count) % _mentionItems.Count;
-        RenderMention();
+        _mentionIndex = HighlightRow(_mentionRows, _mentionIndex,
+            (_mentionIndex + delta + _mentionItems.Count) % _mentionItems.Count, bringIntoView: true);
     }
 
     private void RenderMention()
@@ -3175,7 +3189,7 @@ internal sealed partial class SessionWindow : Window, IArtifactPublisher
             Background = index == _mentionIndex ? _p.Raised2 : Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = line,
         };
-        frame.PointerEntered += (_, _) => { _mentionIndex = index; RenderMention(); };
+        frame.PointerEntered += (_, _) => _mentionIndex = HighlightRow(_mentionRows, _mentionIndex, index, bringIntoView: false);
         frame.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { _mentionIndex = index; AcceptMention(); } };
         return frame;
     }
