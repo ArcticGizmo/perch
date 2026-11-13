@@ -46,4 +46,14 @@ A dev run writes its logs to `%APPDATA%\Perch (Dev)\logs\`. Quit the installed t
 | Overlay 1 s tick, hidden | With a session running, hide the overlay however you normally do. | 1 Hz repaint and account lookup continue while hidden | The tick stops. Show the overlay again: the elapsed time resumes at once. |
 | Overlay 1 s tick, compact rows | Switch to compact rows (the density toggle) with a session running. | 1 Hz repaints of a row with no elapsed label | No per-second repaints. Switch back to roomy: the elapsed time ticks again. |
 
+## PF11 (publish without compression)
+
+Compare the installed v0.6.10 (before) with the first release cut from this branch (after), or run `publish.bat` and install `releases\Perch-win-Setup.exe`.
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Tray memory | Leave the tray running for 10 minutes with your usual sessions. In Task Manager → Details, add the *Commit size* column and read `perch.exe`. | Higher by roughly 25–90 MB (assemblies held decompressed) | Lower by roughly that much. *Memory (active private working set)* should drop too. |
+| Cold start | After a reboot (or with the tray quit for a while), start Perch and read the last `startup:` line in `%APPDATA%\Perch\logs\launch.log`. | No `startup:` line (v0.6.10 doesn't write it) | `startup: overlay open N ms after process start`. Note N across a few launches, so the next release can be compared. |
+| Download and install size | Look at the release assets and `%LOCALAPPDATA%\Perch\current\perch.exe`. | Setup about 64 MB, perch.exe 50 MB | Setup about 2 MB bigger, perch.exe about 115 MB |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

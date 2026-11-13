@@ -110,7 +110,8 @@ Most of the first group are **S** changes.
 | PF8 | c799c5e, 3e95abe | Debounce only; PF19 is the proper fix. |
 | PF9 | a67d6ae | |
 | PF10 | cd2675b | Mutex probe 3.4 ms vs 13 ms by name. |
-| PF6 | (this batch) | See below. |
+| PF6 | ab3a544 | See below. |
+| PF11 | (this commit) | Compression dropped; ReadyToRun rejected. See below. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -122,6 +123,25 @@ Left out on purpose:
 - **Backing the social poll off while Realtime is up.** The socket only carries post inserts, so reactions and game state would lag by up to 5 minutes, and the client doesn't expose whether the socket is joined.
 - **Lock-gating the mic.** Its `Stop` resets the call-window tracker, so a lock would forget which window holds the call.
 - **Pausing PR polls for long-idle sessions.** A review on an idle session's open PR is exactly what the alert is for.
+
+PF11 as measured (2026-11-13, this machine, with CrowdStrike and Defender scanning every launch). Four Release single-file publishes of the same commit were compared:
+- **A:** today's compressed bundle;
+- **B:** uncompressed;
+- **C:** uncompressed with ReadyToRun;
+- **D:** compressed with ReadyToRun.
+
+The tray itself wasn't launched: a dev-profile launch rewrites the dev hook marker and reconciles hooks into the declared config dirs. The probes were `--version` (7 runs), `render` (3 runs) and `bench-roost 1` (5 runs), all of which exit before any profile or hook work.
+
+| Variant | Exe | Zipped (≈ download) | `bench-roost` private / WS | `render` private / WS | `--version` median |
+|---|---|---|---|---|---|
+| A compressed (was shipped) | 50 MB | 44 MB | 107 / 186 MB | 687 / 837 MB | 322 ms |
+| **B uncompressed (now shipped)** | 115 MB | **46 MB** | **84 / 145 MB** | **599 / 722 MB** | 610 ms |
+| C ReadyToRun | 219 MB | 84 MB | 94 / 156 MB | crashed | 910 ms |
+| D ReadyToRun + compressed | 85 MB | 79 MB | 219 / 299 MB | crashed | 785 ms |
+
+- **Compression** only saves 2 MB of download, because Velopack's package is a zip anyway. In exchange it holds every loaded assembly decompressed in private memory for the life of the tray: 23 MB more in the Roost probe and 88 MB more in the render probe. It's now off in `publish.bat` and `release.yml`; the macOS publish never had it.
+- **ReadyToRun** is rejected. It nearly doubles the download (+38 MB), and no startup win showed: launch time on this machine tracks file size, because EDR scans the whole exe on each start (see the `--version` medians), and `bench-roost` timing was within its own ±1 s noise. In addition, every `render` run of both R2R builds died with an access violation in Skia's PNG encoder, reached through `CaptureRenderedFrame().Save` in `HeadlessRenderer` (0 of 6 non-R2R runs did). That suggests a lifetime bug in the headless capture path that R2R's different GC and JIT timing exposes. It's test-harness only, and worth a look if the render harness ever crashes on CI.
+- The real tray number now lands in `launch.log` on every start (`startup: overlay open N ms after process start`). Compare it across the next release to confirm the cold start didn't regress.
 
 ## Suggested order
 

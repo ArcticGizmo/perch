@@ -598,6 +598,7 @@ public partial class App : Application
             // Goes through the Quiet-mode resolver so a quiet window restored from disk applies at startup.
             ApplyEffectiveSettings();
 
+            _overlay.Opened += LogStartupTime;
             _overlay.Show();
 
             // If the persisted mode is Docked, reserve the edge column now the window (and its handle) exist.
@@ -1345,6 +1346,17 @@ public partial class App : Application
             // The shell persists the new profile asynchronously; give it a moment before reading it back.
             DispatcherTimer.RunOnce(() => { RefreshDndButton(); CheckDnd(); }, TimeSpan.FromMilliseconds(600));
         }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // Startup cost is otherwise invisible outside a profiler, and it moves with the publish settings (PF11), so
+    // every launch records how long the overlay took to appear.
+    private void LogStartupTime(object? sender, EventArgs e)
+    {
+        if (_overlay is { } overlay) overlay.Opened -= LogStartupTime;
+        double ms;
+        try { ms = (DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds; }
+        catch { return; }
+        Task.Run(() => LaunchLog.Write($"startup: overlay open {ms:F0} ms after process start"));
     }
 
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the

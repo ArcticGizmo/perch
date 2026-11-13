@@ -15,9 +15,11 @@ if "%VERSION%"=="" (
 
 echo Building Perch v%VERSION%...
 
+:: No EnableCompressionInSingleFile for the tray: a compressed bundle inflates every assembly into private memory
+:: for the tray's whole life, and the Velopack package is a zip anyway (44 vs 46 MB zipped). See PF11 in
+:: docs\perf-review-2026-11.md. Keep release.yml in step.
 dotnet publish src\Perch.App\Perch.App.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-x64 --self-contained true ^
     -p:PublishSingleFile=true ^
-    -p:EnableCompressionInSingleFile=true ^
     -p:DebugType=embedded ^
     -p:Version=%VERSION% ^
     -o publish\
