@@ -23,6 +23,8 @@ internal static class UsageBarRenderer
     /// <paramref name="valueText"/>, when supplied, replaces the right-column percentage with an arbitrary
     /// caption (the spend bar's dollar figure) — the fill still tracks <paramref name="percent"/>.
     /// </summary>
+    private static readonly string[] PercentLabels = Enumerable.Range(0, 101).Select(i => $"{i}%").ToArray();
+
     public static void Draw(
         DrawingContext ctx, double left, double right, double midY,
         string caption, double? percent, double? expectedPct, bool stale,
@@ -35,9 +37,8 @@ internal static class UsageBarRenderer
         // Session/Weekly bars, but a scoped bar is captioned with the model's display name from the
         // endpoint, which would otherwise run under the track.
         Color capColor = stale ? Palette.Blend(muted, bgBlend, 0.5f) : muted;
-        var capFt = OverlayDraw.NewText(caption, capSize, OverlayDraw.Brush(capColor));   // mutated below: not the shared cache
-        capFt.MaxTextWidth = Math.Max(0, captionW - 4);
-        capFt.Trimming = TextTrimming.CharacterEllipsis;
+        var capFt = OverlayDraw.Text(OverlayDraw.Truncate(caption, capSize, Math.Max(0, captionW - 4)), capSize,
+            OverlayDraw.Brush(capColor));
         OverlayDraw.TextLeftMid(ctx, capFt, left, midY);
 
         // Track
@@ -47,7 +48,7 @@ internal static class UsageBarRenderer
         double trackY     = midY - trackH / 2;
 
         Color trackColor = stale ? Palette.Blend(track, bgBlend, 0.4f) : track;
-        OverlayDraw.Pill(ctx, new SolidColorBrush(trackColor), new Rect(trackLeft, trackY, trackW, trackH));
+        OverlayDraw.Pill(ctx, OverlayDraw.Brush(trackColor), new Rect(trackLeft, trackY, trackW, trackH));
 
         // Fill + percentage text
         string pctText;
@@ -64,11 +65,11 @@ internal static class UsageBarRenderer
 
             double fillW = Math.Round(trackW * clamped / 100.0);
             if (fillW > 0)
-                OverlayDraw.Pill(ctx, new SolidColorBrush(barColor), new Rect(trackLeft, trackY, fillW, trackH));
+                OverlayDraw.Pill(ctx, OverlayDraw.Brush(barColor), new Rect(trackLeft, trackY, fillW, trackH));
 
             // The spend bar passes a dollar caption (valueText) for the right column; the rate bars leave it
             // null and show the percentage. The fill and colour still come from the percentage either way.
-            pctText   = valueText ?? $"{(int)Math.Round(clamped)}%";
+            pctText   = valueText ?? PercentLabels[(int)Math.Round(clamped)];
             textColor = barColor;
         }
         else
@@ -83,11 +84,11 @@ internal static class UsageBarRenderer
         {
             double markerX = trackLeft + Math.Round(trackW * ep / 100.0);
             Color markerColor = stale ? Palette.Blend(expectedMark, bgBlend, 0.5f) : expectedMark;
-            ctx.DrawRectangle(new SolidColorBrush(markerColor), null,
+            ctx.DrawRectangle(OverlayDraw.Brush(markerColor), null,
                 new Rect(markerX - 1, trackY - 1, 2, trackH + 2));
         }
 
-        var pctFt = OverlayDraw.Text(pctText, pctSize, new SolidColorBrush(textColor), FontWeight.Bold);
+        var pctFt = OverlayDraw.Text(pctText, pctSize, OverlayDraw.Brush(textColor), FontWeight.Bold);
         OverlayDraw.TextLeftMid(ctx, pctFt, right - pctFt.Width, midY);
     }
 

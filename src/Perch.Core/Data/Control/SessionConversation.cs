@@ -109,6 +109,37 @@ internal sealed class ToolCallPart(string toolUseId, string toolName, string sum
     /// <summary>The background task this call started (a <c>run_in_background</c> shell, a Monitor, an async agent),
     /// looked up in <see cref="SessionConversation.BackgroundTasks"/>. Null for an ordinary call.</summary>
     public string? BackgroundTaskId { get; internal set; }
+
+    // A card is rebuilt from its part on every hydrate, rebind and theme change, and the input never changes once the
+    // call lands, so the parse and (for an edit) the O(n·m) line diff are worked out once here (perf review PF17).
+    private System.Text.Json.Nodes.JsonNode? _input;
+    private bool _inputParsed;
+    private IReadOnlyList<GitDiffLine>? _diff;
+    private bool _diffBuilt;
+
+    /// <summary>The parsed <see cref="InputJson"/>, or null when it isn't JSON. Shared: treat it as read-only.</summary>
+    public System.Text.Json.Nodes.JsonNode? Input
+    {
+        get
+        {
+            if (_inputParsed) return _input;
+            try { _input = System.Text.Json.Nodes.JsonNode.Parse(InputJson); } catch { _input = null; }
+            _inputParsed = true;
+            return _input;
+        }
+    }
+
+    /// <summary>The unified diff of an Edit/MultiEdit/Write call (see <see cref="EditDiff.Build"/>), else null.</summary>
+    public IReadOnlyList<GitDiffLine>? Diff
+    {
+        get
+        {
+            if (_diffBuilt) return _diff;
+            _diff = EditDiff.IsEditTool(ToolName) ? EditDiff.Build(ToolName, Input) : null;
+            _diffBuilt = true;
+            return _diff;
+        }
+    }
 }
 
 /// <summary>A background task ended (or a Monitor delivered an event): a quiet one-line notice in the thread, never
@@ -172,7 +203,7 @@ internal sealed class SessionConversation
     public event Action<BackgroundTask>? BackgroundTaskChanged;
 
     // The session id a history load is for, so an image-bearing user line can resolve its cached image files
-    // (~/.claude/image-cache/{sessionId}/{N}.ext). Set on the scratch conversation in LoadHistory; null live.
+    // (~/.claude/image-cache/{sessionId}/{N}.ext). Set by a read-only viewer (UseHistorySession); null live.
     private string? _historySessionId;
 
     // The /compact currently running (its progress row), and the context size just before it, so the freed
@@ -537,12 +568,29 @@ internal sealed class SessionConversation
     /// echoes) become user items. Everything loaded is closed (no turn bookkeeping) and <see cref="Reset"/>
     /// is raised once. Returns how many items were added. Never throws on a bad line.
     /// </summary>
-    public int LoadHistory(IEnumerable<string> transcriptLines, string? sessionId = null)
+    public int LoadHistory(IEnumerable<string> transcriptLines, string? sessionId = null) =>
+        LoadHistory(ParseHistory(transcriptLines, sessionId));
+
+    /// <summary>Decodes a resumed session's transcript lines for <see cref="LoadHistory(IReadOnlyList{ParsedTranscriptLine})"/>.
+    /// The JSON parse and any image recovery are most of a resume's cost, and they touch no conversation state, so a
+    /// session window runs this on a worker and applies the result on the UI thread (perf review PF12).
+    /// <paramref name="sessionId"/> is the image-cache id. Thread-agnostic. Never throws on a bad line.</summary>
+    internal static IReadOnlyList<ParsedTranscriptLine> ParseHistory(IEnumerable<string> transcriptLines, string? sessionId)
     {
-        var scratch = new SessionConversation { _historySessionId = sessionId };
+        var parsed = new List<ParsedTranscriptLine>();
         foreach (var line in transcriptLines)
+            if (ParseTranscriptLine(line, sessionId) is { } p) parsed.Add(p);
+        return parsed;
+    }
+
+    /// <summary><see cref="LoadHistory(IEnumerable{string}, string?)"/> for lines already decoded by
+    /// <see cref="ParseHistory"/>.</summary>
+    internal int LoadHistory(IReadOnlyList<ParsedTranscriptLine> history)
+    {
+        var scratch = new SessionConversation();
+        foreach (var parsed in history)
         {
-            try { scratch.ApplyTranscriptLine(line); }
+            try { scratch.ApplyParsed(parsed); }
             catch { /* a malformed line is skipped, never fatal */ }
         }
         foreach (var item in scratch._items)
@@ -644,7 +692,7 @@ internal sealed class SessionConversation
                 return new ParsedTranscriptLine(prompt, images.Count > 0 ? images : null, [],
                     TranscriptJson.AsString(root["uuid"]));
             }
-            var events = StreamJsonParser.Parse(line);
+            var events = StreamJsonParser.Parse(root);
             return events.Count > 0 ? new ParsedTranscriptLine(null, null, events) : null;
         }
         catch

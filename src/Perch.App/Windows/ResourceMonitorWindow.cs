@@ -34,6 +34,13 @@ internal sealed class ResourceMonitorWindow : Window
     private int _analysedVersion = -1;
     private ResourceContext _context = ResourceContext.None;
     private ResourceContext? _analysedContext;
+
+    // The analysis is built on a worker from a snapshot (it grows with the recording, and was rebuilt on the UI thread
+    // every 5 s tick). One build at a time; a request meanwhile reruns once it lands. While recording, the next build
+    // waits at least four times as long as the last took, so analysis stays under a fifth of a core.
+    private bool _analysing, _analyseAgain;
+    private long _nextAnalysisAt;
+    private DispatcherTimer? _analysisRetry;
     private DateTime _contextLoadedAt;
     private bool _contextLoading;
     private int _cursor = -1;
@@ -293,16 +300,59 @@ internal sealed class ResourceMonitorWindow : Window
     private void Refresh()
     {
         if (_recording is { } r && (r.Version != _analysedVersion || !ReferenceEquals(_context, _analysedContext)))
-        {
-            _analysis = ResourceAnalysis.Build(r, _context);
-            _analysedVersion = r.Version;
-            _analysedContext = _context;
-        }
+            RequestAnalysis(r);
         else if (_recording is null)
-        {
             _analysis = null;
+        ShowAnalysis();
+    }
+
+    private void RequestAnalysis(ResourceRecording recording)
+    {
+        if (_analysing) { _analyseAgain = true; return; }
+        long wait = _nextAnalysisAt - Environment.TickCount64;
+        if (wait > 0 && _recorder is { IsRecording: true })
+        {
+            _analysisRetry ??= new DispatcherTimer();
+            _analysisRetry.Stop();
+            _analysisRetry.Interval = TimeSpan.FromMilliseconds(wait);
+            _analysisRetry.Tick -= OnAnalysisRetry;
+            _analysisRetry.Tick += OnAnalysisRetry;
+            _analysisRetry.Start();
+            return;
         }
 
+        _analysing = true;
+        var snapshot = recording.Snapshot();
+        var context = _context;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Task.Run(() => ResourceAnalysis.Build(snapshot, context)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            _analysing = false;
+            _nextAnalysisAt = Environment.TickCount64 + 4 * sw.ElapsedMilliseconds;
+            if (IsVisible && ReferenceEquals(_recording, recording) && t.IsCompletedSuccessfully)
+            {
+                _analysis = t.Result;
+                _analysedVersion = snapshot.Version;
+                _analysedContext = context;
+                ShowAnalysis();
+            }
+            if (_analyseAgain)
+            {
+                _analyseAgain = false;
+                Refresh();
+            }
+        }));
+    }
+
+    private void OnAnalysisRetry(object? sender, EventArgs e)
+    {
+        _analysisRetry?.Stop();
+        if (IsVisible) Refresh();
+    }
+
+    // Puts the current analysis (possibly one tick behind the recording while the next builds) on screen.
+    private void ShowAnalysis()
+    {
         int count = _analysis?.TickCount ?? 0;
         if (count == 0) _cursor = -1;
         else if (_follow || _cursor < 0 || _cursor >= count) _cursor = count - 1;

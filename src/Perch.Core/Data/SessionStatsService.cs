@@ -288,9 +288,11 @@ internal static class SessionStatsService
         var map = new Dictionary<DateOnly, DayBucket>();
         DayBucket BucketFor(DateOnly day) => map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
 
+        var files = transcripts as IReadOnlyCollection<string> ?? transcripts.ToList();
         cache.Use(view =>
         {
-            foreach (var file in transcripts)
+            view.Prefetch(files);
+            foreach (var file in files)
             {
                 var sessionId = Path.GetFileNameWithoutExtension(file);
                 if (view.Session(file) is { } session)

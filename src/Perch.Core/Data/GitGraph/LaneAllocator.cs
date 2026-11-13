@@ -29,6 +29,8 @@ internal sealed class LaneAllocator
 
     // Edges in the band below the last row, whose lower ends depend on the next commit.
     private List<(int From, int Lane)> _pending = new();
+    // A row's edges so far, to drop duplicates in linear time; reused across rows.
+    private readonly HashSet<GraphEdge> _seenEdges = new();
 
     public LaneAllocator(Options? options = null)
     {
@@ -67,10 +69,11 @@ internal sealed class LaneAllocator
             lane = Allocate();
 
         var up = new List<GraphEdge>(_pending.Count);
+        _seenEdges.Clear();
         foreach (var (from, l) in _pending)
         {
             var e = new GraphEdge((short)from, (short)(_lanes[l] == c.Hash ? lane : l), (short)l);
-            if (!up.Contains(e)) up.Add(e);
+            if (_seenEdges.Add(e)) up.Add(e);
         }
 
         for (int i = 0; i < _lanes.Count; i++)

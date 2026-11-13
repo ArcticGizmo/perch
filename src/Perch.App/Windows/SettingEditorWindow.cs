@@ -82,11 +82,12 @@ internal static class SettingEditors
         var box = SettingsUi.ThemedTextBox((host ? s.NtfyHost : s.NtfyTopic) ?? "");
         box.PlaceholderText = host ? "https://ntfy.sh" : "your-topic-name";
         box.MinWidth = 300;
-        box.TextChanged += (_, _) =>
+        SettingsUi.CommitWhenTypingPauses(box, () =>
         {
+            if ((box.Text ?? "") == ((host ? s.NtfyHost : s.NtfyTopic) ?? "")) return;
             if (host) s.NtfyHost = box.Text; else s.NtfyTopic = box.Text;
             s.Save();
-        };
+        });
         return box;
     }
 

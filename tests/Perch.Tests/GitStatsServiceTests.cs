@@ -4,13 +4,83 @@ using Xunit;
 namespace Perch.Tests;
 
 /// <summary>
-/// Covers <see cref="GitStatsService.ParseNumstat"/> — the one piece of branching logic in the git-stats
-/// feature: folding <c>git diff --numstat</c> output into a single added/deleted total. The process
-/// spawning and TTL caching around it can only be exercised against a real repo, so they're left to
-/// manual testing; this pins the parsing that would otherwise silently miscount.
+/// Covers <see cref="GitStatsService.ParseNumstat"/> (folding <c>git diff --numstat</c> output into one total)
+/// and the refresh cadence, through the git and clock seams.
 /// </summary>
 public class GitStatsServiceTests
 {
+    private sealed class Harness
+    {
+        public DateTime Now = new(2026, 11, 12, 9, 0, 0, DateTimeKind.Utc);
+        public int Runs;
+        public readonly GitStatsService Service;
+
+        public Harness()
+        {
+            Service = new GitStatsService(_ => new GitLineStats(Interlocked.Increment(ref Runs), 0), () => Now)
+            {
+                Enabled = true,
+            };
+        }
+
+        // One scan's lookup, then waits for any refresh it scheduled to land.
+        public void Get(bool active)
+        {
+            Service.Get("C:\\repo", active);
+            Assert.True(SpinWait.SpinUntil(() => !Service.IsRefreshing, TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    [Fact]
+    public void ActiveSession_RefreshesAfterTheShortTtl()
+    {
+        var h = new Harness();
+        h.Get(active: true);
+        Assert.Equal(1, h.Runs);
+
+        h.Now += GitStatsService.ActiveTtl - TimeSpan.FromMilliseconds(1);
+        h.Get(active: true);
+        Assert.Equal(1, h.Runs);
+
+        h.Now += TimeSpan.FromMilliseconds(1);
+        h.Get(active: true);
+        Assert.Equal(2, h.Runs);
+    }
+
+    [Fact]
+    public void IdleSession_WaitsForTheLongTtl()
+    {
+        var h = new Harness();
+        h.Get(active: false);
+        Assert.Equal(1, h.Runs);
+
+        h.Now += TimeSpan.FromSeconds(30);
+        h.Get(active: false);
+        h.Now += TimeSpan.FromSeconds(30);
+        h.Get(active: false);
+        Assert.Equal(1, h.Runs);
+
+        h.Now += GitStatsService.IdleTtl;
+        h.Get(active: false);
+        Assert.Equal(2, h.Runs);
+    }
+
+    [Fact]
+    public void SessionThatStopsWorking_RefreshesOnceToCatchItsLastEdits()
+    {
+        var h = new Harness();
+        h.Get(active: true);
+        Assert.Equal(1, h.Runs);
+
+        h.Now += TimeSpan.FromSeconds(1);
+        h.Get(active: false);   // stopped inside the active TTL: still refreshes once
+        Assert.Equal(2, h.Runs);
+
+        h.Now += TimeSpan.FromSeconds(30);
+        h.Get(active: false);
+        Assert.Equal(2, h.Runs);
+    }
+
     [Fact]
     public void SumsAddedAndDeletedAcrossFiles()
     {

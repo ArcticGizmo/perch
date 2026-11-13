@@ -45,6 +45,33 @@ internal static class TranscriptScan
         return ReadLinesFrom(path, Math.Max(0, len - tailBytes));
     }
 
+    /// <summary><see cref="ReadTailLines"/>, shared. A transcript that grew is asked for its tail by several readers in
+    /// the same scan (activity, burn rate, stuck, API error, …), so the window is read once per (length, last-write)
+    /// and handed to all of them (perf review PF15). Thread-safe; the result must not be modified.</summary>
+    public static IReadOnlyList<string> CachedTailLines(string path, int tailBytes)
+    {
+        var fi = new FileInfo(path);
+        long len = fi.Length;
+        var writeUtc = fi.LastWriteTimeUtc;
+        lock (TailGate)
+        {
+            if (Tails.TryGetValue(path, out var t) && t.Length == len && t.WriteUtc == writeUtc && t.TailBytes == tailBytes)
+                return t.Lines;
+        }
+        var lines = ReadLinesFrom(path, Math.Max(0, len - tailBytes)).ToArray();
+        lock (TailGate)
+        {
+            if (Tails.Count >= MaxTails && !Tails.ContainsKey(path)) Tails.Clear();   // crude bound: a tail is cheap to reread
+            Tails[path] = new Tail(len, writeUtc, tailBytes, lines);
+        }
+        return lines;
+    }
+
+    private sealed record Tail(long Length, DateTime WriteUtc, int TailBytes, string[] Lines);
+    private const int MaxTails = 256;
+    private static readonly object TailGate = new();
+    private static readonly Dictionary<string, Tail> Tails = new();
+
     /// <summary>The last <paramref name="max"/> lines of <paramref name="lines"/>, and whether any were dropped.
     /// Keeps at most <paramref name="max"/> lines while it reads (a ring buffer), rather than holding the whole
     /// file and trimming it after. Review fixes CP24.</summary>

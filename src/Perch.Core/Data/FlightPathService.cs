@@ -102,8 +102,13 @@ internal static class FlightPathService
     // threshold so one or two recoverable errors don't paint a whole lane red.
     private const int StuckErrorStreak = 3;
 
-    /// <summary>Builds the flight path for the given local day. Off-UI-thread work.</summary>
-    public static FlightPathReport ForDay(DateOnly day)
+    // How far outside the day a record's peeked timestamp must fall before it's skipped unparsed. The peek reads
+    // the first "timestamp" in the line, which could be a nested object's rather than the record's own.
+    private static readonly TimeSpan PeekMargin = TimeSpan.FromMinutes(1);
+
+    /// <summary>Builds the flight path for the given local day. Off-UI-thread work; throws
+    /// <see cref="OperationCanceledException"/> when <paramref name="ct"/> fires.</summary>
+    public static FlightPathReport ForDay(DateOnly day, CancellationToken ct = default)
     {
         var dayStart = day.ToDateTime(TimeOnly.MinValue);
         var dayEnd = dayStart.AddDays(1);
@@ -116,12 +121,13 @@ internal static class FlightPathService
         var lanes = new List<FlightLane>();
         foreach (var file in TranscriptLocator.EnumerateTranscripts())
         {
+            ct.ThrowIfCancellationRequested();
             // A transcript untouched since before the day can't hold one of its records — skip it without
             // opening it, the same mtime prefilter the stats scan uses to keep a day scan cheap.
             try { if (File.GetLastWriteTime(file) < dayStart) continue; }
             catch { continue; }
 
-            if (BuildLane(file, dayStart, dayEnd, asOf) is { } lane)
+            if (BuildLane(file, dayStart, dayEnd, asOf, ct) is { } lane)
                 lanes.Add(lane);
         }
 
@@ -139,16 +145,27 @@ internal static class FlightPathService
     // Parses one transcript's records within [dayStart, dayEnd) and segments them into a lane. asOf is
     // "now" clamped to the day when the day is today (else null); it extends the trailing segment of a
     // still-open session up to the present. Returns null when the session had no records that day.
-    private static FlightLane? BuildLane(string file, DateTime dayStart, DateTime dayEnd, DateTime? asOf)
+    internal static FlightLane? BuildLane(string file, DateTime dayStart, DateTime dayEnd, DateTime? asOf,
+        CancellationToken ct)
     {
         var recs = new List<Rec>();
         var apiErrors = new List<ApiErrorMark>();
         string project = "", branch = "";
+        var skipBefore = dayStart.ToUniversalTime() - PeekMargin;
+        var skipAfter = dayEnd.ToUniversalTime() + PeekMargin;
         try
         {
             foreach (var line in TranscriptScan.ReadLines(file))
             {
+                ct.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                // A long-lived transcript is mostly other days. Such a record is skipped without a parse, unless
+                // it's still needed for the lane's project or branch, which come from the first record that has one.
+                if (TranscriptJson.PeekTimestampUtc(line) is { } peek && (peek < skipBefore || peek >= skipAfter)
+                    && !(project.Length == 0 && line.Contains("\"cwd\":\"", StringComparison.Ordinal))
+                    && !(branch.Length == 0 && HasBranch(line)))
                     continue;
 
                 JsonNode? node;
@@ -185,6 +202,7 @@ internal static class FlightPathService
                 recs.Add(ParseRec(t, content));
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch { }
 
         if (recs.Count == 0)
@@ -357,6 +375,13 @@ internal static class FlightPathService
         }
 
         return new Rec(time, opens, closes, outcome);
+    }
+
+    private static bool HasBranch(string line)
+    {
+        const string Key = "\"gitBranch\":\"";
+        int i = line.IndexOf(Key, StringComparison.Ordinal);
+        return i >= 0 && i + Key.Length < line.Length && line[i + Key.Length] != '"';
     }
 
     private static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;

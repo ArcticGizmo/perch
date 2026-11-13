@@ -758,6 +758,44 @@ public class SessionConversationTests
         Assert.False(conv.TurnActive);            // history never counts as a running turn
     }
 
+    // A resumed window decodes the transcript on a worker (ParseHistory) and applies it on the UI thread; that split
+    // must give exactly what LoadHistory gives from the raw lines.
+    [Fact]
+    public void ParseHistory_ThenLoad_MatchesLoadingTheLines()
+    {
+        var lines = new[]
+        {
+            "",
+            """{"type":"user","message":{"role":"user","content":"fix the rounding bug"}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"dotnet test"}}]}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"Passed!","is_error":false}]}}""",
+            """{"type":"user","isSidechain":true,"message":{"role":"user","content":"sub-agent chatter"}}""",
+            "not json",
+            """{"type":"assistant","parent_tool_use_id":"t0","message":{"role":"assistant","content":[{"type":"text","text":"from a sub-agent"}]}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Fixed."}]}}""",
+        };
+
+        var parsed = SessionConversation.ParseHistory(lines, null);
+        Assert.Equal(5, parsed.Count);   // blank, malformed and sidechain lines are dropped up front
+
+        var (split, _) = Make();
+        var (direct, _) = Make();
+        Assert.Equal(direct.LoadHistory(lines), split.LoadHistory(parsed));
+        Assert.Equal(Describe(direct), Describe(split));
+
+        static string Describe(SessionConversation c) => string.Join("\n", c.Items.Select(i => i switch
+        {
+            UserMessageItem u => "user:" + u.Text,
+            AssistantMessageItem a => "assistant:" + string.Join("|", a.Parts.Select(p => p switch
+            {
+                TextPart t => "text:" + t.Text,
+                ToolCallPart t => $"tool:{t.ToolName}:{t.Status}:{t.ResultText}",
+                _ => p.GetType().Name,
+            })),
+            _ => i.GetType().Name,
+        }));
+    }
+
     [Fact]
     public void AppendTranscriptLine_AppendsInOrder_ForTheReadOnlyViewer()
     {

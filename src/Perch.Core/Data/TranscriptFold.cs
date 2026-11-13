@@ -43,7 +43,8 @@ internal sealed class LineFolder<TState>(Func<TState> seed, Action<TState, strin
 ///   resets every state and re-reads from the start.</item>
 ///   <item>An unchanged (length, last-write) costs one stat, like <see cref="MtimeCache{T}"/>.</item>
 /// </list>
-/// <para>Not thread-safe: an instance is owned by one reader and driven by one scan at a time.</para>
+/// <para>Not thread-safe: an instance is owned by one reader and driven by one scan at a time. Only
+/// <see cref="Prefetch"/> spreads its own work across threads.</para>
 /// </summary>
 internal sealed class TranscriptFold
 {
@@ -54,13 +55,16 @@ internal sealed class TranscriptFold
     private readonly LineFolder[] _folders;
     private readonly Dictionary<string, Entry> _entries = new();
 
+    // Atomic, because Prefetch's workers add to them.
+    private long _bytesRead, _generation;
+
     /// <summary>Total bytes read from disk by this fold — a test/benchmark probe that proves a growth only reads
     /// the appended bytes.</summary>
-    internal long BytesRead { get; private set; }
+    internal long BytesRead => Interlocked.Read(ref _bytesRead);
 
     /// <summary>Bumps whenever any entry's state changes (a line folded in, a reset, an import or a forget), so
     /// an owner that persists the fold can tell whether there's anything new to save.</summary>
-    internal long Generation { get; private set; }
+    internal long Generation => Interlocked.Read(ref _generation);
 
     public TranscriptFold(params LineFolder[] folders) => _folders = folders;
 
@@ -88,13 +92,82 @@ internal sealed class TranscriptFold
             Offset = cp.Offset, SeenLength = cp.SeenLength, SeenWriteUtc = cp.SeenWriteUtc,
             Head = cp.Head, States = cp.States,
         };
-        Generation++;
+        Interlocked.Increment(ref _generation);
     }
 
     /// <summary>Drops the state for <paramref name="path"/> (a transcript that no longer exists).</summary>
     internal void Forget(string path)
     {
-        if (_entries.Remove(path)) Generation++;
+        if (_entries.Remove(path)) Interlocked.Increment(ref _generation);
+    }
+
+    /// <summary>Drops the state for every file not read for <paramref name="idle"/>, so a long-running reader
+    /// doesn't hold state for every transcript it ever saw. A dropped file is folded from the start if it's
+    /// read again.</summary>
+    internal void Sweep(TimeSpan idle)
+    {
+        long cutoff = Environment.TickCount64 - (long)idle.TotalMilliseconds;
+        foreach (var (path, e) in _entries)
+            if (e.LastUsedMs < cutoff) Forget(path);
+    }
+
+    /// <summary>Brings every file in <paramref name="paths"/> up to date, several at once, so a cold build (a fresh
+    /// install, a fold-version bump) isn't one core parsing the whole history. Each file's read and fold run on one
+    /// worker and touch only that file's entry, so the folders' steps must not share mutable state across files.
+    /// A file that can't be read is left for <see cref="Get"/> to report. The next <see cref="Get"/> of each path
+    /// takes the file as Prefetch saw it, without a stat of its own, so call it right before reading them. The
+    /// caller must not use the fold from another thread meanwhile.</summary>
+    internal void Prefetch(IEnumerable<string> paths, int maxParallel)
+    {
+        var options = new ParallelOptions { MaxDegreeOfParallelism = maxParallel };
+        var list = paths as IReadOnlyList<string> ?? paths.ToList();
+        // The stats run in parallel too: on a warm history they're all this does.
+        var stats = new (long Length, DateTime WriteUtc)?[list.Count];
+        Parallel.For(0, list.Count, options, i =>
+        {
+            try
+            {
+                var fi = new FileInfo(list[i]);
+                stats[i] = (fi.Length, fi.LastWriteTimeUtc);
+            }
+            catch { /* left for Get */ }
+        });
+
+        foreach (var e in _entries.Values) e.Prefetched = false;
+        var work = new List<(string Path, Entry Entry, long Length, DateTime WriteUtc)>();
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (stats[i] is not var (length, writeUtc)) continue;
+            var path = list[i];
+            if (_entries.TryGetValue(path, out var entry))
+            {
+                if (entry.SeenLength == length && entry.SeenWriteUtc == writeUtc)
+                {
+                    entry.Prefetched = true;
+                    continue;
+                }
+            }
+            else
+            {
+                entry = new Entry();
+                Reset(entry);
+                _entries[path] = entry;
+            }
+            work.Add((path, entry, length, writeUtc));
+        }
+        if (work.Count == 0) return;
+
+        // Biggest first, so one huge transcript doesn't start last and run on alone.
+        work.Sort((a, b) => b.Length.CompareTo(a.Length));
+        Parallel.ForEach(work, options, w =>
+        {
+            try
+            {
+                Refresh(w.Path, w.Entry, w.Length, w.WriteUtc);
+                w.Entry.Prefetched = true;
+            }
+            catch { /* Get retries it and falls back */ }
+        });
     }
 
     private sealed class Entry
@@ -105,6 +178,8 @@ internal sealed class TranscriptFold
         public byte[] Head = [];          // the file's first bytes as consumed, to spot a replaced file
         public object[] States = [];
         public int Version;               // bumps whenever any state changes, so derived results can be cached
+        public bool Prefetched;           // Prefetch just brought it up to date, so the next Get needn't stat it
+        public long LastUsedMs = Environment.TickCount64;
         public readonly Dictionary<int, (int Version, object? Result)> Results = new();
     }
 
@@ -137,6 +212,15 @@ internal sealed class TranscriptFold
     // caller's fallback applies, and the entry keeps its last good state for the next attempt).
     private Entry Advance(string path)
     {
+        if (_entries.TryGetValue(path, out var known))
+        {
+            known.LastUsedMs = Environment.TickCount64;
+            if (known.Prefetched)
+            {
+                known.Prefetched = false;
+                return known;
+            }
+        }
         var fi = new FileInfo(path);
         long length = fi.Length;   // throws FileNotFoundException for a missing file
         var writeUtc = fi.LastWriteTimeUtc;
@@ -152,6 +236,13 @@ internal sealed class TranscriptFold
             return entry;
         }
 
+        Refresh(path, entry, length, writeUtc);
+        return entry;
+    }
+
+    // Reads what the file gained since the entry last saw it. Touches no other entry.
+    private void Refresh(string path, Entry entry, long length, DateTime writeUtc)
+    {
         using var fs = TranscriptScan.OpenShared(path);
         if (length < entry.Offset || !HeadMatches(fs, entry))
             Reset(entry);
@@ -159,7 +250,6 @@ internal sealed class TranscriptFold
         ReadFrom(fs, entry);
         entry.SeenLength = length;
         entry.SeenWriteUtc = writeUtc;
-        return entry;
     }
 
     private void Reset(Entry entry)
@@ -168,7 +258,7 @@ internal sealed class TranscriptFold
         entry.Head = [];
         entry.States = _folders.Select(f => f.NewState()).ToArray();
         entry.Version++;
-        Generation++;
+        Interlocked.Increment(ref _generation);
     }
 
     // True when the file still starts with the bytes we consumed from it — else it was replaced, not appended to.
@@ -178,7 +268,7 @@ internal sealed class TranscriptFold
         var buf = new byte[entry.Head.Length];
         fs.Seek(0, SeekOrigin.Begin);
         int n = ReadFully(fs, buf);
-        BytesRead += n;
+        Interlocked.Add(ref _bytesRead, n);
         return n == buf.Length && buf.AsSpan().SequenceEqual(entry.Head);
     }
 
@@ -193,7 +283,7 @@ internal sealed class TranscriptFold
         int n;
         while ((n = fs.Read(chunk, 0, chunk.Length)) > 0)
         {
-            BytesRead += n;
+            Interlocked.Add(ref _bytesRead, n);
             long chunkAt = entry.Offset + pending.Length;   // file offset of chunk[0]
             if (entry.Head.Length < HeadBytes && chunkAt < HeadBytes)
                 CaptureHead(entry, chunk, n, chunkAt);
@@ -229,7 +319,7 @@ internal sealed class TranscriptFold
         }
         entry.Offset += bytes;
         entry.Version++;
-        Generation++;
+        Interlocked.Increment(ref _generation);
     }
 
     // Records the file's leading bytes (from this chunk, which starts at file offset `at`) for replacement checks.

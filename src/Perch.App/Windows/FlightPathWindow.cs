@@ -24,6 +24,7 @@ internal sealed class FlightPathWindow : Window
     private readonly Button _todayButton;
     private readonly TextBlock _dateLabel;
     private DateOnly _day = DateOnly.FromDateTime(DateTime.Now);
+    private CancellationTokenSource? _scan;
 
     public FlightPathWindow()
     {
@@ -80,6 +81,12 @@ internal sealed class FlightPathWindow : Window
         RefreshPath();
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        _scan?.Cancel();
+        base.OnClosed(e);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         switch (e.Key)
@@ -116,8 +123,12 @@ internal sealed class FlightPathWindow : Window
         UpdateNavState();
         _timeline.SetLoading();
 
+        // Holding an arrow key steps through days faster than they scan; only the last one is worth finishing.
+        _scan?.Cancel();
+        var cts = new CancellationTokenSource();
+        _scan = cts;
         var day = _day;
-        System.Threading.Tasks.Task.Run(() => FlightPathService.ForDay(day)).ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() => FlightPathService.ForDay(day, cts.Token), cts.Token).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>

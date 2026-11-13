@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -3074,7 +3075,9 @@ internal static class HeadlessRenderer
 
         RenderStreaming(outDir, cwd);
         RenderLongThread(outDir, cwd);
+        ResumeBench.Run(outDir, cwd);
         RenderStickyHeaders(outDir, cwd);
+        RenderDiffWrap(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
             string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null,
@@ -3254,6 +3257,17 @@ internal static class HeadlessRenderer
         Console.WriteLine($"leak check: {alive.Count}/{windows.Count} closed session windows still reachable" +
                           (alive.Count > 0 ? $" (#{string.Join(", #", alive)})" : ""));
 
+        // PF1: an open session window keeps several spinners under hidden ancestors; none of them may tick.
+        var open = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+        open.Attach(session);
+        open.Show();
+        Dispatcher.UIThread.RunJobs();
+        var spinners = open.GetVisualDescendants().OfType<Views.LoadingSpinner>().ToList();
+        int hiddenTicking = spinners.Count(s => s.IsSpinning && !s.IsEffectivelyVisible);
+        Console.WriteLine($"spinners: {spinners.Count} in an open session window, {spinners.Count(s => s.IsSpinning)} animating, " +
+                          $"{hiddenTicking} animating while hidden");
+        open.Close();
+
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         static void OpenAndClose(Services.PerchSession s, List<WeakReference> refs)
         {
@@ -3303,6 +3317,29 @@ internal static class HeadlessRenderer
             thread.JumpToBottom();
             Settle(w);
             Console.WriteLine($"  after jump to bottom: built {Built(thread)}");
+
+            // Ctrl+F in the long thread: a phrase from a few turns, and a one-letter query that matches everywhere.
+            // Search time includes rebuilding what it must walk; a scroll frame repaints the highlights.
+            foreach (var q in new[] { "Turn 7 is green", "e" })
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                int n = thread.Search(q);
+                double searchMs = sw.Elapsed.TotalMilliseconds;
+                string built = Built(thread);
+                Settle(w);
+                sw.Restart();
+                for (int i = 0; i < 10; i++)
+                {
+                    thread.Offset = new Vector(0, Math.Max(0, thread.Offset.Y - 37));
+                    Dispatcher.UIThread.RunJobs();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                }
+                Console.WriteLine($"  find \"{q}\": {n} matches, search {searchMs:N0} ms (built {built}), " +
+                                  $"scroll frame with matches {sw.Elapsed.TotalMilliseconds / 10:N1} ms");
+                thread.ClearSearch();
+                thread.JumpToBottom();
+                Settle(w);
+            }
         }
         Close(w, thread);
         if (!bench) return;
@@ -3428,6 +3465,53 @@ internal static class HeadlessRenderer
                 win.UpdateLayout();
                 AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             }
+        }
+    }
+
+    // An Edit diff whose lines wrap, in dark and light: the +/- markers and change bands are painted beside and
+    // behind one text block (DiffText), so each changed line must keep one marker and a band over every row it
+    // wraps onto, a blank changed line must still get its band, and context and the MultiEdit separator get none.
+    private static void RenderDiffWrap(string outDir, string cwd)
+    {
+        var input = new System.Text.Json.Nodes.JsonObject
+        {
+            ["file_path"] = "src/Perch.Core/Data/PlacementMath.cs",
+            ["edits"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonObject
+                {
+                    ["old_string"] = "public static Rect Place(Rect screen, Size size)\n{\n    var x = screen.Right - size.Width;\n\n    return new Rect(x, screen.Top, size.Width, size.Height);\n}",
+                    ["new_string"] = "public static Rect Place(Rect screen, Size size)\n{\n    // Anchor to the nearest corner of the target monitor, keeping the distance from both edges the user chose, so a resolution change neither drifts the window inward nor pushes it off screen.\n    var x = Math.Clamp(screen.Right - size.Width - Margin, screen.Left, screen.Right - size.Width);\n    return new Rect(x, screen.Top + Margin, size.Width, size.Height);\n}",
+                },
+                new System.Text.Json.Nodes.JsonObject { ["old_string"] = "const double Margin = 8;", ["new_string"] = "const double Margin = 12;" }),
+        }.ToJsonString();
+        foreach (var (dark, suffix) in new[] { (true, ""), (false, "_light") })
+        {
+            var p = SessionPalette.For(dark);
+            var conv = new Perch.Data.Control.SessionConversation();
+            conv.AddUserPrompt("Keep the corner distance when the monitor changes.");
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("m1", "MultiEdit", "Editing PlacementMath.cs", input));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("m1", "Applied 2 edits.", false));
+            conv.Apply(new Perch.Data.Control.AssistantTextEvent("Done: the window keeps its corner distance."));
+            conv.Apply(new Perch.Data.Control.TurnResultEvent(false, "success", 0.01, InputTokens: 1000, OutputTokens: 200, DurationMs: 4000));
+
+            var thread = new SessionThreadView(p) { Cwd = cwd };
+            var w = new Window { Width = 700, Height = 640, Background = p.Surface, Content = thread };
+            thread.Bind(conv);
+            w.Show();
+            for (int i = 0; i < 6; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                w.UpdateLayout();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, $"session_diff_wrap{suffix}_1x.png"));
+                frame.Save(fs);
+            }
+            thread.Unbind();
+            w.Close();
+            Dispatcher.UIThread.RunJobs();
         }
     }
 

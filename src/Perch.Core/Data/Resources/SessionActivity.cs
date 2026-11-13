@@ -85,6 +85,8 @@ public sealed record SessionActivity(string SessionId, string? Cwd, IReadOnlyLis
         }
     }
 
+    private static readonly TimeSpan OutsideMargin = TimeSpan.FromMinutes(1);
+
     // Only the record kinds that mark a hook event, carry a tool call, or report a hook run are parsed.
     private static readonly string[] Interesting =
         ["\"tool_use\"", "\"tool_result\"", "\"type\":\"user\"", "stop_hook_summary", "turn_duration", "compact_boundary", "\"hook_"];
@@ -100,6 +102,15 @@ public sealed record SessionActivity(string SessionId, string? Cwd, IReadOnlyLis
         {
             // Cheap path for everything else: only the time matters (for sub-agent start/stop).
             if (TimestampOf(line) is { } t) last = t;
+            return;
+        }
+        // An interesting record well outside the window adds nothing but its time, and the window is usually the last
+        // few minutes of a long transcript that's re-read every half minute while recording (perf review PF16). The
+        // margin covers a nested "timestamp" key read ahead of the record's own.
+        if (first is not null && TimestampOf(line) is { } when
+            && (when < acc.From - OutsideMargin || when > acc.To + OutsideMargin))
+        {
+            last = when;
             return;
         }
         try
@@ -188,18 +199,7 @@ public sealed record SessionActivity(string SessionId, string? Cwd, IReadOnlyLis
         catch { }
     }
 
-    private static DateTime? TimestampOf(string line)
-    {
-        int i = line.IndexOf("\"timestamp\":\"", StringComparison.Ordinal);
-        if (i < 0) return null;
-        i += "\"timestamp\":\"".Length;
-        int j = line.IndexOf('"', i);
-        if (j < 0) return null;
-        return DateTime.TryParse(line.AsSpan(i, j - i), System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t)
-            ? DateTime.SpecifyKind(t, DateTimeKind.Utc)
-            : null;
-    }
+    private static DateTime? TimestampOf(string line) => TranscriptJson.PeekTimestampUtc(line);
 
     private static string? FirstLine(string? s)
     {

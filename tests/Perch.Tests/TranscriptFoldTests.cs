@@ -62,6 +62,82 @@ public sealed class TranscriptFoldTests : IDisposable
     }
 
     [Fact]
+    public void Prefetch_folds_many_files_in_parallel_the_same_as_one_at_a_time()
+    {
+        var paths = Enumerable.Range(0, 24).Select(f =>
+        {
+            var p = P($"f{f}.jsonl");
+            File.WriteAllText(p, string.Concat(Enumerable.Range(0, 50 + f * 13).Select(i => Rec(f * 1000 + i) + "\n")));
+            return p;
+        }).ToList();
+        var missing = P("missing.jsonl");
+
+        var serial = new TranscriptFold(Lines);
+        var expected = paths.Select(p => Get(serial, p)).ToList();
+
+        var parallel = new TranscriptFold(Lines);
+        parallel.Prefetch([.. paths, missing], maxParallel: 4);
+        Assert.Equal(serial.BytesRead, parallel.BytesRead);
+        long afterPrefetch = parallel.BytesRead;
+        Assert.Equal(expected, paths.Select(p => Get(parallel, p)).ToList());
+        Assert.Equal(afterPrefetch, parallel.BytesRead);   // Get took what Prefetch read
+        Assert.Equal(["<fallback>"], Get(parallel, missing));
+    }
+
+    [Fact]
+    public void After_a_prefetched_get_the_next_get_sees_new_appends()
+    {
+        File.WriteAllText(P(), Rec(1) + "\n");
+        var fold = new TranscriptFold(Lines);
+        fold.Prefetch([P()], maxParallel: 2);
+        Assert.Single(Get(fold, P()));
+
+        Append(P(), Rec(2) + "\n");
+        Assert.Equal(2, Get(fold, P()).Count);
+
+        // A path prefetched but never read takes a fresh look at the next Prefetch.
+        fold.Prefetch([P()], maxParallel: 2);
+        Append(P(), Rec(3) + "\n");
+        fold.Prefetch([P(), P("other.jsonl")], maxParallel: 2);
+        Assert.Equal(3, Get(fold, P()).Count);
+    }
+
+    [Fact]
+    public void Sweep_forgets_files_not_read_lately_and_a_forgotten_file_folds_again_from_the_start()
+    {
+        File.WriteAllText(P("old.jsonl"), Rec(1) + "\n" + Rec(2) + "\n");
+        File.WriteAllText(P("live.jsonl"), Rec(3) + "\n");
+        var fold = new TranscriptFold(Lines);
+        Get(fold, P("old.jsonl"));
+        Thread.Sleep(80);
+        Get(fold, P("live.jsonl"));
+
+        fold.Sweep(TimeSpan.FromMilliseconds(40));
+        Assert.Equal([P("live.jsonl")], fold.Paths);
+
+        long before = fold.BytesRead;
+        Assert.Equal([Rec(1), Rec(2)], Get(fold, P("old.jsonl")));
+        Assert.True(fold.BytesRead - before >= new FileInfo(P("old.jsonl")).Length);
+    }
+
+    [Fact]
+    public void MtimeCache_sweep_forgets_idle_files()
+    {
+        File.WriteAllText(P("a"), "a");
+        File.WriteAllText(P("b"), "b");
+        var cache = new MtimeCache<int>();
+        int computed = 0;
+        cache.GetOrCompute(P("a"), _ => ++computed, -1);
+        Thread.Sleep(80);
+        cache.GetOrCompute(P("b"), _ => ++computed, -1);
+
+        cache.Sweep(TimeSpan.FromMilliseconds(40));
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(2, cache.GetOrCompute(P("b"), _ => ++computed, -1));   // kept: no recompute
+        Assert.Equal(3, cache.GetOrCompute(P("a"), _ => ++computed, -1));   // forgotten: computed again
+    }
+
+    [Fact]
     public void An_unchanged_file_costs_no_read()
     {
         File.WriteAllText(P(), Rec(1) + "\n" + Rec(2) + "\n");

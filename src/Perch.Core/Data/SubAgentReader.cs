@@ -45,15 +45,33 @@ internal sealed class SubAgentReader
     // one — a working agent appends constantly — only its new bytes, not a re-read of the whole transcript.
     private static readonly LineFolder<LegacyState> LegacyFolder = new(() => new(), StepLegacy);
     private static readonly LineFolder<ClassifyState> ClassifyFolder = new(() => new(), StepClassify);
-    private readonly TranscriptFold _legacy = new(LegacyFolder);
+    private readonly TranscriptFold _legacy;
     private readonly TranscriptFold _agentState = new(ClassifyFolder);
     // Per-agent meta sidecar, cached by (length, last-write): Claude Code rewrites it once more when the agent ends
     // (finished / stoppedByUser), so it can't be cached forever, but an unchanged one costs only a stat.
     private readonly MtimeCache<AgentMeta> _meta = new();
 
+    /// <summary>The parent-transcript folder a fold shared with other readers must register for this one.</summary>
+    internal static LineFolder ParentFolder => LegacyFolder;
+
     /// <param name="staleAfter">How long an agent's transcript may sit untouched before a "working"
     /// classification is treated as a frozen/interrupted turn. Defaults to 90s; tests override it.</param>
-    public SubAgentReader(TimeSpan? staleAfter = null) => _staleAfter = staleAfter ?? DefaultStaleAfter;
+    /// <param name="parentFold">A fold over parent transcripts shared with the other per-transcript readers (it must
+    /// register <see cref="ParentFolder"/>); null gives this its own.</param>
+    public SubAgentReader(TimeSpan? staleAfter = null, TranscriptFold? parentFold = null)
+    {
+        _staleAfter = staleAfter ?? DefaultStaleAfter;
+        _legacy = parentFold ?? new(LegacyFolder);
+    }
+
+    /// <summary>Forgets transcripts and agent sidecars not read for <paramref name="idle"/>; see
+    /// <see cref="TranscriptFold.Sweep"/>.</summary>
+    internal void Sweep(TimeSpan idle)
+    {
+        _legacy.Sweep(idle);
+        _agentState.Sweep(idle);
+        _meta.Sweep(idle);
+    }
 
     /// <summary>
     /// Returns the sub-agents currently working under the given session as a tree (each
@@ -474,19 +492,20 @@ internal sealed class SubAgentReader
         return declared > ShellMaxTimeout ? ShellMaxTimeout : declared;
     }
 
-    // Collect every Task tool_use and the set of tool_use ids that already have a result;
-    // a Task whose id never gets a result is a sub-agent still running.
+    // Collect every Task tool_use still waiting for its result; a Task whose id never gets a result is a
+    // sub-agent still running. A result always follows its call, so only results for pending ids matter.
     private sealed class LegacyState
     {
-        public readonly Dictionary<string, (string Desc, string Type)> TaskUses = new();
-        public readonly HashSet<string> ResultIds = new();
+        // Ordered: removals must not reorder later launches, which are listed in launch order.
+        public readonly OrderedDictionary<string, (string Desc, string Type)> Pending = new();
     }
 
     private static void StepLegacy(LegacyState s, string line)
     {
-        // Cheap pre-filter: only the (rare) lines that could carry a sub-agent tool_use or
-        // any tool_result are worth parsing as JSON. Most transcript lines match neither.
-        if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !line.Contains("tool_result"))
+        // Cheap pre-filter: a sub-agent launch names its tool; a result only matters when it answers a pending
+        // launch, whose id it must then contain. Tool results are most of a transcript, and usually nothing is
+        // pending, so almost none of them reach the parser.
+        if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !AnswersPending(s, line))
             return;
 
         try
@@ -507,13 +526,13 @@ internal sealed class SubAgentReader
                     var input = block["input"];
                     var desc = input?["description"]?.GetValue<string>() ?? "";
                     var atype = input?["subagent_type"]?.GetValue<string>() ?? "";
-                    s.TaskUses[id] = (desc, atype);
+                    s.Pending[id] = (desc, atype);
                 }
                 else if (type == "tool_result")
                 {
                     var rid = block!["tool_use_id"]?.GetValue<string>();
                     if (rid != null)
-                        s.ResultIds.Add(rid);
+                        s.Pending.Remove(rid);
                 }
             }
         }
@@ -523,19 +542,23 @@ internal sealed class SubAgentReader
         }
     }
 
+    private static bool AnswersPending(LegacyState s, string line)
+    {
+        if (s.Pending.Count == 0 || !line.Contains("tool_result", StringComparison.Ordinal))
+            return false;
+        foreach (var id in s.Pending.Keys)
+            if (line.Contains(id, StringComparison.Ordinal))
+                return true;
+        return false;
+    }
+
     private static IReadOnlyList<SubAgent> FinishLegacy(LegacyState s)
     {
-        var taskUses = s.TaskUses;
-        var resultIds = s.ResultIds;
-        var running = new List<SubAgent>();
-        foreach (var (id, info) in taskUses)
-        {
-            if (resultIds.Contains(id))
-                continue;
-            // Store the raw description and type; the overlay row owns the display fallback so both
-            // the legacy and background paths read the same.
+        var running = new List<SubAgent>(s.Pending.Count);
+        // Store the raw description and type; the overlay row owns the display fallback so both the legacy and
+        // background paths read the same.
+        foreach (var (id, info) in s.Pending)
             running.Add(new SubAgent(id, info.Desc, info.Type));
-        }
         return running;
     }
 }

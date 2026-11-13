@@ -1,6 +1,4 @@
-﻿using System.Text.RegularExpressions;
-
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Locates session transcripts under <c>projects/</c>. Owns the one rule Claude Code uses to
@@ -23,7 +21,10 @@ internal static class TranscriptLocator
     /// character becomes <c>-</c> (e.g. <c>C:\a\b.c</c> → <c>C--a-b-c</c>).
     /// </summary>
     public static string EncodeProjectDir(string cwd) =>
-        Regex.Replace(cwd, "[^A-Za-z0-9]", "-");
+        string.Create(cwd.Length, cwd, static (span, s) =>
+        {
+            for (int i = 0; i < s.Length; i++) span[i] = char.IsAsciiLetterOrDigit(s[i]) ? s[i] : '-';
+        });
 
     /// <summary>
     /// Returns the full path to a session's <c>.jsonl</c> transcript, or <c>null</c> when it can't be
@@ -31,7 +32,26 @@ internal static class TranscriptLocator
     /// directory for <c>{sessionId}.jsonl</c> (the sessionId is a UUID, so the match is unambiguous
     /// and this covers any cwd-encoding edge case the direct rule misses).
     /// </summary>
-    public static string? Resolve(string sessionId, string cwd) => Resolve(ProjectsDirs(), sessionId, cwd, MissTtl);
+    public static string? Resolve(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId)) return null;
+        long now = Environment.TickCount64;
+        var key = (sessionId, cwd ?? "");
+        if (Hits.TryGetValue(key, out var hit) && now - hit.AtMs < HitTtlMs) return hit.Path;
+        var path = Resolve(ProjectsDirs(), sessionId, cwd ?? "", MissTtl);
+        if (path is not null)
+        {
+            if (Hits.Count >= MaxMisses) Hits.Clear();
+            Hits[key] = (now, path);
+        }
+        return path;
+    }
+
+    // One scan asks for each session's transcript about a dozen times (every reader resolves it), so a found path is
+    // reused for a moment instead of re-encoding the cwd and re-statting it each time (perf review PF15). Short enough
+    // that a transcript that moves is found again within the same scan cadence.
+    private const long HitTtlMs = 2000;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Id, string Cwd), (long AtMs, string Path)> Hits = new();
 
     // A fallback scan that found nothing isn't repeated for this long (unless a projects/ root changes).
     private static readonly TimeSpan MissTtl = TimeSpan.FromSeconds(30);

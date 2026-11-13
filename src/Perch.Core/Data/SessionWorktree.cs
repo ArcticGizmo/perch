@@ -32,7 +32,15 @@ internal sealed class SessionWorktree
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static readonly LineFolder<WritesState> WritesFolder = new(() => new(), StepWrites);
-    private readonly TranscriptFold _fold = new(WritesFolder);
+
+    /// <summary>The folder a fold shared with other readers must register for this one.</summary>
+    internal static LineFolder Folder => WritesFolder;
+
+    private readonly TranscriptFold _fold;
+
+    /// <param name="fold">A fold shared with the other per-transcript readers (it must register <see cref="Folder"/>);
+    /// null gives this its own.</param>
+    public SessionWorktree(TranscriptFold? fold = null) => _fold = fold ?? new(WritesFolder);
     private readonly Dictionary<string, (GitWorktreeSet? Set, DateTime At)> _sets =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -175,8 +183,8 @@ internal sealed class SessionWorktree
     // A write's paired tool_result follows it, so a failed one is dropped as soon as its is_error arrives.
     private static void StepWrites(WritesState s, string line)
     {
-        bool maybeWrite = line.Contains("tool_use") && (line.Contains("file_path") || line.Contains("notebook_path"));
-        if (!maybeWrite && !line.Contains("is_error"))
+        bool maybeWrite = TranscriptJson.MayHoldToolUse(line) && (line.Contains("file_path") || line.Contains("notebook_path"));
+        if (!maybeWrite && !TranscriptJson.MayHoldErrorResult(line))
             return;
 
         try

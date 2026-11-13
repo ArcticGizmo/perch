@@ -37,6 +37,7 @@ internal sealed class TranscriptSearchWindow : Window
 
     private bool _includeTools;
     private HashSet<string> _activeIds = new();
+    private readonly TranscriptSearch.Narrowing _narrowing = new();
 
     // The running search: its cancellation, the query it's for, and the results it has delivered that aren't on
     // screen yet (filled from worker threads, drained on the UI thread by _flush).
@@ -205,10 +206,19 @@ internal sealed class TranscriptSearchWindow : Window
         {
             // The same list (and order) as the history viewer: active first, then newest first.
             var entries = SessionHistory.ListAll(active);
-            Volatile.Write(ref _total, entries.Count);
-            TranscriptSearch.SearchMany(entries.Select(e => e.Path).ToList(), query, includeTools, HitsPerSession,
-                (i, m) => { lock (_pendingLock) _pending.Add((i, entries[i], m)); },
+            var candidates = _narrowing.Candidates(entries, query, includeTools);
+            Volatile.Write(ref _total, candidates.Count);
+            var matched = new System.Collections.Concurrent.ConcurrentBag<string>();
+            TranscriptSearch.SearchMany(candidates.Select(i => entries[i].Path).ToList(), query, includeTools,
+                HitsPerSession,
+                (c, m) =>
+                {
+                    var entry = entries[candidates[c]];
+                    matched.Add(entry.Path);
+                    lock (_pendingLock) _pending.Add((candidates[c], entry, m));
+                },
                 () => Interlocked.Increment(ref _scanned), cts.Token);
+            _narrowing.Completed(entries, query, includeTools, matched);
         }, cts.Token).ContinueWith(t =>
         {
             Dispatcher.UIThread.Post(() =>

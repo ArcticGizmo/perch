@@ -9,28 +9,52 @@ namespace Perch.Platform.Windows;
 /// (see <see cref="IdeHost.FromExecutable"/>). This catches both an IDE's own integrated terminal and a
 /// terminal a user launched from the IDE — in either case the IDE is an ancestor of the claude process.
 ///
-/// <para>The snapshot is cached for <see cref="SnapshotTtlMs"/> so a scan touching every session takes at
-/// most one enumeration. Everything is best-effort and swallows failures — detection never blocks or breaks
-/// a scan.</para>
+/// <para>Each process's answer is cached for its lifetime, and the snapshot for <see cref="SnapshotTtlMs"/>, so
+/// only a scan that meets new sessions enumerates processes, once. Everything is best-effort and swallows
+/// failures — detection never blocks or breaks a scan.</para>
 /// </summary>
 public sealed class IdeHostDetector : IIdeHostDetector
 {
-    // A whole session scan runs well inside this window, so all sessions share one process enumeration;
-    // long enough to be cheap, short enough that a session moving in/out of an IDE is picked up promptly.
+    // A whole session scan runs well inside this window, so new sessions met by one scan share one enumeration.
     private const int SnapshotTtlMs = 1500;
     // Defensive cap on the ancestry walk — a real chain is a handful deep; this only guards against a
     // pathological or cyclic parent-pid graph (pid reuse can, in theory, produce a loop).
     private const int MaxHops = 32;
 
+    // A process's ancestry is fixed at launch, so each session's answer is computed once and reused for the
+    // life of its process; keying on the creation time keeps a recycled pid from inheriting a stale answer.
+    // The whole-machine snapshot is then only taken when a session not seen before appears.
+    private const int MaxCached = 256;
+
     private readonly Lock _gate = new();
     private Dictionary<int, (int ParentPid, string ExeFile)> _snapshot = new();
     private long _snapshotAtTick = long.MinValue;
+    private readonly Dictionary<int, (long Created, IdeHost? Host)> _byPid = new();
 
     public IdeHost? Detect(int pid)
     {
         if (pid <= 0)
             return null;
 
+        long? created = CreationTime(pid);
+        if (created is { } c)
+            lock (_gate)
+                if (_byPid.TryGetValue(pid, out var hit) && hit.Created == c)
+                    return hit.Host;
+
+        var host = Walk(pid);
+        if (created is { } stamp)
+            lock (_gate)
+            {
+                if (_byPid.Count >= MaxCached)
+                    _byPid.Clear();
+                _byPid[pid] = (stamp, host);
+            }
+        return host;
+    }
+
+    private IdeHost? Walk(int pid)
+    {
         try
         {
             var procs = Snapshot();
@@ -119,6 +143,16 @@ public sealed class IdeHostDetector : IIdeHostDetector
         finally { CloseHandle(h); }
     }
 
+    // The process's creation time (FILETIME ticks), or null when it is gone or inaccessible.
+    private static long? CreationTime(int pid)
+    {
+        IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (h == IntPtr.Zero)
+            return null;
+        try { return GetProcessTimes(h, out long created, out _, out _, out _) ? created : null; }
+        finally { CloseHandle(h); }
+    }
+
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     private static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
@@ -129,6 +163,9 @@ public sealed class IdeHostDetector : IIdeHostDetector
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageName(
         IntPtr hProcess, uint dwFlags, System.Text.StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr hProcess, out long creation, out long exit, out long kernel, out long user);
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);

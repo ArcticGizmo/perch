@@ -235,6 +235,7 @@ internal sealed class PerchSession : IDisposable
         {
             var (lines, clipped) = TranscriptScan.LastLines(
                 TranscriptChain.ActiveLines(() => ReadAll(path), leafUuid), MaxHistoryLines);
+            var history = SessionConversation.ParseHistory(lines, sessionId);
 
             static IEnumerable<string> ReadAll(string p)
             {
@@ -246,7 +247,7 @@ internal sealed class PerchSession : IDisposable
             // prompt size — the same figure the resume estimate showed on the launcher.
             var (contextTokens, _) = TranscriptReader.ReadContextUsage(path, Cwd);
             var title = TranscriptReader.ReadTitle(path);   // the /rename custom title, if the session has one
-            return (lines, clipped, contextTokens, title);
+            return (history, clipped, contextTokens, title);
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (!t.IsCompletedSuccessfully)
@@ -254,8 +255,8 @@ internal sealed class PerchSession : IDisposable
                 Conversation.AddNote("couldn't read the transcript — history unavailable", NoteKind.Error);
                 return;
             }
-            var (lines, clipped, contextTokens, title) = t.Result;
-            int n = Conversation.LoadHistory(lines, sessionId);
+            var (history, clipped, contextTokens, title) = t.Result;
+            int n = Conversation.LoadHistory(history);
             Conversation.SeedContextTokens(contextTokens);
             SetTitle(title);
             if (clipped && n > 0) Conversation.AddNote("showing the most recent part of a long transcript");

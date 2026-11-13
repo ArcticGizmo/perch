@@ -59,6 +59,13 @@ internal static class Program
             return Rendering.RoostBench.Run(args.Length > 1 && int.TryParse(args[1], out var t) ? t : 60);
         }
 
+        // `perch bench-resume [transcript.jsonl]` times a resumed session window's history load and rebuild.
+        if (args.Length > 0 && args[0] == "bench-resume")
+        {
+            AttachParentConsole();
+            return Rendering.ResumeBench.RunCli(args);
+        }
+
         // `perch bench-graph [repo] [count]` times the git graph's read and layout on a real repository.
         if (args.Length > 0 && args[0] == "bench-graph")
         {

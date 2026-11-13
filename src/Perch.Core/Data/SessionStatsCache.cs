@@ -66,6 +66,11 @@ internal sealed class SessionStatsCache
     /// <summary>What a report sees while it holds the cache.</summary>
     internal sealed class View(SessionStatsCache cache)
     {
+        /// <summary>Brings these session transcripts up to date across several cores, ahead of the
+        /// <see cref="Session"/> calls that read them.</summary>
+        public void Prefetch(IEnumerable<string> transcripts) =>
+            cache._sessions.Prefetch(transcripts, Math.Clamp(Environment.ProcessorCount - 1, 1, 8));
+
         /// <summary>The session transcript's folded state, brought up to date; null when it can't be read.</summary>
         public SessionStatsService.SessionFoldState? Session(string transcript)
         {

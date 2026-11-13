@@ -147,6 +147,16 @@ internal sealed partial class GitTreeWindow : Window
     // refresh. This timestamp (Environment.TickCount64) lets the debounce swallow that self-induced fire.
     private long _lastSelfRefresh;
 
+    // An automatic refresh is either a full graph reload or a status-only re-read (a file edit or staging can't move
+    // commits or refs). Only one runs at a time: a request while one is in flight is remembered as _refreshAgain and
+    // runs when it lands, so a burst of edits can't stack git work in GitRunner's queue. A request while the window is
+    // minimised waits in _refreshOwed until it's restored. Kinds only ever escalate (Status < Full).
+    private enum RefreshKind { None, Status, Full }
+    private bool _refreshInFlight;
+    private RefreshKind _refreshAgain, _refreshOwed;
+    // Set from the watchers' threads when a settled burst included an event that can change the graph.
+    private int _watchFull;
+
     // What is currently shown, so an auto-refresh updates only what changed and leaves the diff (and its
     // scroll) untouched otherwise.
     private GitRepoStatus? _lastStatus;
@@ -1090,13 +1100,29 @@ internal sealed partial class GitTreeWindow : Window
         _sessionAt = best;
 
         var shown = best.ToDictionary(kv => kv.Key, kv => SessionView(kv.Value), StringComparer.OrdinalIgnoreCase);
-        _rail.SetSessions(shown);
-        _graph.Canvas.SetSessions(shown);
+        // Scans arrive every couple of seconds while a session works, and the rail rebuilds every row on a set;
+        // most scans change nothing it shows.
+        if (!SameSessions(shown, _shownSessions))
+        {
+            _shownSessions = shown;
+            _rail.SetSessions(shown);
+            _graph.Canvas.SetSessions(shown);
+        }
         bool busyHere = _snap.Current is { } cur && best.TryGetValue(cur.Path, out var here)
                         && here.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
         _isActive = _retargetActive || busyHere;
         UpdateBusyPoll(best.Any(kv => kv.Value.Status == SessionStatus.Running
                                       && !string.Equals(kv.Key, _snap.Current?.Path, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private Dictionary<string, GraphRail.WorktreeSession>? _shownSessions;
+
+    private static bool SameSessions(Dictionary<string, GraphRail.WorktreeSession> a, Dictionary<string, GraphRail.WorktreeSession>? b)
+    {
+        if (b is null || a.Count != b.Count) return false;
+        foreach (var (k, v) in a)
+            if (!b.TryGetValue(k, out var w) || v != w) return false;
+        return true;
     }
 
     private static int Urgency(SessionStatus s) => s switch
@@ -1839,13 +1865,13 @@ internal sealed partial class GitTreeWindow : Window
     {
         _watcher?.Dispose();
         _gitDirWatcher?.Dispose();
-        _watcher = Watch(cwd, RepoWatchFilter.IsRelevant);
+        _watcher = Watch(cwd, RepoWatchFilter.IsRelevant, inGitDir: false);
         _gitDirWatcher = GitCheckoutScanner.FindRoot(cwd) is { } root && GitWorktreeScanner.CommonDir(root) is { } common
-            ? Watch(common, RepoWatchFilter.IsRelevantInGitDir)
+            ? Watch(common, RepoWatchFilter.IsRelevantInGitDir, inGitDir: true)
             : null;
     }
 
-    private FileSystemWatcher? Watch(string dir, Func<string?, bool> relevant)
+    private FileSystemWatcher? Watch(string dir, Func<string?, bool> relevant, bool inGitDir)
     {
         if (!Directory.Exists(dir)) return null;
         try
@@ -1861,6 +1887,7 @@ internal sealed partial class GitTreeWindow : Window
             void Bump(string? name)
             {
                 if (!relevant(name)) return;
+                if (RepoWatchFilter.ChangesGraph(name, inGitDir)) Volatile.Write(ref _watchFull, 1);
                 try { debounce.Change(600, Timeout.Infinite); } catch (ObjectDisposedException) { }
             }
             w.Changed += (_, e) => Bump(e.Name);
@@ -1880,19 +1907,84 @@ internal sealed partial class GitTreeWindow : Window
     {
         if (!otherBusy) { _busyPoll?.Stop(); return; }
         _busyPoll ??= new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
-        {
-            if (IsVisible) AutoRefresh();
-        });
+            RequestRefresh(RefreshKind.Full));
         _busyPoll.Start();
     }
 
     // The watcher has been quiet for 600 ms after a relevant change (on the UI thread).
     private void OnWatchSettled()
     {
+        bool full = Interlocked.Exchange(ref _watchFull, 0) == 1;
         // Swallow the watcher fire our own staging write just triggered — RefreshWorkingTree already
         // re-read the tree, so a full AutoRefresh here would only re-spawn git for nothing.
         if (Environment.TickCount64 - _lastSelfRefresh < 900) return;
-        if (IsVisible) AutoRefresh();
+        RequestRefresh(full ? RefreshKind.Full : RefreshKind.Status);
+    }
+
+    // Runs an automatic refresh now, after the one in flight, or once the window is restored.
+    private void RequestRefresh(RefreshKind kind)
+    {
+        if (!IsVisible) return;
+        if (WindowState == WindowState.Minimized) { _refreshOwed = Max(_refreshOwed, kind); return; }
+        if (_refreshInFlight) { _refreshAgain = Max(_refreshAgain, kind); return; }
+        if (kind == RefreshKind.Full) AutoRefresh(); else StatusRefresh();
+    }
+
+    private static RefreshKind Max(RefreshKind a, RefreshKind b) => a > b ? a : b;
+
+    // An automatic refresh landed (or was dropped): run whatever was asked for meanwhile.
+    private void RefreshLanded()
+    {
+        _refreshInFlight = false;
+        var again = _refreshAgain;
+        _refreshAgain = RefreshKind.None;
+        if (again != RefreshKind.None) RequestRefresh(again);
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property != WindowStateProperty || WindowState == WindowState.Minimized || _refreshOwed == RefreshKind.None)
+            return;
+        var owed = _refreshOwed;
+        _refreshOwed = RefreshKind.None;
+        RequestRefresh(owed);
+    }
+
+    // A file edit or staging write: only this worktree's status (and the shown file) can have moved. Re-reads one
+    // `git status`, and falls back to a full reload when the change set itself changed (a file appeared, left or
+    // moved between staged and unstaged), since that moves the WIP row and the worktree's change count.
+    private void StatusRefresh()
+    {
+        if (_cwd is not { } cwd || _snap is null) { AutoRefresh(); return; }
+        _refreshInFlight = true;
+        int gen = _gen;
+        bool wipSelected = _selectedNode is { IsWip: true };
+        var shown = wipSelected ? _shownWip : null;
+        var contentMode = _contentMode;
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var status = _git.GetStatus(cwd);
+            var invisible = ComputeInvisible(cwd, status);
+            (IReadOnlyList<DiffSection> sections, string? note)? sel =
+                shown is { } sw ? WipContentSections(cwd, status, sw.Path, sw.Staged, contentMode) : null;
+            return (status, invisible, sel);
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            bool fresh = t.IsCompletedSuccessfully && IsVisible && gen == _gen;
+            if (fresh)
+            {
+                var (status, invisible, sel) = t.Result;
+                if (!StatusEqual(status, _lastStatus) || !invisible.SetEquals(_invisiblePaths))
+                {
+                    _refreshAgain = RefreshKind.Full;
+                }
+                else if (sel is { } s && wipSelected && DiffSig(s.sections) != _shownDiffSig)
+                    ShowContent(contentMode, s.sections, s.note);
+            }
+            RefreshLanded();
+        }));
     }
 
     protected override void OnClosed(EventArgs e)
@@ -1918,15 +2010,18 @@ internal sealed partial class GitTreeWindow : Window
     {
         if (_cwd is not { } cwd) return;
         int gen = ++_gen;
+        _refreshInFlight = true;
 
         bool wipSelected = _selectedNode is { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
         var contentMode = _contentMode;
         var (scope, baseOverride, hidden) = (_scope, _baseOverride, HiddenSet());
+        // Keep every page the user has scrolled into: a reload of only the first would drop the rest.
+        int pageSize = Math.Max(GraphLoader.PageSize, _snap?.RealCommitCount ?? 0);
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var snap = GraphLoader.Load(cwd, scope, baseOverride: baseOverride, hidden: hidden);
+            var snap = GraphLoader.Load(cwd, scope, pageSize: pageSize, baseOverride: baseOverride, hidden: hidden);
             var status = snap?.Context.CurrentStatus;
             var invisible = ComputeInvisible(cwd, status);
             // The shown working-tree file's content in the active content mode, for the repaint-if-changed
@@ -1936,10 +2031,15 @@ internal sealed partial class GitTreeWindow : Window
             return (snap, invisible, sel);
         }).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
-                if (!IsVisible || gen != _gen) return;
+                try { Apply(); }
+                finally { RefreshLanded(); }
+            });
+
+            void Apply()
+            {
+                if (!t.IsCompletedSuccessfully || !IsVisible || gen != _gen) return;
                 var (snap, invisible, sel) = t.Result;
                 var status = snap?.Context.CurrentStatus;
                 ApplyAutoHide(snap);   // a fetch brought new branches in: check them
@@ -1992,7 +2092,7 @@ internal sealed partial class GitTreeWindow : Window
                 // reselect above already reloaded it).
                 if (!reselected && sel is { } s && wipSelected && DiffSig(s.sections) != _shownDiffSig)
                     ShowContent(contentMode, s.sections, s.note);
-            });
+            }
         });
     }
 
@@ -2063,8 +2163,8 @@ internal sealed partial class GitTreeWindow : Window
                     if (f.OldPath is { } o) visible.Add(o);
                 }
         }
-        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: false));
-        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: true));
+        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: false, candidates));
+        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: true, candidates));
 
         foreach (var p in candidates)
             if (!visible.Contains(p)) invisible.Add(p);

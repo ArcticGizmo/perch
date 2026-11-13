@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using Perch.Data.Control;
 
@@ -22,6 +23,15 @@ internal sealed class ThreadFindBar : Border
     private readonly TextBlock _count;
     private bool _quiet;   // a programmatic Text set that shouldn't jump to the first match
 
+    // A search re-renders every dropped item of the thread, so typing searches once it pauses, and a one-character
+    // query (thousands of hits in a long thread) only searches on Enter.
+    private static readonly TimeSpan TypingPause = TimeSpan.FromMilliseconds(150);
+    private const int MinLiveQuery = 2;
+    private readonly DispatcherTimer _typing;
+    // Avalonia raises TextChanged asynchronously, so a programmatic set arrives after _quiet is cleared; that echo
+    // searches at once, as typing used to, rather than waiting out the typing pause.
+    private string? _echo;
+
     /// <summary>Raised after the bar closes (✕, Esc), so the host can put focus back where it belongs.</summary>
     public event Action? Closed;
 
@@ -34,7 +44,9 @@ internal sealed class ThreadFindBar : Border
             PlaceholderText = "Find in conversation", Background = Brushes.Transparent,
             BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Center,
         };
-        _box.TextChanged += (_, _) => { if (!_quiet) Run(jumpToFirst: true); };
+        _typing = new DispatcherTimer { Interval = TypingPause };
+        _typing.Tick += (_, _) => { _typing.Stop(); Run(jumpToFirst: true); };
+        _box.TextChanged += (_, _) => { if (!_quiet) OnTyped(); };
         _box.AddHandler(KeyDownEvent, OnBoxKeyDown, RoutingStrategies.Tunnel);
 
         _count = new TextBlock
@@ -80,6 +92,7 @@ internal sealed class ThreadFindBar : Border
     public void Close()
     {
         if (!IsVisible) return;
+        _typing.Stop();
         IsVisible = false;
         _thread.ClearSearch();
         Closed?.Invoke();
@@ -92,12 +105,34 @@ internal sealed class ThreadFindBar : Border
     {
         IsVisible = true;
         _quiet = true;
+        _echo = query;
         try { _box.Text = query; } finally { _quiet = false; }
         int n = _thread.Search(query);
         if (n > 0) _thread.ShowMatch(_thread.FirstMatchFrom(near));
         UpdateCount();
         _box.Focus();   // so Enter / Shift+Enter step on from the landing
         return n;
+    }
+
+    private void OnTyped()
+    {
+        _typing.Stop();
+        if (_echo is { } echo)
+        {
+            _echo = null;
+            if ((_box.Text ?? "") == echo)
+            {
+                Run(jumpToFirst: true);
+                return;
+            }
+        }
+        if ((_box.Text ?? "").Trim().Length >= MinLiveQuery)
+        {
+            _typing.Start();
+            return;
+        }
+        if (_thread.MatchCount > 0) _thread.ClearSearch();
+        UpdateCount();
     }
 
     // Re-run the query, wash the matches, update the counter, and optionally jump to the first hit.
@@ -122,7 +157,7 @@ internal sealed class ThreadFindBar : Border
     private void UpdateCount()
     {
         int n = _thread.MatchCount;
-        _count.Text = string.IsNullOrWhiteSpace(_box.Text) ? ""
+        _count.Text = string.IsNullOrWhiteSpace(_box.Text) || _typing.IsEnabled ? ""
             : n == 0 ? "0/0"
             : $"{_thread.CurrentMatch + 1}/{n}";
     }
@@ -132,6 +167,12 @@ internal sealed class ThreadFindBar : Border
     {
         switch (e.Key)
         {
+            case Key.Enter when _typing.IsEnabled || (_thread.MatchCount == 0 && !string.IsNullOrWhiteSpace(_box.Text)):
+                // The query hasn't been searched yet (still typing, or too short to search live): search it now.
+                _typing.Stop();
+                Run(jumpToFirst: true);
+                e.Handled = true;
+                break;
             case Key.Enter:
                 Step(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
                 e.Handled = true;

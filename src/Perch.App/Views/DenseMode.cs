@@ -485,14 +485,28 @@ internal sealed class DenseController : IDisposable
 
     // ── Painting ────────────────────────────────────────────────────────────────
     // The statuses in top-to-bottom display order, paired with their dot colour.
-    private (Color color, int count)[] StatusCounts() =>
-    [
-        (_running,   _host.Sessions.Count(s => s.Status == SessionStatus.Running)),
-        (_awaiting,  _host.Sessions.Count(s => s.Status == SessionStatus.AwaitingInput)),
-        (_attention, _host.Sessions.Count(s => s.Status == SessionStatus.NeedsAttention)),
-        (_apiError,  _host.Sessions.Count(s => s.Status == SessionStatus.ApiError)),
-        (_idle,      _host.Sessions.Count(s => s.Status == SessionStatus.Idle)),
-    ];
+    // One pass into a reused buffer: the strip repaints at the attention chase's frame rate.
+    private readonly (Color color, int count)[] _statusCounts = new (Color, int)[5];
+
+    private (Color color, int count)[] StatusCounts()
+    {
+        int running = 0, awaiting = 0, attention = 0, apiError = 0, idle = 0;
+        foreach (var s in _host.Sessions)
+            switch (s.Status)
+            {
+                case SessionStatus.Running: running++; break;
+                case SessionStatus.AwaitingInput: awaiting++; break;
+                case SessionStatus.NeedsAttention: attention++; break;
+                case SessionStatus.ApiError: apiError++; break;
+                case SessionStatus.Idle: idle++; break;
+            }
+        _statusCounts[0] = (_running, running);
+        _statusCounts[1] = (_awaiting, awaiting);
+        _statusCounts[2] = (_attention, attention);
+        _statusCounts[3] = (_apiError, apiError);
+        _statusCounts[4] = (_idle, idle);
+        return _statusCounts;
+    }
 
     // The closed dense view: the perch icon, then one centered "dot + count" row for each status that has
     // at least one session. With no sessions at all, only the icon shows. Drawn in DIPs.
@@ -508,11 +522,11 @@ internal sealed class DenseController : IDisposable
         foreach (var (color, count) in StatusCounts())
         {
             if (count == 0) continue;
-            var label = OverlayDraw.Text(count.ToString(), 12, new SolidColorBrush(color), FontWeight.Bold);
+            var label = OverlayDraw.Text(count.ToString(), 12, OverlayDraw.Brush(color), FontWeight.Bold);
             double groupW = dot + 4 + label.Width;
             double startX = cx - groupW / 2;
             double midY = y + DenseRowHeight / 2;
-            ctx.DrawEllipse(new SolidColorBrush(color), null, new Point(startX + dot / 2, midY), dot / 2, dot / 2);
+            ctx.DrawEllipse(OverlayDraw.Brush(color), null, new Point(startX + dot / 2, midY), dot / 2, dot / 2);
             OverlayDraw.TextLeftMid(ctx, label, startX + dot + 4, midY);
             y += DenseRowHeight;
         }

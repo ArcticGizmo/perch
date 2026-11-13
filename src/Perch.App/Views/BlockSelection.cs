@@ -52,6 +52,9 @@ internal sealed class BlockSelection
     private readonly SelectionLayer _layer;
     private readonly DispatcherTimer _autoScroll;
     private readonly List<SelectableTextBlock> _blocks = new();   // collected at gesture start, in document order
+    // Each block's VisibleRect in the scroll content's space. Scrolling doesn't move content within its own space,
+    // so these hold until the next layout pass, and a drag move costs arithmetic instead of a transform per block.
+    private Rect?[]? _contentRects;
 
     private bool _pending;        // pressed, not yet dragged past the slop (still the block's own click)
     private bool _dragging;       // the selection owns the gesture (pointer captured to the scroll)
@@ -121,6 +124,7 @@ internal sealed class BlockSelection
 
         _autoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _autoScroll.Tick += (_, _) => AutoScrollTick();
+        scroll.LayoutUpdated += (_, _) => _contentRects = null;
     }
 
     /// <summary>True when a non-empty selection exists.</summary>
@@ -361,6 +365,7 @@ internal sealed class BlockSelection
 
     private void Collect()
     {
+        _contentRects = null;
         _blocks.Clear();
         if (_root is not null)
             Collect(_root);
@@ -385,12 +390,24 @@ internal sealed class BlockSelection
     // are no blocks on show.
     private (int Pos, int Ch)? Nearest(Point pView)
     {
+        // Work in the content's space when there is one; it differs from the viewport's by the scroll offset only.
+        var content = _scroll.Content as Visual;
+        var origin = content?.TranslatePoint(default, _scroll);
+        if (content is not null && origin is { } o && (_contentRects is null || _contentRects.Length != _blocks.Count))
+        {
+            _contentRects = new Rect?[_blocks.Count];
+            for (int i = 0; i < _blocks.Count; i++) _contentRects[i] = VisibleRect(_blocks[i], content);
+        }
+
         int chosen = -1;
         double bestDy = double.MaxValue, bestDx = double.MaxValue;
         Rect chosenRect = default;
         for (int i = 0; i < _blocks.Count; i++)
         {
-            if (VisibleRect(_blocks[i], _scroll) is not { } r)
+            Rect? rect = origin is { } shift && _contentRects is { } cached
+                ? cached[i]?.Translate(new Vector(shift.X, shift.Y))
+                : VisibleRect(_blocks[i], _scroll);
+            if (rect is not { } r)
                 continue;
             double dy = pView.Y < r.Top ? r.Top - pView.Y : pView.Y > r.Bottom ? pView.Y - r.Bottom : 0;
             double dx = pView.X < r.Left ? r.Left - pView.X : pView.X > r.Right ? pView.X - r.Right : 0;

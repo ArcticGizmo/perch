@@ -123,16 +123,28 @@ internal sealed class GitRepoService
     /// <summary>The whole working tree's unified diff — staged (index vs HEAD) when <paramref name="staged"/>,
     /// else unstaged (worktree vs index); null on any failure. One call for every changed path, so a caller
     /// can classify the whole change set (e.g. which paths carry no net text change) without a diff per
-    /// file.</summary>
-    public GitDiff? GetWorkingTreeDiff(string cwd, bool staged)
+    /// file. <paramref name="paths"/> (repo-root-relative, as status reports them) limits it to those paths, so a
+    /// caller that only needs a few files' diffs doesn't pay for the whole tree's; a list too long for one command
+    /// line falls back to the whole tree.</summary>
+    public GitDiff? GetWorkingTreeDiff(string cwd, bool staged, IReadOnlyCollection<string>? paths = null)
     {
         if (!IsRepo(cwd))
             return null;
-        var (exit, stdout) = staged
-            ? RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--cached")
-            : RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff");
+        var args = new List<string> { "--no-optional-locks", "diff" };
+        if (staged) args.Add("--cached");
+        if (paths is { Count: > 0 } && paths.Sum(p => p.Length + PathspecMagic.Length + 3) < MaxPathspecChars)
+        {
+            args.Add("--");
+            // top: relative to the repo root whatever folder git runs in; literal: no glob or magic in a file name.
+            args.AddRange(paths.Select(p => PathspecMagic + p));
+        }
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, [.. args]);
         return exit == 0 ? ParseUnifiedDiff(stdout) : null;
     }
+
+    // Windows caps a command line at 32,767 characters; stay well clear of it.
+    private const int MaxPathspecChars = 16_000;
+    private const string PathspecMagic = ":(top,literal)";
 
     /// <summary>The unified diff introduced by a single commit; null on any failure. Runs
     /// <c>git show &lt;hash&gt; --format= --patch</c> so only the patch (no commit header) is parsed.</summary>

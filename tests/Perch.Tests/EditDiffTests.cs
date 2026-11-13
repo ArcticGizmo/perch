@@ -89,4 +89,30 @@ public class EditDiffTests
         var diff = EditDiff.Build("Edit", Json("""{"old_string":"a\r\nb","new_string":"a\nb"}"""));
         Assert.Null(diff);   // identical content once newlines are normalised → nothing to show
     }
+
+    // A card is rebuilt from its part many times (hydrate, rebind, theme change); the part works the parse and the
+    // diff out once and hands back the same objects.
+    [Fact]
+    public void ToolCallPart_ParsesAndDiffsOnce()
+    {
+        var part = new ToolCallPart("e1", "Edit", "Editing a.cs", """{"file_path":"a.cs","old_string":"x = 1","new_string":"x = 2"}""");
+        Assert.Same(part.Input, part.Input);
+        Assert.Equal("a.cs", TranscriptJson.AsString(part.Input?["file_path"]));
+        var diff = part.Diff;
+        Assert.NotNull(diff);
+        Assert.Same(diff, part.Diff);
+        Assert.Equal((1, 1), EditDiff.Counts(diff!));
+    }
+
+    [Fact]
+    public void ToolCallPart_NonEditOrUnreadableInputHasNoDiff()
+    {
+        var bash = new ToolCallPart("b1", "Bash", "Running: ls", """{"command":"ls"}""");
+        Assert.NotNull(bash.Input);
+        Assert.Null(bash.Diff);
+
+        var broken = new ToolCallPart("e2", "Edit", "Editing", "{not json");
+        Assert.Null(broken.Input);
+        Assert.Null(broken.Diff);
+    }
 }

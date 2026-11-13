@@ -127,6 +127,8 @@ public partial class App : Application
     private INotifier? _notifier;
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
+    // The usage, status and social polls wait out a locked desktop through this, catching up on unlock.
+    private LockWatch? _lockWatch;
 
     // Achievement badges: evaluates lifetime trophies against an all-time scan and toasts newly-unlocked
     // ones (once). The all-time scan is the slowest stats path, so checks are throttled — one at startup,
@@ -209,6 +211,7 @@ public partial class App : Application
                 _feedsHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
+                _lockWatch?.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // already done on the overlay's Closing; harmless twice
                 _overlay?.Canvas.DisposeDense();
@@ -287,7 +290,9 @@ public partial class App : Application
                 settings.LastSeenVersion = AppInfo.Version;
                 settings.Save();
             }
-            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
+            _sessionLock = PlatformServices.CreateSessionLock();
+            _lockWatch = new LockWatch(_sessionLock);
+            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials, _lockWatch);
             // The opt-in sign-in refresher (started from ApplyDisplaySettings per AutoRefreshSignIn). A renewal or a
             // recovered login re-polls usage so the strip leaves its stale/expired state without waiting 5 minutes.
             _signInHost = new SignInRefreshHost(PlatformServices.ClaudeCredentials);
@@ -308,7 +313,7 @@ public partial class App : Application
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
-            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
+            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes, _lockWatch);
             // System media session → the overlay's now-playing strip (opt-in; started below when enabled).
             _mediaHost = new MediaMonitorHost(PlatformServices.CreateMediaController(), _overlay.Canvas.UpdateMedia);
             // Who holds the microphone → the overlay's mic strip (opt-in; started below).
@@ -327,7 +332,8 @@ public partial class App : Application
                 (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
                 OnGameInvited,
                 (games, requests) => _overlay?.Canvas.SetDrawGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
-                OnDrawInvited);
+                OnDrawInvited,
+                _lockWatch);
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
@@ -484,7 +490,12 @@ public partial class App : Application
             // "Open in GitKraken" — only offered when GitKraken's CLI is on PATH (detected once). The launch
             // + window-focus runs off-thread through the platform activator (see GitKrakenLauncher).
             _gitKrakenLauncher = new GitKrakenLauncher(PlatformServices.WindowActivator);
-            _overlay.Canvas.SetGitKrakenAvailable(GitKrakenLauncher.CliPath.Value is not null);
+            // The probe stats every PATH entry × PATHEXT, which can stall on an offline network drive.
+            Task.Run(() => GitKrakenLauncher.CliPath.Value is not null).ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully && t.Result)
+                    Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetGitKrakenAvailable(true));
+            }, TaskScheduler.Default);
             _overlay.Canvas.OpenInGitKrakenRequested += s => _gitKrakenLauncher.Open(s.Cwd);
 #if DEBUG
             // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push
@@ -508,7 +519,6 @@ public partial class App : Application
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
             // acknowledges it.
-            _sessionLock = PlatformServices.CreateSessionLock();
             Func<Screen?> toastScreen =
                 () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
 #if WINDOWS
@@ -593,6 +603,7 @@ public partial class App : Application
             // Goes through the Quiet-mode resolver so a quiet window restored from disk applies at startup.
             ApplyEffectiveSettings();
 
+            _overlay.Opened += LogStartupTime;
             _overlay.Show();
 
             // If the persisted mode is Docked, reserve the edge column now the window (and its handle) exist.
@@ -1340,6 +1351,17 @@ public partial class App : Application
             // The shell persists the new profile asynchronously; give it a moment before reading it back.
             DispatcherTimer.RunOnce(() => { RefreshDndButton(); CheckDnd(); }, TimeSpan.FromMilliseconds(600));
         }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // Startup cost is otherwise invisible outside a profiler, and it moves with the publish settings (PF11), so
+    // every launch records how long the overlay took to appear.
+    private void LogStartupTime(object? sender, EventArgs e)
+    {
+        if (_overlay is { } overlay) overlay.Opened -= LogStartupTime;
+        double ms;
+        try { ms = (DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds; }
+        catch { return; }
+        Task.Run(() => LaunchLog.Write($"startup: overlay open {ms:F0} ms after process start"));
     }
 
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the

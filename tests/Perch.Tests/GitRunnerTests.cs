@@ -246,6 +246,47 @@ public sealed class GitRunnerTests
         }
     }
 
+    // The git graph's "no net change" check diffs only the candidate files: status names them relative to the repo
+    // root, so a window opened in a subfolder must still find them, and a name that looks like pathspec magic or a
+    // glob must match only itself.
+    [Fact]
+    public void Working_tree_diff_scoped_to_root_relative_paths()
+    {
+        var git = ExecutableResolver.Find("git");
+        if (git is null) return;   // needs git on the host
+
+        var dir = Directory.CreateTempSubdirectory("perch-gitpaths-").FullName;
+        try
+        {
+            Git(git, dir, "init", "-q");
+            Git(git, dir, "config", "user.email", "t@example.com");
+            Git(git, dir, "config", "user.name", "t");
+            Git(git, dir, "config", "commit.gpgsign", "false");
+            Directory.CreateDirectory(Path.Combine(dir, "sub"));
+            // As a glob, "[x].txt" would match "x.txt" instead of itself.
+            string[] files = ["a.txt", "b.txt", "[x].txt", "x.txt", "sub/c.txt"];
+            foreach (var f in files)
+                File.WriteAllText(Path.Combine(dir, f.Replace('/', Path.DirectorySeparatorChar)), "one\n");
+            Git(git, dir, "add", "-A");
+            Git(git, dir, "commit", "-q", "-m", "init");
+            foreach (var f in files)
+                File.AppendAllText(Path.Combine(dir, f.Replace('/', Path.DirectorySeparatorChar)), "two\n");
+
+            var svc = new GitRepoService();
+            var fromSub = svc.GetWorkingTreeDiff(Path.Combine(dir, "sub"), staged: false, ["a.txt", "[x].txt"]);
+            Assert.Equal(["[x].txt", "a.txt"], fromSub!.Value.Files.Select(f => f.NewPath).Order(StringComparer.Ordinal));
+
+            var whole = svc.GetWorkingTreeDiff(dir, staged: false);
+            Assert.Equal(files.Length, whole!.Value.Files.Count);
+        }
+        finally
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                try { File.SetAttributes(f, FileAttributes.Normal); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // ---- GitRepoService.CountUntrackedLines ------------------------------------------------------------
 
     [Theory]

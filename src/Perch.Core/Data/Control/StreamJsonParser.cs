@@ -17,8 +17,13 @@ internal static class StreamJsonParser
         JsonNode? root;
         try { root = JsonNode.Parse(line); }
         catch { return []; }
-        if (root is null) return [];
+        return root is null ? [] : Parse(root);
+    }
 
+    /// <summary><see cref="Parse(string)"/> for a record the caller has already parsed, so a transcript line that
+    /// was parsed once to classify it isn't parsed again.</summary>
+    public static IReadOnlyList<SessionEvent> Parse(JsonNode root)
+    {
         try
         {
             var events = ParseRecord(root);

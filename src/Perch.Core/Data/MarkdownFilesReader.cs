@@ -37,7 +37,15 @@ public sealed record MarkdownFileSets(
 internal sealed class MarkdownFilesReader
 {
     private static readonly LineFolder<SetsState> SetsFolder = new(() => new(), StepSets);
-    private readonly TranscriptFold _fold = new(SetsFolder);
+
+    /// <summary>The folder a fold shared with other readers must register for this one.</summary>
+    internal static LineFolder Folder => SetsFolder;
+
+    private readonly TranscriptFold _fold;
+
+    /// <param name="fold">A fold shared with the other per-transcript readers (it must register <see cref="Folder"/>);
+    /// null gives the reader its own.</param>
+    public MarkdownFilesReader(TranscriptFold? fold = null) => _fold = fold ?? new(SetsFolder);
 
     /// <summary>
     /// The session's produced/referenced Markdown file sets, or <see cref="MarkdownFileSets.Empty"/> when
@@ -74,11 +82,10 @@ internal sealed class MarkdownFilesReader
 
     private static void StepSets(SetsState s, string line)
     {
-        // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result carries
-        // the "is_error" flag we need to discard a failed write. (A successful result usually omits
-        // is_error entirely, so it's simply absent from the errored set — which is correct.)
-        bool maybeTouch = line.Contains("tool_use") && line.Contains(".md");
-        bool maybeError = line.Contains("is_error");
+        // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result is needed to
+        // discard a failed write.
+        bool maybeTouch = TranscriptJson.MayHoldToolUse(line) && line.Contains(".md");
+        bool maybeError = TranscriptJson.MayHoldErrorResult(line);
         if (!maybeTouch && !maybeError)
             return;
 

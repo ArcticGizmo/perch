@@ -157,6 +157,23 @@ public class FileRefResolverTests
             Assert.NotNull(FileRefResolver.Resolve(cwd, "a.md", Exists, cache: true));
         Assert.Single(_probed);
     }
+
+    [Fact]
+    public void A_full_cache_drops_the_least_recently_used_spans_first()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "perch-cp9-lru-" + Guid.NewGuid().ToString("N"));
+        FileRefResolver.Resolve(cwd, "keep.md", Exists, cache: true);
+        for (int i = 0; i < 3000; i++) FileRefResolver.Resolve(cwd, $"f{i}.md", Exists, cache: true);
+        FileRefResolver.Resolve(cwd, "keep.md", Exists, cache: true);   // used again: now among the newest
+        for (int i = 3000; i < 6000; i++) FileRefResolver.Resolve(cwd, $"f{i}.md", Exists, cache: true);
+        Assert.InRange(FileRefResolver.CacheCount, 1, 4096);
+
+        _probed.Clear();
+        FileRefResolver.Resolve(cwd, "keep.md", Exists, cache: true);
+        Assert.Empty(_probed);
+        FileRefResolver.Resolve(cwd, "f0.md", Exists, cache: true);
+        Assert.Single(_probed);
+    }
 }
 
 public sealed class GitHeadTests : IDisposable

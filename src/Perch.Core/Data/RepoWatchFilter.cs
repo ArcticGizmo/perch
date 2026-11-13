@@ -49,6 +49,29 @@ internal static class RepoWatchFilter
         return parts.Length == 1 && (parts[0] is "HEAD" or "index" or "packed-refs" || InProgress(parts[0]));
     }
 
+    /// <summary>
+    /// Whether a relevant event can change the git graph itself (commits, refs, worktrees, an operation in progress)
+    /// rather than only the working tree's status. A file edit or a staging write (<c>index</c>) only moves status, so
+    /// the graph window re-reads one <c>git status</c> instead of reloading the log, refs, stashes and every worktree.
+    /// <paramref name="inGitDir"/>: the path is relative to the shared git dir (else to the worktree). Unknown is a
+    /// reload, to be safe.
+    /// </summary>
+    public static bool ChangesGraph(string? relativePath, bool inGitDir)
+    {
+        if (string.IsNullOrEmpty(relativePath)) return true;
+        var parts = relativePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        if (!inGitDir)
+        {
+            int dotGit = Array.FindIndex(parts, p => p.Equals(".git", StringComparison.OrdinalIgnoreCase));
+            if (dotGit < 0) return false;                  // a working file
+            parts = parts[(dotGit + 1)..];
+            if (parts.Length == 0) return true;            // .git itself appeared or went
+        }
+        if (parts.Length == 0) return true;
+        if (parts[^1] == "index" && (parts.Length == 1 || (parts.Length == 3 && parts[0] == "worktrees"))) return false;
+        return true;
+    }
+
     private static bool InProgress(string name) =>
         name is "MERGE_HEAD" or "CHERRY_PICK_HEAD" or "REVERT_HEAD" or "rebase-merge" or "rebase-apply";
 }

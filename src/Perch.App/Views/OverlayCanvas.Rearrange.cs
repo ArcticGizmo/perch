@@ -97,7 +97,7 @@ public sealed partial class OverlayCanvas
         double y = e.GetPosition(this).Y;
         if (_dragSection is null)
         {
-            Cursor = SectionAt(y) is not null ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            Cursor = SectionAt(y) is not null ? HandCursor : Cursor.Default;
             return;
         }
 

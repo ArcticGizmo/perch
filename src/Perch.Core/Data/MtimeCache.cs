@@ -11,9 +11,26 @@
 /// </summary>
 internal sealed class MtimeCache<T>
 {
-    private readonly record struct Entry(long Length, DateTime WriteUtc, T Value);
+    private sealed class Entry(long length, DateTime writeUtc, T value)
+    {
+        public readonly long Length = length;
+        public readonly DateTime WriteUtc = writeUtc;
+        public readonly T Value = value;
+        public long LastUsedMs = Environment.TickCount64;
+    }
 
     private readonly Dictionary<string, Entry> _entries = new();
+
+    internal int Count => _entries.Count;
+
+    /// <summary>Forgets every file not asked about for <paramref name="idle"/>, so a tray that runs for weeks
+    /// doesn't keep a value for every transcript it ever saw. A forgotten file is just computed again.</summary>
+    public void Sweep(TimeSpan idle)
+    {
+        long cutoff = Environment.TickCount64 - (long)idle.TotalMilliseconds;
+        foreach (var (path, e) in _entries)
+            if (e.LastUsedMs < cutoff) _entries.Remove(path);
+    }
 
     /// <summary>
     /// Returns the memoised value for <paramref name="path"/>, invoking <paramref name="compute"/> only
@@ -27,7 +44,10 @@ internal sealed class MtimeCache<T>
         {
             var fi = new FileInfo(path);
             if (_entries.TryGetValue(path, out var e) && e.Length == fi.Length && e.WriteUtc == fi.LastWriteTimeUtc)
+            {
+                e.LastUsedMs = Environment.TickCount64;
                 return e.Value;
+            }
 
             var value = compute(path);
             _entries[path] = new Entry(fi.Length, fi.LastWriteTimeUtc, value);

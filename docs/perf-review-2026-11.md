@@ -1,0 +1,284 @@
+# Performance review — November 2026
+
+A second performance pass over `main` at `fea89f2` (v0.6.10), six weeks after the adversarial review whose fixes are tracked as CP20–CP24 in `docs/review-fixes-plan.md`. All of those fixes are on `main`, along with the session-thread virtualization (#47), and this pass deliberately skipped them unless something had regressed. Nothing had.
+
+Five read-only reviewers each covered one area:
+- steady-state background work;
+- overlay and owner-drawn paint;
+- the session window;
+- the Core data layer, startup and `perch-hook`;
+- the features that landed in October and November.
+
+Their top claims were then re-checked against the code. The **✔** column marks a finding that was hand-verified at the cited lines; the others are reviewer-reported with file:line evidence but not re-read.
+
+## Baseline (headless `PERCH_BENCH=1 … render`, Release, this machine)
+
+| Bench | Result |
+|---|---|
+| Overlay paint (sample overlay + attention chase) | mean 11.6 ms/frame (p95 19.4), draw calls 1.72 ms, **292 KB allocated/frame** |
+| Streaming a 43 KB reply | mean 5.3 ms/frame, p99 26 ms, max 43 ms |
+| Long thread (240 items), virtualization on/off | 5–10 items built, heap −3 MB vs **98.9 MB** with it off |
+| Delta flush in a 200-tool turn | mean 0.016 ms |
+| Window leak check | 1/10 reachable (the known flaky baseline) |
+
+These match the post-CP22/CP23 numbers, so those fixes have held.
+
+## Summary
+
+The September work fixed the hot paths it targeted. The remaining cost falls into four groups:
+
+1. **Things that keep running when they don't need to.** Hidden spinners tick at 25 Hz. Git line stats spawn `git diff` for idle sessions. The IDE detector snapshots every process on each scan. Several pollers keep going while the desktop is locked. Every scan pushes a full overlay update even when nothing changed.
+2. **The git graph window**, new since the review, reloads everything on every file edit and rebuilds its rail on every session scan.
+3. **Resume and Ctrl+F in the session window.** These are the remaining UI-thread freezes: the full window builds every item at once, and find rebuilds everything on every keystroke.
+4. **Duplicated transcript reading.** Four separate `TranscriptFold`s read the same file, and their pre-filters are looser than intended.
+
+Most of the first group are **S** changes.
+
+## Tier 1 — quick wins (S each)
+
+| ID | ✔ | Finding | Where | Fix |
+|---|---|---|---|---|
+| PF1 | ✔ | **Hidden `LoadingSpinner`s tick at 25 Hz for the whole life of every open session window.** The timer runs while the spinner is *attached*, not while it's *visible*. Each window keeps three of them under hidden parents: the launcher, the resume overlay and the agent footer. That's about 75 UI wakeups and invalidates a second per window. `Render` also creates a `new Pen` and a new `StreamGeometry` every frame. | `Views/LoadingSpinner.cs:30-46,56-58`; hosts at `SessionWindow.cs:832,2558`, `SessionWindow.Agents.cs:144` | Start and stop the timer from `IsEffectivelyVisible` (override `OnPropertyChanged` for `IsVisibleProperty` and walk up the tree, or have the hosts toggle the spinner itself). Use `OverlayDraw.Pen`. |
+| PF2 | ✔ | **Fold pre-filters are too loose.** `Contains("is_error")` also matches `"is_error":false`: in a real 2.4 MB transcript that is 48 of 129 tool_result lines, of which only 5 are `true`. The legacy sub-agent fold parses *every* `tool_result` line, and that fold runs for most sessions (those with no `subagents/` dir). Tool results are most of a transcript's bytes, so the first scan after launch builds a full JsonNode DOM for tens of MB per fold. | `MarkdownFilesReader.cs:81`, `SessionWorktree.cs:179`, `SubAgentReader.cs:489` | Match `"is_error":true`. In `StepLegacy`, parse a tool_result only while an Agent/Task id is pending. Add a fold-equivalence test for each. |
+| PF3 | ✔ | **Git line stats spawn `git diff` for every session, including idle ones**, once the 3 s TTL lapses. The 30 s reconcile means about 2 spawns a minute per cwd, all day and while locked; fast-poll gives about 15 a minute. Each result that changes raises `StatsUpdated`, which triggers another scan. (Opt-in: `ShowGitStats`.) | `GitStatsService.cs:30,67-78`; `SessionMonitor.cs:939` | Refresh only when the session is Running or its transcript grew since the last fetch. Raise the TTL to about 15–30 s. Skip while locked. |
+| PF4 | ✔ | **The IDE-host detector takes a full Toolhelp snapshot on most scans.** Its 1.5 s TTL is shorter than any scan interval, so the whole process list is marshalled about 30 times a minute in fast-poll. IDE-hosted sessions also make an `OpenProcess` call each scan. A live pid's ancestry never changes. | `Perch.Platform.Windows/IdeHostDetector.cs:20,68-104`; `SessionMonitor.cs:964` | Cache `Detect` per (pid, start time) for the process's lifetime, and snapshot only when an unseen pid appears. |
+| PF5 | ✔ | **The git graph rail is rebuilt on every session scan.** `ApplySessions` hands a fresh map to `GraphRail.SetSessions`, which clears and rebuilds every worktree card and every local, remote and stash row with no change check. That's every 2 s while a session works; with 1,000 remote branches, about 4k controls each time. | `GitTreeWindow.cs:1074-1100`; `Views/GraphRail.cs:85-96,168-223` | Return early when `shown` equals the previous map. On a sessions-only change, rebuild only the worktree cards. Later, virtualise or cap the ref lists. |
+| PF6 | | **Pollers that don't stop while the desktop is locked or nothing is shown:** <br>• the social feed: about 8–12 HTTPS requests every 60 s, even with Realtime connected (`SocialFeedMonitorHost.cs:79-166`); <br>• `gh pr view` on merged or closed PRs and long-idle sessions (`PrStatusService.cs:167,200`); <br>• the mic monitor: COM endpoint activation plus a ConsentStore registry walk every 2 s (`MicrophoneMonitor.cs:39,64,184-318`); <br>• the usage and status polls (`UsageMonitorHost.cs:144`, `StatusMonitorHost.cs:54`); <br>• the overlay's 1 s tick, which has no `OnScreen()` check and also repaints in compact-rows mode where no elapsed label is drawn (`OverlayCanvas.cs:5812-5831`). | as listed | Gate each on `ISessionLock` as Feeds and GitHub alerts already do. Back the social poll off to about 5 min while Realtime is up. Give finalised PRs a TTL of 30 min or more. Poll the mic's WASAPI side only while something holds the mic. Give the 1 s tick `OnScreen()` and a check that a live label is actually painted. |
+| PF7 | | **Paint-convention leftovers.** `UsageBarRenderer` creates 3–4 `new SolidColorBrush` and a `NewText` caption per bar per paint. The dense strip creates a `new SolidColorBrush` per status per paint, plus LINQ counts. A `new Cursor(Hand)` is created per pointer move over the docked column. | `Rendering/UsageBarRenderer.cs:38,50,67,86,90`; `DenseMode.cs:488-515`; `OverlayCanvas.cs:4102` | `OverlayDraw.Brush` / `OverlayDraw.Text(Truncate(…))`, and the existing `HandCursor`. |
+| PF8 | ✔ | **Ctrl+F searches on every keystroke with no debounce.** Each search calls `HydrateAll()` plus `UpdateLayout()`, rebuilding every dehydrated item. It then walks the visual tree and allocates a `Border` and 2 brushes per match, twice. A one-letter query is thousands of matches. | `ThreadFindBar.cs:37`; `SessionThreadView.cs:756-858` | First step: debounce about 150 ms and require 2+ characters. The proper fix is PF19. |
+| PF9 | | **`AppSettings.Save` (serialize plus fsync, on the UI thread) runs on every keystroke** in the ntfy and Jira text boxes. | `SettingsCatalogView.cs:315-323`, `SettingEditorWindow.cs:85-88` | Coalesce, and save off the UI thread. |
+| PF10 | | **`perch-hook`'s `IsPerchRunning` uses `Process.GetProcessesByName`**, a whole-machine snapshot taking 5–20 ms, on SessionStart when auto-start is on. | `Perch.Hook/Program.cs:432-439` | `Mutex.TryOpenExisting("Local\\Perch_SingleInstance")`, plus the `_Dev` name. |
+| PF11 | ✔ | **The release publish compresses the single file and doesn't use ReadyToRun.** Compressed bundles inflate every assembly into private memory at load. Avalonia, Markdig and Perch's own code all JIT at startup. Velopack's package is already a zip, so the compression saves little download. | `publish.bat:18-20`, `release.yml:59-61` | Drop `EnableCompressionInSingleFile` and add `PublishReadyToRun=true`. **Measure** cold start and working set before and after: the package gets bigger. |
+
+## Tier 2 — bigger wins (M)
+
+| ID | ✔ | Finding | Where | Fix |
+|---|---|---|---|---|
+| PF12 | ✔ | **Resuming a session freezes the UI.** `LoadHistory` decodes up to 4,000 lines on the UI thread. Each non-user line is parsed twice (`JsonNode` then `StreamJsonParser`), and image recovery does disk IO. Then the full window builds **every** item at bind, because the newest-first backlog path is `Compact`-only. Each item costs a Markdig parse with file-ref probes; each tool card two input parses; each Edit card a full LCS diff plus about 800 controls. The same full build happens on `/clear`, rewind and every theme change. Estimated 1–4 s for a long session. | `PerchSession.cs:250-258`; `SessionConversation.cs:540-547,636-647`; `SessionThreadView.cs:283` | (a) Parse on the worker: `LoadHistory(IEnumerable<ParsedTranscriptLine>)`, since CP24 already split the parse from the apply. (b) Let `StreamJsonParser` take a parsed `JsonNode`. (c) Use the backlog path (or placeholders that `Realize` hydrates) for the full window too. **Add a resume bench to `render` first.** |
+| PF13 | ✔ | **The git graph reloads the whole graph on every file edit, and reloads can overlap.** Any settled watcher event, and the 15 s busy poll, runs the full `GraphLoader.Load`: `git log` for 2,000 commits, refs, stashes, one `git status` per worktree, plus 2 whole-tree diffs for the invisible-change check. `_gen` only discards stale results, so the git work still piles up in GitRunner's queue (cap 4, shared with everything else). It keeps running while minimised, and a refresh throws away loaded history pages. With 20 worktrees that's about 26 git spawns per edit burst. | `GitTreeWindow.cs:1838-1997,2045-2072,2095`; `GraphLoader.cs:34-140`; `GitRepoService.cs:127-135` | Classify watcher events: worktree files get a status-only refresh; `refs/`, `HEAD`, `packed-refs` and `worktrees/` get a full load. Single-flight with a rerun flag. Skip while minimised and catch up on restore. Scope the invisible-change diff to the candidate paths. Reload with `pageSize = max(PageSize, loaded)`. |
+| PF14 | ✔ | **Every scan posts a full UI update even when nothing changed.** `Canvas.Update` re-sorts and rebuilds rows, and `RemeasurePanel` runs an extra `Draw(null)` measure, a monitor query and a window resize. There's also the Roost roster/tab sync and per-window activity refresh. That's about 30 times a minute while anything works, an estimated 2–8 ms of UI work each. | `SessionMonitorHost.cs:203-213`; `App.axaml.cs:355-371`; `OverlayCanvas.cs:713-719,1745-1795` | On the worker, fingerprint what the UI reads and skip the post when it's unchanged (still re-arm the deadline and fast-poll timers). In `Update`, skip the resize when the body height is unchanged. |
+| PF15 | | **Transcripts are read several times per scan.** Four `TranscriptFold` instances (TranscriptReader, MarkdownFilesReader, SessionWorktree, the legacy SubAgentReader) each read and UTF-8-decode the same appended bytes. The tail readers (activity, burn rate, stuck) each re-read their own 32 KB tail. About 12 `TranscriptLocator.Resolve` calls per session per scan each do a `Regex.Replace` plus `File.Exists`. `ReadConfiguredModel` re-reads up to 3 `settings.json` files on every growth. | `TranscriptReader.cs:26-52,943,1037-1076`; `MarkdownFilesReader.cs:40`; `SessionWorktree.cs:35`; `SubAgentReader.cs:48`; `TranscriptLocator.cs:58-66` | One fold per transcript with all the `LineFolder`s registered (the fold already supports several). One shared tail window per (path, length, mtime). Resolve the path once per session per scan. Cache the settings model by mtime. The equivalence tests from CP20 cover this. |
+| PF16 | | **Resource monitor: the whole analysis is rebuilt on the UI thread every 5 s.** `Runaways` is O(processes × ticks), so the cost grows quadratically over a 4 h recording (estimated 50–150 ms per tick late on). Every 30 s it also re-reads each session's whole transcript from byte 0, JSON-parsing lines before the window check. Its own CPU lands in the recording it is analysing. | `ResourceMonitorWindow.cs:187-300`; `ResourceAnalysis.cs:365-378,513-527,611`; `SessionActivity.cs:27-262` | Build off-thread, single-flight. Throttle live rebuilds. Walk each process's own series. Check the timestamp before parsing, or fold incrementally with `TranscriptFold`. |
+| PF17 | | **Edit, Write and tool-fold cards are eager.** The LCS diff (up to a 1.6 MB `int[,]`) and the parsed input are recomputed on every hydrate, bind and theme change. The diff renders as about 800 controls. Read/Grep/Glob cards are fully built inside folds that start collapsed. | `SessionThreadView.cs:1113-1131,1512-1517,1932-1992`; `EditDiff.cs:84-97` | Cache the parse and the diff per `ToolCallPart`. Build fold cards on first expand. Render the diff as Runs with painted bands, or show 40 rows plus "show more". |
+| PF18 | | **The overlay paint has two remaining hot spots.** The attention chase rebuilds its perimeter samples and clip every frame and makes about 4 × N `DrawLine` calls (roughly 2,500 for a tall panel) at 30 fps for 10 s per alert. Every row's glyphs (IDE, PR, Jira, mail, note, markdown, warn, mode, GitHub, todos) each create a `new StreamGeometry` per paint. | `OverlayCanvas.cs:3432-3938,5574-5578,5952-6040`; `OverlayCanvas.GitHub.cs:187-254` | Cache the samples and clip on (rect, radius, docked). Stroke the base outline once and loop only over the lit tail. Make glyphs `static readonly` geometry drawn under `PushTransform`, as `OverlayCanvas.Dnd.cs` already does. Re-run the overlay bench: the target is well under the current 292 KB/frame. |
+| PF19 | | **Find (the proper fix).** Pick candidate items from the model text (`TextPart.Text`, tool results) and hydrate only those. Paint highlights as one viewport-clipped owner-drawn layer with cached brushes. While streaming, re-measure only the changed item's matches. | `SessionThreadView.cs:676,756-858` | — |
+
+## Tier 3 — worth doing when nearby
+
+- **Transcript search rescans the whole corpus on every query** (`TranscriptSearch.cs:58-64`, `TranscriptSearchWindow.cs:204-211`): about 2 GB of strings per query for a 1 GB history. When the new query extends the last one, search only the files that matched before. Search the UTF-8 bytes before decoding. Reuse `ListAll` for the window's lifetime.
+- **`FlightPathService.ForDay`** (`:117-155`) fully parses every transcript touched since the chosen day, with no cancellation, and each Left-arrow press starts another scan. Prefilter on creation time and the `"timestamp"` substring, pass a `CancellationToken`, or derive it from `SessionStatsCache`.
+- **Cold stats rebuild** (`SessionStatsService.cs:362-369`, `TeamReader.cs:128-135`): an estimated 8–15 s for 1 GB, run on a fresh install and after every fold-version bump. Add a fast path for tool_result-only user lines, and parallelise per file.
+- **Startup before `_overlay.Show()`** (`App.axaml.cs:229,487,525-536`):
+  - reflection `JsonSerializer` first-use costs for `AppSettings` and four stores;
+  - `GitKrakenLauncher.CliPath` probes PATH × PATHEXT (about 480 `File.Exists`), which can hang on an offline network drive.
+  
+  Move the PATH probe to `Task.Run`, load the stores after Show, and consider a `JsonSerializerContext`.
+- **Unbounded per-file caches.** `TranscriptFold._entries`, the `MtimeCache`s, `SessionMonitor._lastPr`, and the PR and git-stats caches grow all day. Evict entries for paths not seen in N minutes.
+- **File-ref probes** (`MarkdownView.cs:756-772`, `FileRefResolver.cs:19-20,68`): every inline path does a `File.Exists` on the UI thread. The 5 s TTL and the clear at 1,024 entries make re-hydration re-probe. Use LRU eviction and a longer TTL for settled content.
+- **Session window, smaller items:**
+  - `BlockSelection.Nearest` walks every block on each pointer move (cache the rects and binary-search);
+  - the branch/changes timers restart on every streamed delta (trigger on file-writing tool results only, `SessionWindow.Changes.cs:81-91`);
+  - palette and @-mention rows are rebuilt on hover (`SessionWindow.cs:3000,3178`).
+- **Diagnostic windows.** `HookActivityView:293-297` and `ResourceTimelineView:680-684` repaint on every mouse pixel. Invalidate only when the hovered target changes.
+- **Git graph, smaller items:**
+  - `LaneAllocator.cs:69-74` does a `List.Contains` per edge (O(P²) per row);
+  - Branch scope runs a serial extra `for-each-ref` (`GraphLoader.cs:102-112`).
+
+## Checked and fine
+
+- **Overlay idle path.** It repaints at most about once a second. Every animation timer stops itself, and the mismatch pulse is `OnScreen`-gated. There's no file IO in any `Render`, and pointer-move invalidations are change-guarded.
+- **Owner-drawn views.** `GraphCanvas` and the session list paint only visible rows. `StatsDashboard`, `FlightPathTimeline` and `AchievementsDashboard` repaint only on data or size changes. Roost timers stop on minimise.
+- **Background services.**
+  - GitHub alerts, Feeds, Todos, Sign-in refresh, Updates, and the Hypertree and Daemon hosts are all throttled, single-flight and, where it matters, lock-gated.
+  - The PR glyph caches per (git dir, branch), with at most 3 `gh` runs at once.
+  - The resource recorder runs only between explicit Start and Stop. It makes one `NtQuerySystemInformation` call per tick, with no WMI.
+- **Live streaming.** Parsing happens on the controller's reader thread and the view batches the updates. The CP22 policies are intact.
+- **Session window.** No event or timer leaks were found on close. The @-mention scan runs off-thread and is capped. The transcript search window is debounced and cancellable. The Markdig pipeline and regexes are static or compiled.
+- **perch-hook.** It's NativeAOT and uses `Utf8JsonReader`. It handles only 3 events and makes no pipe connects.
+- **Build settings.** TieredPGO is on by default. `InvariantGlobalization` and trimming aren't viable: culture-formatted dates, COM interop and the reflection-based `JsonSerializer` and `SalvageMerge` rule them out.
+
+## Progress (branch `perf/review-2026-11`)
+
+| ID | Commit | Notes |
+|---|---|---|
+| PF1 | 7927c76 | `render` prints a spinner check: 2 hidden spinners animating before, 0 after. |
+| PF2 | 7908bc3 | |
+| PF3 | 9e93572 | |
+| PF4 | dc20ca2 | |
+| PF5 | b29a4f3 | |
+| PF7 | 65162e5 | Overlay bench now allocates 254 KB/frame (292 KB at the baseline). |
+| PF8 | c799c5e, 3e95abe | Debounce only; PF19 is the proper fix. |
+| PF9 | a67d6ae | |
+| PF10 | cd2675b | Mutex probe 3.4 ms vs 13 ms by name. |
+| PF6 | ab3a544 | See below. |
+| PF11 | 44ae7b3 | Compression dropped; ReadyToRun rejected. See below. |
+| PF12 | 8fa903e | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
+| PF17 | 67ce045 | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
+| PF13 | 9ed40ae | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
+| PF14 | 576cf3d | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
+| PF15 | 1fd806b | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
+| PF16 | 0817dac | Analysis off the UI thread and throttled; runaway scan 243 → 3.8 ms; activity skips out-of-window parses. |
+| PF18 | 429a2fc | Static glyph geometry; chase samples, clip and colours cached. 254 → 223 KB/frame. |
+| PF19 | (this commit) | Find builds only items that can match; one owner-drawn highlight layer. Phrase search 523 → 12 ms. |
+
+PF6 as built:
+- **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
+- **Merged and closed PRs** are re-checked every 30 minutes, or at the user's interval if that's longer (`PrStatusService.FinalisedTtl`). Open PRs keep polling while locked, because those polls drive the away-from-desk merge and review pushes.
+- **The mic monitor** reads WASAPI only while the privacy ledger names a holder (or the last snapshot had one), plus every 5th poll as a backstop. The ledger walk still runs every 2 s.
+- **The overlay's 1 s tick** stops when the overlay can't be seen (`Render` restarts it) and doesn't run with compact rows.
+
+Left out on purpose:
+- **Backing the social poll off while Realtime is up.** The socket only carries post inserts, so reactions and game state would lag by up to 5 minutes, and the client doesn't expose whether the socket is joined.
+- **Lock-gating the mic.** Its `Stop` resets the call-window tracker, so a lock would forget which window holds the call.
+- **Pausing PR polls for long-idle sessions.** A review on an idle session's open PR is exactly what the alert is for.
+
+PF11 as measured (2026-11-13, this machine, with CrowdStrike and Defender scanning every launch). Four Release single-file publishes of the same commit were compared:
+- **A:** today's compressed bundle;
+- **B:** uncompressed;
+- **C:** uncompressed with ReadyToRun;
+- **D:** compressed with ReadyToRun.
+
+The tray itself wasn't launched: a dev-profile launch rewrites the dev hook marker and reconciles hooks into the declared config dirs. The probes were `--version` (7 runs), `render` (3 runs) and `bench-roost 1` (5 runs), all of which exit before any profile or hook work.
+
+| Variant | Exe | Zipped (≈ download) | `bench-roost` private / WS | `render` private / WS | `--version` median |
+|---|---|---|---|---|---|
+| A compressed (was shipped) | 50 MB | 44 MB | 107 / 186 MB | 687 / 837 MB | 322 ms |
+| **B uncompressed (now shipped)** | 115 MB | **46 MB** | **84 / 145 MB** | **599 / 722 MB** | 610 ms |
+| C ReadyToRun | 219 MB | 84 MB | 94 / 156 MB | crashed | 910 ms |
+| D ReadyToRun + compressed | 85 MB | 79 MB | 219 / 299 MB | crashed | 785 ms |
+
+- **Compression** only saves 2 MB of download, because Velopack's package is a zip anyway. In exchange it holds every loaded assembly decompressed in private memory for the life of the tray: 23 MB more in the Roost probe and 88 MB more in the render probe. It's now off in `publish.bat` and `release.yml`; the macOS publish never had it.
+- **ReadyToRun** is rejected. It nearly doubles the download (+38 MB), and no startup win showed: launch time on this machine tracks file size, because EDR scans the whole exe on each start (see the `--version` medians), and `bench-roost` timing was within its own ±1 s noise. In addition, every `render` run of both R2R builds died with an access violation in Skia's PNG encoder, reached through `CaptureRenderedFrame().Save` in `HeadlessRenderer` (0 of 6 non-R2R runs did). That suggests a lifetime bug in the headless capture path that R2R's different GC and JIT timing exposes. It's test-harness only, and worth a look if the render harness ever crashes on CI.
+- The real tray number now lands in `launch.log` on every start (`startup: overlay open N ms after process start`). Compare it across the next release to confirm the cold start didn't regress.
+
+PF12 as built. A resume bench (`Rendering/ResumeBench.cs`, part of `PERCH_BENCH=1 … render`) loads a transcript into a conversation already bound to a full-size thread, as a resumed session window does. It uses a synthetic 400-turn transcript and, if set, the file named by `PERCH_RESUME_TRANSCRIPT`.
+
+| Transcript | Lines → items | UI-thread block before | After | Longest background slice after |
+|---|---|---|---|---|
+| Synthetic, 400 turns | 4,800 → 800 | 5,200 ms + 46 ms parse | **21 ms** | 41 ms |
+| A real 14 MB transcript | 1,710 → 24 | 1,679 ms + 49 ms parse | **187 ms** | 132 ms (one 100-tool turn is one item) |
+
+- **Almost all of the freeze was building every item at bind, not parsing.** Full windows now use the newest-first backlog the Roost's panes already had: the newest 6 items are built at once, and older ones are prepended in ~6 ms background slices that input runs between. This covers resume, `/clear`, rewind and every theme change, because they all rebind. Everything that walks the whole thread (find, jump to top or to the previous prompt, revealing a background task, rewind selection) already flushed the backlog first.
+- **The parse moved to the worker** (`SessionConversation.ParseHistory`, then `LoadHistory(parsed)` on the UI thread), and `StreamJsonParser.Parse(JsonNode)` reuses the parse that classified the line, so each line is parsed once. Image recovery runs on the worker too.
+- **Still open: the background build costs the full price.** The bench's back-to-back drain is about 7.3 s for the synthetic transcript: older items are built, measured and then mostly dehydrated again by virtualization. Prepending them as estimated-height placeholders that `Realize` hydrates on approach would skip most of that work. `Realize` already corrects the offset when a placeholder above the viewport comes back a different height, but the scrollbar and prompt-jump targets would be estimates until visited. PF17 (cached diffs, lazy fold cards) makes each build cheaper, so do that first and re-measure.
+
+PF17 as built. `perch bench-resume [transcript.jsonl]` runs the resume bench headless. It loads the synthetic transcript whole and then without each kind of tool card, and it times a rebind (what a theme change, `/clear` or rewind does) after each load. Rebind on the synthetic transcript, warmed:
+
+| Variant | Before | After |
+|---|---|---|
+| Whole | 8.3 s | 5.2 s |
+| Without edits | 3.9 s | 3.6 s |
+| Without folds | 6.9 s | 4.5 s |
+| Real 14 MB transcript: rebind / deferred build / longest slice | 1,084 / 807 / 96 ms | 551 / 504 / 31 ms |
+
+- **Edit cards were the cost**: about 11 ms each for a 50-line diff, against under 2 ms for a fold card. The LCS wasn't the problem; the panel was. Each diff row was a Border, a Grid, a marker TextBlock and a SelectableTextBlock, so a 50-line edit made about 200 controls. `Views/DiffText` is now one `SelectableTextBlock` of coloured runs, with the +/- markers and change bands painted in a gutter and behind it, measured once per text layout with `HitTestTextRange`. An Edit card now costs about 4 ms. Copying works across diff lines and leaves out the markers. `render` gained `session_diff_wrap(_light)`, which covers wrapped and blank changed lines and the MultiEdit separator.
+- **The parsed input and the diff are cached on the `ToolCallPart`** (`Input`, `Diff`), so a rebuild after hydrate, rebind or theme change re-derives neither. This matters most for big edits, whose LCS table can be up to 1.6 MB per build. The file-path lookup for a file tool's header reads the cached input too, instead of parsing the JSON again.
+- **Fold cards are still built eagerly.** The bench puts their whole share at about 0.7 s across 800 cards, under 1 ms each. Building them on first expand would mean teaching find (which matches hidden text in collapsed folds), expand-all and sticky-header ordering to build on demand. That's not worth it at that price.
+- What's left of the resume cost is ordinary text layout, about 2.5 s for 800 prose-only items, and only the placeholder idea above avoids it.
+
+PF13 as built (git graph window):
+- **Watcher events are classified** (`RepoWatchFilter.ChangesGraph`). A working-file edit, or a staging write to `index`, can't move commits or refs, so it gets a status-only refresh. That's one `git status`, plus the invisible-change check scoped to the candidate files and a repaint of the shown file if its content changed. If the change set itself moved (a file appeared, left, or moved between staged and unstaged), it falls back to the full reload, which is the only path that rebuilds the WIP row and the worktree counts. HEAD, refs, packed-refs, worktree add/remove and merge/rebase markers reload in full, as before. For scale, on this repo with 1 worktree a warm full reload's git stage takes about 227 ms, plus two whole-tree diffs; each extra worktree adds a `git status`.
+- **Single-flight.** One automatic refresh runs at a time. Requests arriving meanwhile collapse into one rerun of the strongest kind asked for, so a burst of edits can't queue git work in GitRunner (which is shared with everything else).
+- **Paused while minimised.** Watcher and busy-poll refreshes are owed while the window is minimised and run once on restore.
+- **The invisible-change check diffs only its candidate paths** (`GetWorkingTreeDiff(cwd, staged, paths)` with `:(top,literal)` pathspecs, so it works from a subfolder and a file name like `[x].txt` matches only itself). A path list too long for a command line falls back to the whole tree.
+- **A reload keeps the pages already loaded** (`pageSize = max(PageSize, loaded)`), so scrolled-in history no longer vanishes on a refresh.
+
+PF14 as built:
+- **`SessionListComparer` compares scans on the scan worker.** It uses record equality with the four list fields swapped for a shared empty array, then compares the lists element by element, recursing into sub-agent children. When a scan matches the last one posted, only the deadline and fast-poll timers are re-armed on the UI thread. The overlay update, Roost sync, session-window activity mirroring and the rest are skipped.
+- **Explicit requests always post.** That covers `Rescan`, `Reconcile`, and the acknowledge, notify and note changes queued through `OnWorker`. Some of them change what the App adds to the list (a dormant row ending) and rely on the callback to redraw. The force flag is consumed when a scan starts, so the scan that runs after the request is the one that posts.
+- **Checked against live sessions:** two scans of this machine's real `~/.claude` 4 s apart (6 sessions, 4 running) came back equal for 5 of them. The sixth genuinely differed: its sub-agent's activity had moved on. A throwaway verb printed the per-field differences; it was not committed.
+- **The resize half needed nothing.** `SizeFloatingToContent` already writes the window height only when it differs. The measure pass stays, because a posted update by definition changed something.
+
+PF15 as built:
+- **One fold per transcript.** `SessionMonitor.NewSharedTranscriptFold()` registers every per-transcript reader's folders (`TranscriptReader.Folders`, `MarkdownFilesReader.Folder`, `SessionWorktree.Folder`, `SubAgentReader.ParentFolder`), and the monitor hands that one fold to all four readers. A growing transcript's new bytes are now read and UTF-8-decoded once per scan instead of up to four times. A reader built on its own (the Markdown window, tests) still gets a private fold. `SharedTranscriptFoldTests` checks that every reader's answer matches its private fold's, and that the shared fold reads each byte once, on the first read and on growth. The trade-off: every folder now steps every line, including the worktree and legacy sub-agent folders when their feature wouldn't have asked. Their pre-filters are substring checks, which cost far less than the three extra file reads.
+- **One tail per change.** The seven tail readers (activity, burn rate, stuck, API error, bare command, interrupted, awaiting assistant) used to read the same 32 KB tail each. They now share `TranscriptScan.CachedTailLines`, cached by (path, length, last write), so a change costs one read.
+- **`TranscriptLocator.Resolve` keeps a found path for 2 s.** Each reader resolves the transcript itself, about a dozen times per session per scan, and each call used to encode the cwd and stat the file. `EncodeProjectDir` is now a plain loop instead of a regex (pinned to the regex by a test, including non-ASCII and surrogate pairs).
+- **The settings `model` lookup** (up to three `settings.json` files on each transcript growth) is cached per file by length and mtime.
+
+PF16 as built (resource monitor), measured on a real 5.2 MB recording (1,781 ticks, 5,193 processes):
+- **The runaway-process scan walks each process's own samples** (`ResourceAnalysis.BusyRuns`) instead of every tick of the recording per process: **243 ms → 3.8 ms**, the same 146 runs. A randomized test pins it to the old scan, including ties for the peak, gaps where a process is absent, and values exactly at the threshold. A full analysis now builds in about 248 ms, down from roughly 490 ms.
+- **The analysis builds on a worker** from `ResourceRecording.Snapshot()`, single-flight, with a rerun if the recording moved meanwhile. While recording, the next build waits at least four times as long as the last one took, so analysis stays under a fifth of a core however long the recording runs. The view shows the previous analysis until the next lands, at most one tick behind.
+- **The activity lane's transcript re-read skips parsing records more than a minute outside the window**, using the timestamp text first. Recording a long session used to fully JSON-parse its whole transcript every 30 s.
+
+PF18 as built (overlay paint):
+- **Row and strip glyphs are built once.** The teammate shoulders; the VS Code, Cursor, Windsurf and generic editor marks; mail, note, Markdown, PR merge and approval tick, Jira, warning and mode chevrons; the GitHub kind symbols; and the to-do tick are now `static readonly` geometry around their anchor point (`GlyphShape`), drawn under a translation (`At`), as `OverlayCanvas.Dnd` already did. 270 of 370 render images are byte-identical to the previous commit, including every 1× overlay with glyphs. The 1.5× overlays differ only in sub-pixel anti-aliasing from translating at fractional scale; checked side by side.
+- **The attention chase keeps its perimeter samples and clip** until the panel's rect or corner changes, and works out each sample's intensity and blended colour once per frame instead of once per pass. Its four passes of per-segment `DrawLine`s stay: the overlapping round caps compound the alpha, and that is the glow's look. Batching them into one stroked path would visibly dim it.
+- **Bench**, back to back against the previous commit: 254 → 223 KB allocated per frame; draw calls alone 1.41 → 1.32 ms. Mean frame time is within run-to-run noise (10.7–12.1 ms before, 11.1 ms after). Most of the remaining ~216 KB is the chase's segment records.
+- **The media strip's `FillTriangle`** takes arbitrary points per transport icon and is left as is.
+
+PF19 as built (Ctrl+F). Measured with the long-thread bench (240 items), back to back with the previous view code:
+
+| Query | Before | After |
+|---|---|---|
+| "Turn 7 is green" (1 match) | 523 ms, all 240 items built | **12 ms**, 6 built |
+| "e" (7,320 matches) | 685 ms | 411 ms |
+| Scroll frame with matches up | 4–7 ms | 5–6 ms (noise) |
+
+- **Search builds only items that could match.** That's items already built, plus dehydrated ones whose model text holds the query (`ConversationFind`). It compares letters and digits only, lower-cased, so Markdown markers, punctuation and line breaks don't hide a phrase. A tool's input is matched on its decoded string values. A query with no letters or digits narrows nothing.
+- **Known gap:** text a card derives rather than stores (a tool's "Read 42 lines" summary, status labels) is found only in items already built, near the viewport.
+- **One owner-drawn `FindLayer`** paints every highlight with cached brushes, skipping matches more than 400 DIPs outside the viewport using their item's wrapper bounds. It replaces a `Border` per match, which was rebuilt and re-measured on every reflow (every streamed frame). It repaints on scroll and reflow.
+- What's left of the one-letter case is the walk and glyph mapping over 7,000 matches. Indexing the model text would go further, but it isn't worth it for a one-character query, which only searches on Enter since PF8.
+
+Tier 3, transcript search, as built. Measured single-threaded over this machine's 4.3 GB history (2,352 transcripts), back to back, warm cache:
+- **A transcript is matched in its raw UTF-8 bytes**, and only the lines the query lands in are decoded and parsed. The match anchors on the query's first and last bytes together, 16 positions at a time, so even common letters seldom reach a full compare. Old line pre-filter alone (no parse): 5.0–5.9 s and 8.9 GB allocated per query. New full search: **1.7–2.3 s and 0.14–0.8 GB**, depending on how many lines hold the query. Raw reads alone take 1.1–1.5 s. A query with non-ASCII letters keeps the decoded path. The one difference: a non-ASCII letter whose upper case is ASCII (ı, ſ) no longer matches its look-alike.
+- **A query that extends the last finished one** (same scope) searches only the transcripts that matched before, plus any written or created since (`TranscriptSearch.Narrowing`).
+- **`ListAll` still runs per search.** Its per-file reads are cached by length and mtime, so it's the directory walk and a stat per file; holding it for the window's life would hide sessions started while it's open.
+
+Tier 3, flight path, as built. Back to back on this machine's history, with identical lanes (a SHA-256 over every lane's id, project, branch, segment count, active time and API errors matched):
+
+| Day | Before | After |
+|---|---|---|
+| Yesterday | 680–820 ms, 445 MB | 510–670 ms, 345 MB |
+| A week ago | 1.8–1.9 s, 1.8 GB | 1.3–1.4 s, 1.2 GB |
+| 30 days ago | 6.6 s, 6.5 GB | 3.8–4.1 s, 3.6 GB |
+
+- **Records from other days are skipped unparsed**, judged by the first `"timestamp"` in the line (`TranscriptJson.PeekTimestampUtc`, now shared with the resource monitor's activity lane) with a minute's margin. A record still parses if the lane hasn't found its project (`cwd`) or branch yet, so those come from the same record as before.
+- **Each day's scan is cancellable**, and the window cancels the last one when you step to another day or close it. Holding ← used to queue a full scan per press.
+- **Left out:** a creation-time prefilter, because a copied transcript gets a new creation time and would vanish from its own past days. Reading from `SessionStatsCache` would serialise with the Stats window and could start a cold build. What remains is decoding every line of each transcript touched since the day; a byte-level peek like the transcript search's would cut it further if this still feels slow.
+
+Tier 3, cold stats rebuild, as built. All-time report over this machine's transcripts untouched in the last hour (2.2 GB), with a fresh in-memory cache, back to back; the serialised reports were identical:
+
+| | Before | After |
+|---|---|---|
+| Cold build | 9.2–10.5 s | **3.2–3.9 s** |
+| Warm report | 189–260 ms | 165–196 ms |
+
+- **`TranscriptFold.Prefetch`** brings every changed transcript up to date across up to 8 cores, biggest first, before the report reads them one by one. Each worker touches only its own file's entry; the fold's byte and generation counters are now atomic. The stat pass runs in parallel too, and the next `Get` of each path uses what Prefetch saw, so a warm report doesn't stat every file twice.
+- **Not done: the fast path for tool_result-only user lines.** Telling such a line apart from one with a text block needs most of a parse anyway, and with the parse spread across cores the rebuild is now mostly read and decode. Allocation is unchanged (about 10.5 GB for 2.2 GB of transcripts).
+- Teammate transcripts still fold one at a time; they're a small share of the bytes.
+
+Tier 3, startup before `Show`, as built:
+- **The GitKraken PATH probe runs on a worker**, and the "Open in GitKraken" item appears once it finds the CLI. Here it takes 7.6 ms with local PATH entries; the point is that an offline network drive on PATH can no longer hold up the overlay.
+- **Not done: loading the stores after `Show`.** Measured in a fresh process, the achievement, to-do and two GitHub stores take 33–38 ms together on first use and under 1 ms after that. Most of it is the JSON serializer warming up, which `AppSettings.Load` already pays earlier in startup. Moving them would mean reordering the hosts built around them for tens of milliseconds at most, and a source-generated `JsonSerializerContext` isn't worth it for that either. The `startup:` line in `launch.log` will show whether startup needs more.
+
+Tier 3, unbounded caches, as built:
+- **The session monitor sweeps its per-transcript caches every 10 minutes**, dropping any transcript not read for 30. That's the shared transcript fold (every folder's state per transcript), the seven tail `MtimeCache`s, and the sub-agent reader's own folds and meta cache. Every scan reads each live session's transcript, so only ended sessions go. One that comes back (a resume) is folded again from the start.
+- **Left as they are:**
+  - `SessionMonitor._lastPr` is per working directory and must outlive a quiet spell: forgetting a PR it saw open would miss the merge alert.
+  - The git-stats and PR caches hold one small record per directory or (git dir, branch), so they grow only with your repos and branches.
+  - `TranscriptLocator`'s hit and miss maps are already capped at 4,096, and the shared tail cache at 256.
+  - The stats cache prunes itself on every all-time report.
+
+Tier 3, file-ref probes, as built: `FileRefResolver` keeps a found path for 10 minutes and a missing one for 30 seconds (both were 5 seconds), and a full cache (now 4,096 spans) drops its least recently used half instead of emptying. Scrolling back through a settled thread no longer stats every inline path again. The probe itself still runs on the UI thread on a cache miss; moving it off would mean re-rendering a span when its answer lands, which isn't worth it for one `File.Exists` per new span.
+
+Tier 3, session window items, as built:
+- **Cross-block selection** (`BlockSelection.Nearest`) keeps each block's on-show rect in the scroll content's space until the next layout pass, so a drag move costs a translation plus arithmetic per block rather than a transform and a walk up the clipping ancestors for each. Linear over cached rects is already cheap, so there's no binary search.
+- **The branch chip and changed-files timers restart only when a tool call newly finishes** (and isn't a read-only tool such as Read, Grep or WebFetch), not on every streamed delta.
+- **The slash palette and @-mention list restyle two rows on hover** instead of rebuilding every row, which also stops a hover from scrolling the list. Arrow keys still scroll the highlighted row into view.
+
+Tier 3, diagnostic windows, as built:
+- **`HookActivityView`** repaints on a pointer move only when the hovered card header or event row changes (judged against the last paint's hit areas).
+- **`ResourceTimelineView` is left as is.** Its guide line and tooltip follow the pointer, so a move genuinely changes the picture, and it already skipped moves that land on the same point. Its band geometry and activity lane are cached per analysis and width, so a hover repaint is cached-path draws plus text. Splitting the tooltip into its own layer would save rasterising the charts, which can wait until the window feels slow.
+
+Tier 3, git graph items, as built:
+- **`LaneAllocator`** drops a row's duplicate edges with a reused `HashSet` instead of `List.Contains`, which was quadratic in the lanes open at that row. Duplicates still occur (two merge parents bound for lane 0), so the dedupe stays.
+- **The Branch scope's base-ref and merge-base lookups now overlap** the refs, status and stash reads, which don't depend on them; only the log walk waits for its query. On this repo, from a feature branch: 565 → 520 ms median over 7 loads. The log walk is the long pole, so the rest of the git stage is mostly hidden behind it already.
+
+## Suggested order
+
+1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.
+2. **Batch B (lock and visibility gating):** PF6.
+3. **Measure, then PF11:** compare cold start and working set of a Release publish with and without compression and ReadyToRun.
+4. **PF12 resume**, behind a new resume bench in `render`, then PF17 (cached diffs, lazy fold cards).
+5. **PF13 git graph** refresh split, then PF14 (skip no-op scan posts) and PF15 (a single fold).
+6. Then PF16, PF18 and PF19, and Tier 3 as each area is touched.

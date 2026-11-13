@@ -170,6 +170,17 @@ internal sealed class PrStatusService : IDisposable
     /// transient failure — e.g. the burst of lookups as Perch starts — hid a PR for the whole poll interval.</summary>
     internal TimeSpan RetryTtl { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>The floor on how long a merged or closed PR is served. It has no checks or reviews left to move and
+    /// its alerts have fired, so polling it at the open-PR interval for the rest of the session was wasted gh runs; a
+    /// reopen or a new PR on the same branch shows up within this.</summary>
+    internal static readonly TimeSpan FinalisedTtl = TimeSpan.FromMinutes(30);
+
+    /// <summary>How long a cached lookup stays fresh. Internal for unit testing.</summary>
+    internal static TimeSpan FreshFor(PullRequestInfo? pr, bool failed, TimeSpan ttl, TimeSpan retryTtl) =>
+        failed ? retryTtl
+        : pr is { State: PrState.Merged or PrState.Closed } && ttl < FinalisedTtl ? FinalisedTtl
+        : ttl;
+
     public PrStatusService() : this(RunGhPrView) { }
 
     internal PrStatusService(Func<string, Fetch> fetch) => _fetch = fetch;
@@ -197,7 +208,7 @@ internal sealed class PrStatusService : IDisposable
         var key = new PrKey(gitDir, ReadHead(gitDir) ?? "");
 
         bool cached = _cache.TryGetValue(key, out var entry);
-        if (cached && DateTime.UtcNow - entry.FetchedAt < (entry.Failed ? RetryTtl : Ttl))
+        if (cached && DateTime.UtcNow - entry.FetchedAt < FreshFor(entry.Pr, entry.Failed, Ttl, RetryTtl))
             return entry.Pr;
 
         ScheduleRefresh(key, cwd);

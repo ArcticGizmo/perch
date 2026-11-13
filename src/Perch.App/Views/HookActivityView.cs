@@ -293,8 +293,19 @@ internal sealed class HookActivityView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
+        var before = HoveredRow(_hover);
         _hover = e.GetPosition(this);
-        InvalidateVisual();
+        if (HoveredRow(_hover) != before) InvalidateVisual();
+    }
+
+    // The card header or event row the hover lights, from the last paint's hit areas; null over neither. Only a
+    // change of it needs a repaint.
+    private Rect? HoveredRow(Point? p)
+    {
+        if (p is not { } h) return null;
+        foreach (var (hit, _) in _cardHits) if (hit.Contains(h)) return hit;
+        foreach (var (hit, _, _) in _eventHits) if (hit.Contains(h)) return hit;
+        return null;
     }
 
     protected override void OnPointerExited(PointerEventArgs e)

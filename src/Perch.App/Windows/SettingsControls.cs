@@ -81,6 +81,24 @@ internal static class SettingsUi
         CornerRadius = new CornerRadius(3), FontSize = 13, Padding = new Thickness(6, 4),
     };
 
+    /// <summary>Runs <paramref name="commit"/> once typing in <paramref name="box"/> pauses, and at once when the
+    /// box loses focus or leaves the window, so a typed value is never lost. A save serialises and fsyncs the whole
+    /// settings file on the UI thread, which is too much to do per keystroke.</summary>
+    public static void CommitWhenTypingPauses(TextBox box, Action commit)
+    {
+        var pause = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        void Flush()
+        {
+            if (!pause.IsEnabled) return;
+            pause.Stop();
+            commit();
+        }
+        pause.Tick += (_, _) => Flush();
+        box.TextChanged += (_, _) => { pause.Stop(); pause.Start(); };
+        box.LostFocus += (_, _) => Flush();
+        box.DetachedFromVisualTree += (_, _) => Flush();
+    }
+
     // A themed multi-line editor (the single-line ThemedTextBox with wrapping + return/tab acceptance and
     // a vertical scrollbar). Used by the scratch pad; stretches to fill its container.
     public static TextBox ThemedTextArea(string value) => new()
