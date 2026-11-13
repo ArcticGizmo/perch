@@ -37,7 +37,15 @@ public sealed record MarkdownFileSets(
 internal sealed class MarkdownFilesReader
 {
     private static readonly LineFolder<SetsState> SetsFolder = new(() => new(), StepSets);
-    private readonly TranscriptFold _fold = new(SetsFolder);
+
+    /// <summary>The folder a fold shared with other readers must register for this one.</summary>
+    internal static LineFolder Folder => SetsFolder;
+
+    private readonly TranscriptFold _fold;
+
+    /// <param name="fold">A fold shared with the other per-transcript readers (it must register <see cref="Folder"/>);
+    /// null gives the reader its own.</param>
+    public MarkdownFilesReader(TranscriptFold? fold = null) => _fold = fold ?? new(SetsFolder);
 
     /// <summary>
     /// The session's produced/referenced Markdown file sets, or <see cref="MarkdownFileSets.Empty"/> when

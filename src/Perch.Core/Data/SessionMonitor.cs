@@ -139,13 +139,19 @@ internal sealed class SessionMonitor : IDisposable
     // session resumes work / disappears. See CompletionSettleMs.
     private readonly Dictionary<string, DateTime> _completionSettleAt = new();
 
-    private readonly SubAgentReader _subAgents = new();
+    // Every reader of a session's own transcript folds it through one shared fold, so a growing transcript is read
+    // and decoded once per scan for all of them rather than once each (perf review PF15).
+    private readonly SubAgentReader _subAgents;
     private IReadOnlyList<PendingPublish> _pendingPublishes = [];
-    private readonly TranscriptReader _transcripts = new();
-    private readonly MarkdownFilesReader _markdown = new();
+    private readonly TranscriptReader _transcripts;
+    private readonly MarkdownFilesReader _markdown;
     private readonly GitStatsService _gitStats = new();
     private readonly PrStatusService _pr = new();
-    private readonly SessionWorktree _worktree = new();
+    private readonly SessionWorktree _worktree;
+
+    /// <summary>A fold registering every per-transcript reader's folders, to share between them.</summary>
+    internal static TranscriptFold NewSharedTranscriptFold() =>
+        new([.. TranscriptReader.Folders, MarkdownFilesReader.Folder, SessionWorktree.Folder, SubAgentReader.ParentFolder]);
 
     // Last-known PR (number + state) per working directory, so a transition into a finalised state
     // (open/draft -> merged/closed) fires the "PR finished" alert exactly once. Keyed by cwd because a
@@ -250,6 +256,11 @@ internal sealed class SessionMonitor : IDisposable
     /// the no-op detector (no IDE glyph); the app injects the platform implementation.</param>
     public SessionMonitor(IProcessProbe? processProbe = null, IIdeHostDetector? ideDetector = null)
     {
+        var fold = NewSharedTranscriptFold();
+        _transcripts = new TranscriptReader(fold);
+        _markdown = new MarkdownFilesReader(fold);
+        _worktree = new SessionWorktree(fold);
+        _subAgents = new SubAgentReader(parentFold: fold);
         _processProbe = processProbe ?? SystemProcessProbe.Instance;
         _ideDetector = ideDetector ?? NullIdeHostDetector.Instance;
         _debounceTimer = new System.Threading.Timer(_ => ChangeDetected?.Invoke());

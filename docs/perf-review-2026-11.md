@@ -115,7 +115,8 @@ Most of the first group are **S** changes.
 | PF12 | 8fa903e | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
 | PF17 | 67ce045 | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
 | PF13 | 9ed40ae | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
-| PF14 | (this commit) | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
+| PF14 | 576cf3d | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
+| PF15 | (this commit) | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -184,6 +185,12 @@ PF14 as built:
 - **Explicit requests always post.** That covers `Rescan`, `Reconcile`, and the acknowledge, notify and note changes queued through `OnWorker`. Some of them change what the App adds to the list (a dormant row ending) and rely on the callback to redraw. The force flag is consumed when a scan starts, so the scan that runs after the request is the one that posts.
 - **Checked against live sessions:** two scans of this machine's real `~/.claude` 4 s apart (6 sessions, 4 running) came back equal for 5 of them. The sixth genuinely differed: its sub-agent's activity had moved on. A throwaway verb printed the per-field differences; it was not committed.
 - **The resize half needed nothing.** `SizeFloatingToContent` already writes the window height only when it differs. The measure pass stays, because a posted update by definition changed something.
+
+PF15 as built:
+- **One fold per transcript.** `SessionMonitor.NewSharedTranscriptFold()` registers every per-transcript reader's folders (`TranscriptReader.Folders`, `MarkdownFilesReader.Folder`, `SessionWorktree.Folder`, `SubAgentReader.ParentFolder`), and the monitor hands that one fold to all four readers. A growing transcript's new bytes are now read and UTF-8-decoded once per scan instead of up to four times. A reader built on its own (the Markdown window, tests) still gets a private fold. `SharedTranscriptFoldTests` checks that every reader's answer matches its private fold's, and that the shared fold reads each byte once, on the first read and on growth. The trade-off: every folder now steps every line, including the worktree and legacy sub-agent folders when their feature wouldn't have asked. Their pre-filters are substring checks, which cost far less than the three extra file reads.
+- **One tail per change.** The seven tail readers (activity, burn rate, stuck, API error, bare command, interrupted, awaiting assistant) used to read the same 32 KB tail each. They now share `TranscriptScan.CachedTailLines`, cached by (path, length, last write), so a change costs one read.
+- **`TranscriptLocator.Resolve` keeps a found path for 2 s.** Each reader resolves the transcript itself, about a dozen times per session per scan, and each call used to encode the cwd and stat the file. `EncodeProjectDir` is now a plain loop instead of a regex (pinned to the regex by a test, including non-ASCII and surrogate pairs).
+- **The settings `model` lookup** (up to three `settings.json` files on each transcript growth) is cached per file by length and mtime.
 
 ## Suggested order
 

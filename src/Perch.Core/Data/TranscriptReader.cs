@@ -49,8 +49,15 @@ internal sealed class TranscriptReader
     private static readonly LineFolder<BackgroundState> BackgroundFolder = new(() => new(), StepBackground);
     private static readonly LineFolder<PermissionModeState> PermissionModeFolder = new(() => new(), StepPermissionMode);
 
-    private readonly TranscriptFold _fold = new(AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder,
-        BackgroundFolder, PermissionModeFolder);
+    /// <summary>The folders a fold shared with other readers must register for this one (see <see cref="SessionMonitor"/>).</summary>
+    internal static readonly LineFolder[] Folders =
+        [AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder, BackgroundFolder, PermissionModeFolder];
+
+    private readonly TranscriptFold _fold;
+
+    /// <param name="fold">A fold shared with the other per-transcript readers, so a growing transcript is read and
+    /// decoded once for all of them; it must register <see cref="Folders"/>. Null gives the reader its own.</param>
+    public TranscriptReader(TranscriptFold? fold = null) => _fold = fold ?? new(Folders);
 
     /// <summary>Bytes the whole-file readers have read from disk (test/benchmark probe; see <see cref="TranscriptFold"/>).</summary>
     internal long FoldBytesRead => _fold.BytesRead;
@@ -529,7 +536,7 @@ internal sealed class TranscriptReader
         // failing (the last error wins), and a recovery (cleared). Metadata trailers are skipped.
         ApiFailure? pending = null;
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             // Only assistant/user records carry the verdict; skip the rest without parsing. The cheap
             // substring pre-filters keep this off the JSON path for the metadata trailers that dominate.
@@ -959,7 +966,7 @@ internal sealed class TranscriptReader
         // continuous burst — the run of turns ending at the latest one with no BurstGap-sized gap.
         var turns = new List<(DateTime Ts, long Tokens)>();
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             // Cheap pre-filter: only assistant usage records carry the per-turn token counts.
             if (!line.Contains("\"usage\""))
@@ -1054,14 +1061,21 @@ internal sealed class TranscriptReader
         return null;
     }
 
+    // The settings files are re-checked whenever a transcript grows, so each one's "model" is kept until the file
+    // itself changes (perf review PF15). Locked: the readers can be driven from more than one thread.
+    private static readonly MtimeCache<string?> ModelFields = new();
+    private static readonly object ModelFieldsGate = new();
+
     // Reads the top-level "model" string from one settings file, or null if absent/blank/unreadable.
     private static string? ReadModelField(string path)
     {
+        lock (ModelFieldsGate) return ModelFields.GetOrCompute(path, ReadModelFieldUncached, null);
+    }
+
+    private static string? ReadModelFieldUncached(string path)
+    {
         try
         {
-            if (!File.Exists(path))
-                return null;
-
             using var doc = JsonDocument.Parse(File.ReadAllText(path), JsonLeniency);
             if (doc.RootElement.TryGetProperty("model", out var m)
                 && m.ValueKind == JsonValueKind.String)
@@ -1087,7 +1101,7 @@ internal sealed class TranscriptReader
         var pending = new List<(string? Id, string Phrase)>();
         bool anyCall = false;
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             // Cheap pre-filter: tool_use and tool_result lines both contain "tool_use" (the latter in tool_use_id).
             if (!line.Contains("tool_use"))
@@ -1134,7 +1148,7 @@ internal sealed class TranscriptReader
         var errorById = new Dictionary<string, bool>();
         int trailingErrors = 0;   // consecutive failed results ending at the latest result
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             // Cheap pre-filter: only lines that could carry a tool call or its result are worth parsing.
             if (!line.Contains("tool_use") && !line.Contains("tool_result"))
@@ -1242,7 +1256,7 @@ internal sealed class TranscriptReader
         // command older than the window can't be the latest meaningful turn anyway.)
         bool lastWasCommand = false;
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             bool maybeAssistant = line.Contains("\"type\":\"assistant\"");
             bool maybeCommand = line.Contains("command-name");
@@ -1289,7 +1303,7 @@ internal sealed class TranscriptReader
         // ParseBareCommand: a marker older than the window necessarily has an assistant turn after it.)
         bool lastWasInterrupt = false;
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             bool maybeAssistant = line.Contains("\"type\":\"assistant\"");
             bool maybeInterrupt = line.Contains("Request interrupted by user");
@@ -1336,7 +1350,7 @@ internal sealed class TranscriptReader
         bool sawTurn = false;
         bool awaiting = false;
 
-        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        foreach (var line in TranscriptScan.CachedTailLines(path, TailBytes))
         {
             // Only assistant/user records carry the turn boundary; skip the rest without parsing.
             if (line.Length == 0 || (!line.Contains("assistant") && !line.Contains("user")))
