@@ -490,7 +490,12 @@ public partial class App : Application
             // "Open in GitKraken" — only offered when GitKraken's CLI is on PATH (detected once). The launch
             // + window-focus runs off-thread through the platform activator (see GitKrakenLauncher).
             _gitKrakenLauncher = new GitKrakenLauncher(PlatformServices.WindowActivator);
-            _overlay.Canvas.SetGitKrakenAvailable(GitKrakenLauncher.CliPath.Value is not null);
+            // The probe stats every PATH entry × PATHEXT, which can stall on an offline network drive.
+            Task.Run(() => GitKrakenLauncher.CliPath.Value is not null).ContinueWith(t =>
+            {
+                if (t.IsCompletedSuccessfully && t.Result)
+                    Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetGitKrakenAvailable(true));
+            }, TaskScheduler.Default);
             _overlay.Canvas.OpenInGitKrakenRequested += s => _gitKrakenLauncher.Open(s.Cwd);
 #if DEBUG
             // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push

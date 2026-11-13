@@ -247,6 +247,10 @@ Tier 3, cold stats rebuild, as built. All-time report over this machine's transc
 - **Not done: the fast path for tool_result-only user lines.** Telling such a line apart from one with a text block needs most of a parse anyway, and with the parse spread across cores the rebuild is now mostly read and decode. Allocation is unchanged (about 10.5 GB for 2.2 GB of transcripts).
 - Teammate transcripts still fold one at a time; they're a small share of the bytes.
 
+Tier 3, startup before `Show`, as built:
+- **The GitKraken PATH probe runs on a worker**, and the "Open in GitKraken" item appears once it finds the CLI. Here it takes 7.6 ms with local PATH entries; the point is that an offline network drive on PATH can no longer hold up the overlay.
+- **Not done: loading the stores after `Show`.** Measured in a fresh process, the achievement, to-do and two GitHub stores take 33–38 ms together on first use and under 1 ms after that. Most of it is the JSON serializer warming up, which `AppSettings.Load` already pays earlier in startup. Moving them would mean reordering the hosts built around them for tens of milliseconds at most, and a source-generated `JsonSerializerContext` isn't worth it for that either. The `startup:` line in `launch.log` will show whether startup needs more.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.

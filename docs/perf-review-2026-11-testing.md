@@ -139,6 +139,7 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Flight path unchanged | Look at today, yesterday and a day a few weeks back, including a session that ran across midnight. | — | The same lanes, colours, project and branch names. |
 | Cold stats rebuild | Quit Perch, delete `stats-cache.bin` beside `settings.json`, start it, and open Stats → All time. | About 10 s of "loading" on a big history | A few seconds, with every core busy briefly. |
 | Stats unchanged | Compare the All time, Last 7 days and Today figures, and the Achievements window, with the release build. | — | The same numbers. |
+| Open in GitKraken | With GitKraken's CLI on PATH, right-click a git session row a few seconds after launch. | "Open in GitKraken" | Still there. Without the CLI, still absent. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.
