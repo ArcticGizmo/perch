@@ -24,11 +24,15 @@ public static partial class FileRefResolver
     private const int MaxEntries = 4096;
     private static readonly ConcurrentDictionary<(string Cwd, string Text), CacheEntry> Cache = new();
 
+    // Recency is a counter, not the clock: the clock ticks every ~15 ms on Windows, so spans used within one tick
+    // would tie and evict in arbitrary order.
+    private static long _useCount;
+
     private sealed class CacheEntry(string? path, long probedMs)
     {
         public readonly string? Path = path;
         public readonly long ProbedMs = probedMs;
-        public long UsedMs = probedMs;
+        public long LastUse = Interlocked.Increment(ref _useCount);
     }
 
     internal static int CacheCount => Cache.Count;
@@ -75,7 +79,7 @@ public static partial class FileRefResolver
         if (cache && Cache.TryGetValue(key, out var hit)
             && now - hit.ProbedMs < (hit.Path is null ? MissingTtl : FoundTtl).TotalMilliseconds)
         {
-            hit.UsedMs = now;
+            hit.LastUse = Interlocked.Increment(ref _useCount);
             return hit.Path;
         }
 
@@ -92,7 +96,7 @@ public static partial class FileRefResolver
     private static void EvictLeastRecentlyUsed()
     {
         var oldest = Cache.ToArray();
-        Array.Sort(oldest, (a, b) => a.Value.UsedMs.CompareTo(b.Value.UsedMs));
+        Array.Sort(oldest, (a, b) => a.Value.LastUse.CompareTo(b.Value.LastUse));
         for (int i = 0; i < oldest.Length / 2; i++) Cache.TryRemove(oldest[i].Key, out _);
     }
 
