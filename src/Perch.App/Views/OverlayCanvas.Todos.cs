@@ -114,16 +114,18 @@ public sealed partial class OverlayCanvas
         var pen = OverlayDraw.Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(cx - 5.5, cy - 5.5, 11, 11), 2.5));
 
-        var tick = new StreamGeometry();
-        using (var g = tick.Open())
-        {
-            g.BeginFigure(new Point(cx - 2.8, cy + 0.1), isFilled: false);
-            g.LineTo(new Point(cx - 0.7, cy + 2.3));
-            g.LineTo(new Point(cx + 3, cy - 2.4));
-            g.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6, null, PenLineCap.Round, PenLineJoin.Round), tick);
+        using (At(ctx, cx, cy))
+            ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6, null, PenLineCap.Round, PenLineJoin.Round), TodoTick);
     }
+
+    // The tick's shape around (0, 0) = the mark's centre (see GlyphShape).
+    private static readonly Geometry TodoTick = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(-2.8, 0.1), isFilled: false);
+        g.LineTo(new Point(-0.7, 2.3));
+        g.LineTo(new Point(3, -2.4));
+        g.EndFigure(false);
+    });
 
     // The dwell tooltip: the headline, then the next few items with their due times (overdue in the attention hue).
     private void ShowTodosTooltip()

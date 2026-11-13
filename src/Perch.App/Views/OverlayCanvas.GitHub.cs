@@ -183,86 +183,78 @@ public sealed partial class OverlayCanvas
         switch (kind)
         {
             case GhAlertKind.ReviewRequested:
-            {
-                var eye = new StreamGeometry();
-                using (var g = eye.Open())
-                {
-                    g.BeginFigure(new Point(cx - 5, cy), isFilled: false);
-                    g.QuadraticBezierTo(new Point(cx, cy - 5.6), new Point(cx + 5, cy));
-                    g.QuadraticBezierTo(new Point(cx, cy + 5.6), new Point(cx - 5, cy));
-                    g.EndFigure(true);
-                }
-                ctx.DrawGeometry(null, pen, eye);
+                using (At(ctx, cx, cy)) ctx.DrawGeometry(null, pen, GhEye);
                 ctx.DrawEllipse(brush, null, new Point(cx, cy), 1.6, 1.6);
                 break;
-            }
             case GhAlertKind.ChangesRequested:
                 ctx.DrawLine(pen, new Point(cx - 3.5, cy - 2), new Point(cx + 3.5, cy - 2));
                 ctx.DrawLine(pen, new Point(cx, cy - 5.5), new Point(cx, cy + 1.5));
                 ctx.DrawLine(pen, new Point(cx - 3.5, cy + 4), new Point(cx + 3.5, cy + 4));
                 break;
             case GhAlertKind.NewActivity:
-            {
                 ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(cx - 5, cy - 4.5, 10, 7), 2));
-                var tail = new StreamGeometry();
-                using (var g = tail.Open())
-                {
-                    g.BeginFigure(new Point(cx - 2.5, cy + 2.5), isFilled: false);
-                    g.LineTo(new Point(cx - 3.5, cy + 5));
-                    g.LineTo(new Point(cx, cy + 2.5));
-                    g.EndFigure(false);
-                }
-                ctx.DrawGeometry(null, pen, tail);
+                using (At(ctx, cx, cy)) ctx.DrawGeometry(null, pen, GhBubbleTail);
                 break;
-            }
             case GhAlertKind.ChecksFailing:
                 ctx.DrawEllipse(null, pen, new Point(cx, cy), 4.6, 4.6);
                 ctx.DrawLine(pen, new Point(cx - 2, cy - 2), new Point(cx + 2, cy + 2));
                 ctx.DrawLine(pen, new Point(cx + 2, cy - 2), new Point(cx - 2, cy + 2));
                 break;
             case GhAlertKind.Conflicts:
-            {
-                var tri = new StreamGeometry();
-                using (var g = tri.Open())
-                {
-                    g.BeginFigure(new Point(cx, cy - 5), isFilled: false);
-                    g.LineTo(new Point(cx + 5.2, cy + 4.2));
-                    g.LineTo(new Point(cx - 5.2, cy + 4.2));
-                    g.EndFigure(true);
-                }
-                ctx.DrawGeometry(null, pen, tri);
+                using (At(ctx, cx, cy)) ctx.DrawGeometry(null, pen, GhTriangle);
                 ctx.DrawLine(pen, new Point(cx, cy - 1.6), new Point(cx, cy + 0.8));
                 ctx.DrawEllipse(brush, null, new Point(cx, cy + 2.6), 0.75, 0.75);
                 break;
-            }
             case GhAlertKind.ReadyToMerge:
-            {
-                var tick = new StreamGeometry();
-                using (var g = tick.Open())
-                {
-                    g.BeginFigure(new Point(cx - 4.2, cy + 0.2), isFilled: false);
-                    g.LineTo(new Point(cx - 1.3, cy + 3.2));
-                    g.LineTo(new Point(cx + 4.5, cy - 3.5));
-                    g.EndFigure(false);
-                }
-                ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6, null, PenLineCap.Round, PenLineJoin.Round), tick);
+                using (At(ctx, cx, cy))
+                    ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6, null, PenLineCap.Round, PenLineJoin.Round), GhTick);
                 break;
-            }
             default: // Assigned: a person — head and shoulders.
-            {
                 ctx.DrawEllipse(null, pen, new Point(cx, cy - 2.4), 2.2, 2.2);
-                var shoulders = new StreamGeometry();
-                using (var g = shoulders.Open())
-                {
-                    g.BeginFigure(new Point(cx - 4.6, cy + 5), isFilled: false);
-                    g.CubicBezierTo(new Point(cx - 4.6, cy + 0.8), new Point(cx + 4.6, cy + 0.8), new Point(cx + 4.6, cy + 5));
-                    g.EndFigure(false);
-                }
-                ctx.DrawGeometry(null, pen, shoulders);
+                using (At(ctx, cx, cy)) ctx.DrawGeometry(null, pen, GhShoulders);
                 break;
-            }
         }
     }
+
+    // The kind symbols' shapes, around (0, 0) = the symbol's centre (see GlyphShape).
+    private static readonly Geometry GhEye = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(-5, 0), isFilled: false);
+        g.QuadraticBezierTo(new Point(0, -5.6), new Point(5, 0));
+        g.QuadraticBezierTo(new Point(0, 5.6), new Point(-5, 0));
+        g.EndFigure(true);
+    });
+
+    private static readonly Geometry GhBubbleTail = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(-2.5, 2.5), isFilled: false);
+        g.LineTo(new Point(-3.5, 5));
+        g.LineTo(new Point(0, 2.5));
+        g.EndFigure(false);
+    });
+
+    private static readonly Geometry GhTriangle = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(0, -5), isFilled: false);
+        g.LineTo(new Point(5.2, 4.2));
+        g.LineTo(new Point(-5.2, 4.2));
+        g.EndFigure(true);
+    });
+
+    private static readonly Geometry GhTick = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(-4.2, 0.2), isFilled: false);
+        g.LineTo(new Point(-1.3, 3.2));
+        g.LineTo(new Point(4.5, -3.5));
+        g.EndFigure(false);
+    });
+
+    private static readonly Geometry GhShoulders = GlyphShape(g =>
+    {
+        g.BeginFigure(new Point(-4.6, 5), isFilled: false);
+        g.CubicBezierTo(new Point(-4.6, 0.8), new Point(4.6, 0.8), new Point(4.6, 5));
+        g.EndFigure(false);
+    });
 
     // The dwell tooltip: the headline, then one line per symbol in words, so the chips never have to be learned.
     private void ShowGitHubTooltip()

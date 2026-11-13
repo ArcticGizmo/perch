@@ -3421,25 +3421,36 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             width - HorizPad - stateW, midY);
     }
 
+    // Glyph shapes are built once, around the point their painter translates to (usually (x, midY)), and drawn under
+    // that translation, as OverlayCanvas.Dnd does. Building a StreamGeometry per glyph per row on every paint was a
+    // steady allocation on every overlay frame (perf review PF18).
+    internal static Geometry GlyphShape(Action<StreamGeometryContext> figures)
+    {
+        var g = new StreamGeometry();
+        using (var gc = g.Open()) figures(gc);
+        return g;
+    }
+
+    private static DrawingContext.PushedState At(DrawingContext ctx, double x, double y) =>
+        ctx.PushTransform(Matrix.CreateTranslation(x, y));
+
+    private const double TeammateHeadD = 5;
+
+    // The teammate's shoulders: the top half of a small ellipse below the head.
+    private static readonly Geometry TeammateShoulders = GlyphShape(gc =>
+    {
+        var r = new Rect(-1, 1, TeammateHeadD + 3, TeammateHeadD + 2);
+        gc.BeginFigure(new Point(r.Left, r.Center.Y), isFilled: true);
+        gc.ArcTo(new Point(r.Right, r.Center.Y), new Size(r.Width / 2, r.Height / 2), 0, false, SweepDirection.CounterClockwise);
+        gc.EndFigure(true);
+    });
+
     // A small "person" mark — a head circle above a shoulders dome — in the given colour, centred on (x, midY).
     private static void DrawTeammateGlyph(DrawingContext ctx, double x, double midY, Color color)
     {
         var brush = OverlayDraw.Brush(color);
-        const double headD = 5;
-        ctx.DrawEllipse(brush, null, new Point(x + headD / 2, midY - 5 + headD / 2), headD / 2, headD / 2);
-
-        // Shoulders: the top half of a small ellipse below the head.
-        var r = new Rect(x - 1, midY + 1, headD + 3, headD + 2);
-        var dome = new StreamGeometry();
-        using (var gc = dome.Open())
-        {
-            var leftPt = new Point(r.Left, r.Center.Y);
-            var rightPt = new Point(r.Right, r.Center.Y);
-            gc.BeginFigure(leftPt, isFilled: true);
-            gc.ArcTo(rightPt, new Size(r.Width / 2, r.Height / 2), 0, false, SweepDirection.CounterClockwise);
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(brush, null, dome);
+        ctx.DrawEllipse(brush, null, new Point(x + TeammateHeadD / 2, midY - 5 + TeammateHeadD / 2), TeammateHeadD / 2, TeammateHeadD / 2);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(brush, null, TeammateShoulders);
     }
 
     // The background-session robot glyph: antenna + rounded-square face + two dot eyes.
@@ -3511,22 +3522,30 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // VS Code: the blue folded-ribbon silhouette — a vertical spine on the left, with the two ribbon tips
     // and the central fold-notch opening to the right.
+    private static readonly Geometry VsCodeRibbon = GlyphShape(gc =>
+    {
+        const double w = 12, h = 13, left = 0, top = -h / 2;
+        gc.BeginFigure(new Point(left, top), isFilled: true);        // spine top
+        gc.LineTo(new Point(left, top + h));                          // spine (full-height left edge)
+        gc.LineTo(new Point(left + w, top + 0.72 * h));               // lower-right tip
+        gc.LineTo(new Point(left + 0.58 * w, top + 0.50 * h));        // fold crease
+        gc.LineTo(new Point(left + w, top + 0.28 * h));               // upper-right tip
+        gc.EndFigure(true);
+    });
+
     private static void DrawVsCodeIcon(DrawingContext ctx, double x, double midY, IBrush brush)
     {
-        const double w = 12, h = 13;
-        double left = x, top = midY - h / 2;
-        var ribbon = new StreamGeometry();
-        using (var gc = ribbon.Open())
-        {
-            gc.BeginFigure(new Point(left, top), isFilled: true);        // spine top
-            gc.LineTo(new Point(left, top + h));                          // spine (full-height left edge)
-            gc.LineTo(new Point(left + w, top + 0.72 * h));               // lower-right tip
-            gc.LineTo(new Point(left + 0.58 * w, top + 0.50 * h));        // fold crease
-            gc.LineTo(new Point(left + w, top + 0.28 * h));               // upper-right tip
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(brush, null, ribbon);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(brush, null, VsCodeRibbon);
     }
+
+    private static readonly Geometry CursorHex = GlyphShape(gc =>
+    {
+        const double w = 12, h = 13, left = 0, top = -h / 2, cx = left + w / 2;
+        gc.BeginFigure(new Point(cx, top), isFilled: false);
+        gc.LineTo(new Point(left + w, top + 0.25 * h)); gc.LineTo(new Point(left + w, top + 0.75 * h));
+        gc.LineTo(new Point(cx, top + h)); gc.LineTo(new Point(left, top + 0.75 * h)); gc.LineTo(new Point(left, top + 0.25 * h));
+        gc.EndFigure(true);
+    });
 
     // Cursor: an isometric cube (three rhombic faces).
     private static void DrawCursorIcon(DrawingContext ctx, double x, double midY, IBrush brush)
@@ -3535,25 +3554,24 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double left = x, top = midY - h / 2, cx = left + w / 2, cy = midY;
         var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
         var apex   = new Point(cx, top);
-        var uR     = new Point(left + w, top + 0.25 * h);
         var lR     = new Point(left + w, top + 0.75 * h);
-        var basePt = new Point(cx, top + h);
         var lL     = new Point(left, top + 0.75 * h);
-        var uL     = new Point(left, top + 0.25 * h);
         var centre = new Point(cx, cy);
 
-        var hex = new StreamGeometry();
-        using (var gc = hex.Open())
-        {
-            gc.BeginFigure(apex, isFilled: false);
-            gc.LineTo(uR); gc.LineTo(lR); gc.LineTo(basePt); gc.LineTo(lL); gc.LineTo(uL);
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(null, pen, hex);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, CursorHex);
         ctx.DrawLine(pen, centre, apex);   // three spokes → the cube's visible edges
         ctx.DrawLine(pen, centre, lL);
         ctx.DrawLine(pen, centre, lR);
     }
+
+    private static readonly Geometry WindsurfSail = GlyphShape(gc =>
+    {
+        const double w = 12, h = 13, left = 0, top = -h / 2, mastX = left + 3;
+        gc.BeginFigure(new Point(mastX, top + 1), isFilled: true);
+        gc.LineTo(new Point(left + w - 1, top + 0.42 * h));
+        gc.LineTo(new Point(mastX, top + 0.64 * h));
+        gc.EndFigure(true);
+    });
 
     // Windsurf: a sail (filled triangle) on a mast, over a short board.
     private static void DrawWindsurfIcon(DrawingContext ctx, double x, double midY, IBrush brush)
@@ -3563,15 +3581,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double mastX = left + 3;
         var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
 
-        var sail = new StreamGeometry();
-        using (var gc = sail.Open())
-        {
-            gc.BeginFigure(new Point(mastX, top + 1), isFilled: true);
-            gc.LineTo(new Point(left + w - 1, top + 0.42 * h));
-            gc.LineTo(new Point(mastX, top + 0.64 * h));
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(brush, null, sail);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(brush, null, WindsurfSail);
         ctx.DrawLine(pen, new Point(mastX, top + 1), new Point(mastX, top + h - 2));           // mast
         ctx.DrawLine(pen, new Point(left + 1, top + h - 2), new Point(left + w - 1, top + h - 2)); // board
     }
@@ -3589,25 +3599,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Generic editor fallback (Zed, Visual Studio, an unmatched host): the "</>" code mark.
+    private static readonly Geometry GenericIdeChevrons = GlyphShape(gc =>
+    {
+        const double w = 12, h = 12, left = 0, top = -h / 2, midY = 0;
+        gc.BeginFigure(new Point(left + 3.5, top + 2), isFilled: false);   // "<"
+        gc.LineTo(new Point(left + 0.5, midY));
+        gc.LineTo(new Point(left + 3.5, top + h - 2));
+        gc.EndFigure(false);
+        gc.BeginFigure(new Point(left + w - 3.5, top + 2), isFilled: false); // ">"
+        gc.LineTo(new Point(left + w - 0.5, midY));
+        gc.LineTo(new Point(left + w - 3.5, top + h - 2));
+        gc.EndFigure(false);
+    });
+
     private static void DrawGenericIdeIcon(DrawingContext ctx, double x, double midY, IBrush brush)
     {
         const double w = 12, h = 12;
         double left = x, top = midY - h / 2;
         var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
 
-        var chevrons = new StreamGeometry();
-        using (var gc = chevrons.Open())
-        {
-            gc.BeginFigure(new Point(left + 3.5, top + 2), isFilled: false);   // "<"
-            gc.LineTo(new Point(left + 0.5, midY));
-            gc.LineTo(new Point(left + 3.5, top + h - 2));
-            gc.EndFigure(false);
-            gc.BeginFigure(new Point(left + w - 3.5, top + 2), isFilled: false); // ">"
-            gc.LineTo(new Point(left + w - 0.5, midY));
-            gc.LineTo(new Point(left + w - 3.5, top + h - 2));
-            gc.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, pen, chevrons);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, GenericIdeChevrons);
         ctx.DrawLine(pen, new Point(left + w * 0.62, top + 1.5), new Point(left + w * 0.38, top + h - 1.5)); // "/"
     }
 
@@ -3630,50 +3641,57 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double w = 11, h = 8;
         double top = midY - h / 2;
         ctx.DrawRectangle(null, pen, new Rect(x, top, w, h));
-        var flap = new StreamGeometry();
-        using (var gc = flap.Open())
-        {
-            gc.BeginFigure(new Point(x, top), isFilled: false);
-            gc.LineTo(new Point(x + w / 2, top + h / 2));
-            gc.LineTo(new Point(x + w, top));
-            gc.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, pen, flap);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, MailFlap);
     }
+
+    private static readonly Geometry MailFlap = GlyphShape(gc =>
+    {
+        const double w = 11, h = 8, x = 0, top = -h / 2;
+        gc.BeginFigure(new Point(x, top), isFilled: false);
+        gc.LineTo(new Point(x + w / 2, top + h / 2));
+        gc.LineTo(new Point(x + w, top));
+        gc.EndFigure(false);
+    });
 
     // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
     internal static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
         var pen = OverlayDraw.Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
-        const double w = 10, h = 12, fold = 3.5;
-        double left = x, top = midY - h / 2, right = left + w, bottom = top + h;
+        const double w = 10, h = 12;
+        double left = x, top = midY - h / 2, right = left + w;
 
-        var page = new StreamGeometry();
-        using (var gc = page.Open())
+        using (At(ctx, x, midY))
         {
-            gc.BeginFigure(new Point(left, top), isFilled: false);
-            gc.LineTo(new Point(right - fold, top));
-            gc.LineTo(new Point(right, top + fold));
-            gc.LineTo(new Point(right, bottom));
-            gc.LineTo(new Point(left, bottom));
-            gc.EndFigure(true);
+            ctx.DrawGeometry(null, pen, NotePage);
+            ctx.DrawGeometry(null, pen, NoteFold);   // the folded corner
         }
-        ctx.DrawGeometry(null, pen, page);
-
-        // The folded corner + two text lines.
-        var fold2 = new StreamGeometry();
-        using (var gc = fold2.Open())
-        {
-            gc.BeginFigure(new Point(right - fold, top), isFilled: false);
-            gc.LineTo(new Point(right - fold, top + fold));
-            gc.LineTo(new Point(right, top + fold));
-            gc.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, pen, fold2);
+        // Two text lines.
         ctx.DrawLine(pen, new Point(left + 2.5, top + 6), new Point(right - 2.5, top + 6));
         ctx.DrawLine(pen, new Point(left + 2.5, top + 9), new Point(right - 3.5, top + 9));
     }
+
+    private const double NoteW = 10, NoteH = 12, NoteFoldSize = 3.5;
+
+    private static readonly Geometry NotePage = GlyphShape(gc =>
+    {
+        double left = 0, top = -NoteH / 2, right = left + NoteW, bottom = top + NoteH;
+        gc.BeginFigure(new Point(left, top), isFilled: false);
+        gc.LineTo(new Point(right - NoteFoldSize, top));
+        gc.LineTo(new Point(right, top + NoteFoldSize));
+        gc.LineTo(new Point(right, bottom));
+        gc.LineTo(new Point(left, bottom));
+        gc.EndFigure(true);
+    });
+
+    private static readonly Geometry NoteFold = GlyphShape(gc =>
+    {
+        double top = -NoteH / 2, right = NoteW;
+        gc.BeginFigure(new Point(right - NoteFoldSize, top), isFilled: false);
+        gc.LineTo(new Point(right - NoteFoldSize, top + NoteFoldSize));
+        gc.LineTo(new Point(right, top + NoteFoldSize));
+        gc.EndFigure(false);
+    });
 
     // The artifact glyph: two staggered rounded-square outlines in amber (brighter when hovered).
     // Clickable — hit-testing + hover wiring land in 4.11.
@@ -3708,32 +3726,38 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         double iTop = top + 3, iBot = top + h - 3;   // inner glyph band the M/arrow sit within
 
-        // "M": a down-up-down polyline on the left half.
-        var m = new StreamGeometry();
-        using (var gc = m.Open())
-        {
-            gc.BeginFigure(new Point(left + 3, iBot), isFilled: false);
-            gc.LineTo(new Point(left + 3, iTop));
-            gc.LineTo(new Point(left + 5.5, iTop + 2.6));
-            gc.LineTo(new Point(left + 8, iTop));
-            gc.LineTo(new Point(left + 8, iBot));
-            gc.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, pen, m);
-
         // Down-arrow on the right half: a stem topped nothing, with a chevron head at the foot.
         double ax = left + 11.5;
         ctx.DrawLine(pen, new Point(ax, iTop), new Point(ax, iBot));
-        var arrow = new StreamGeometry();
-        using (var gc = arrow.Open())
+        using (At(ctx, x, midY))
         {
-            gc.BeginFigure(new Point(ax - 2, iBot - 2.6), isFilled: false);
-            gc.LineTo(new Point(ax, iBot));
-            gc.LineTo(new Point(ax + 2, iBot - 2.6));
-            gc.EndFigure(false);
+            ctx.DrawGeometry(null, pen, MdM);
+            ctx.DrawGeometry(null, pen, MdArrowHead);
         }
-        ctx.DrawGeometry(null, pen, arrow);
     }
+
+    private const double MdH = 11;
+
+    // "M": a down-up-down polyline on the left half.
+    private static readonly Geometry MdM = GlyphShape(gc =>
+    {
+        double left = 0, top = -MdH / 2, iTop = top + 3, iBot = top + MdH - 3;
+        gc.BeginFigure(new Point(left + 3, iBot), isFilled: false);
+        gc.LineTo(new Point(left + 3, iTop));
+        gc.LineTo(new Point(left + 5.5, iTop + 2.6));
+        gc.LineTo(new Point(left + 8, iTop));
+        gc.LineTo(new Point(left + 8, iBot));
+        gc.EndFigure(false);
+    });
+
+    private static readonly Geometry MdArrowHead = GlyphShape(gc =>
+    {
+        double iBot = -MdH / 2 + MdH - 3, ax = 11.5;
+        gc.BeginFigure(new Point(ax - 2, iBot - 2.6), isFilled: false);
+        gc.LineTo(new Point(ax, iBot));
+        gc.LineTo(new Point(ax + 2, iBot - 2.6));
+        gc.EndFigure(false);
+    });
 
     // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a
     // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
@@ -3764,14 +3788,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Source node up on the right, curving down-left to merge into the base branch's midpoint.
         ctx.DrawEllipse(brush, null, new Point(rx, top + node), node, node);
-        var merge = new StreamGeometry();
-        using (var gc = merge.Open())
-        {
-            gc.BeginFigure(new Point(rx, top + node * 2), isFilled: false);
-            gc.CubicBezierTo(new Point(rx, midY), new Point(lx, midY - node), new Point(lx, midY + 1));
-            gc.EndFigure(false);
-        }
-        ctx.DrawGeometry(null, pen, merge);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, PrMergeCurve);
 
         // Aggregate CI-check dot, bottom-right of the glyph — a subtle hint at the checks' state (green
         // passing / red failing / blue running). Nothing is drawn when the PR reports no checks. A ring in
@@ -3795,17 +3812,25 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (approved)
         {
             var tickPen = OverlayDraw.Pen(PrCheckPassBrush, 1.5, null, PenLineCap.Round, PenLineJoin.Round);
-            var tick = new StreamGeometry();
-            using (var gc = tick.Open())
-            {
-                gc.BeginFigure(new Point(x + 16.4, midY + 4.4), isFilled: false);
-                gc.LineTo(new Point(x + 18.0, midY + 6.0));
-                gc.LineTo(new Point(x + 21.0, midY + 2.4));
-                gc.EndFigure(false);
-            }
-            ctx.DrawGeometry(null, tickPen, tick);
+            using (At(ctx, x, midY)) ctx.DrawGeometry(null, tickPen, PrApprovedTick);
         }
     }
+
+    private static readonly Geometry PrMergeCurve = GlyphShape(gc =>
+    {
+        const double node = 1.9, lx = 3, rx = 11, top = -5, midY = 0;
+        gc.BeginFigure(new Point(rx, top + node * 2), isFilled: false);
+        gc.CubicBezierTo(new Point(rx, midY), new Point(lx, midY - node), new Point(lx, midY + 1));
+        gc.EndFigure(false);
+    });
+
+    private static readonly Geometry PrApprovedTick = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(16.4, 4.4), isFilled: false);
+        gc.LineTo(new Point(18.0, 6.0));
+        gc.LineTo(new Point(21.0, 2.4));
+        gc.EndFigure(false);
+    });
 
     // Jira ticket glyph: a small luggage-tag pointing left, drawn in Jira's brand blue so it reads as a
     // deep-link rather than a status. The click affordance is the hand cursor + the dwell tooltip (which
@@ -3816,24 +3841,31 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var brush = Palette.JiraBrush;
         var pen = OverlayDraw.Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
 
-        double top = midY - 4.5, bot = midY + 4.5;
-        double tipX = x + 2, bodyX = x + 6, rightX = x + 13;
-
-        var tag = new StreamGeometry();
-        using (var gc = tag.Open())
-        {
-            gc.BeginFigure(new Point(tipX, midY), isFilled: false); // the pointed tip on the left
-            gc.LineTo(new Point(bodyX, top));
-            gc.LineTo(new Point(rightX, top));
-            gc.LineTo(new Point(rightX, bot));
-            gc.LineTo(new Point(bodyX, bot));
-            gc.EndFigure(true);                                     // close the body back to the tip
-        }
-        ctx.DrawGeometry(null, pen, tag);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, JiraTag);
 
         // The tag's eyelet, a small ring near the tip.
-        ctx.DrawEllipse(null, pen, new Point(bodyX + 0.5, midY), 1.0, 1.0);
+        ctx.DrawEllipse(null, pen, new Point(x + 6 + 0.5, midY), 1.0, 1.0);
     }
+
+    private static readonly Geometry JiraTag = GlyphShape(gc =>
+    {
+        const double midY = 0, top = midY - 4.5, bot = midY + 4.5, tipX = 2, bodyX = 6, rightX = 13;
+        gc.BeginFigure(new Point(tipX, midY), isFilled: false); // the pointed tip on the left
+        gc.LineTo(new Point(bodyX, top));
+        gc.LineTo(new Point(rightX, top));
+        gc.LineTo(new Point(rightX, bot));
+        gc.LineTo(new Point(bodyX, bot));
+        gc.EndFigure(true);                                     // close the body back to the tip
+    });
+
+    private static readonly Geometry WarnTriangle = GlyphShape(gc =>
+    {
+        const double w = 12, h = 11, x = 0, top = -h / 2, cx = x + w / 2;
+        gc.BeginFigure(new Point(cx, top), isFilled: true);
+        gc.LineTo(new Point(x, top + h));
+        gc.LineTo(new Point(x + w, top + h));
+        gc.EndFigure(true);
+    });
 
     // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
     private static void DrawWarnIcon(DrawingContext ctx, double x, double midY)
@@ -3842,15 +3874,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double top = midY - h / 2;
         double cx = x + w / 2;
 
-        var tri = new StreamGeometry();
-        using (var gc = tri.Open())
-        {
-            gc.BeginFigure(new Point(cx, top), isFilled: true);
-            gc.LineTo(new Point(x, top + h));
-            gc.LineTo(new Point(x + w, top + h));
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(WarnBrush, null, tri);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(WarnBrush, null, WarnTriangle);
 
         // Exclamation: a short stem above a square dot, in the panel background colour.
         ctx.DrawRectangle(BgFillBrush, null, new Rect(cx - 1, top + 3, 2, 4));
@@ -3930,23 +3954,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// exactly the badge the overlay rows do.</summary>
     internal static void DrawModeChevrons(DrawingContext ctx, IBrush brush, double x, double midY)
     {
-        const double hh = 4, w = 5;
-        Chevron(ctx, brush, x, midY, hh, w);
-        Chevron(ctx, brush, x + w + 1, midY, hh, w);
-
-        static void Chevron(DrawingContext ctx, IBrush brush, double x, double midY, double hh, double w)
-        {
-            var g = new StreamGeometry();
-            using (var gc = g.Open())
-            {
-                gc.BeginFigure(new Point(x, midY - hh), isFilled: true);
-                gc.LineTo(new Point(x + w, midY));
-                gc.LineTo(new Point(x, midY + hh));
-                gc.EndFigure(true);
-            }
-            ctx.DrawGeometry(brush, null, g);
-        }
+        using (At(ctx, x, midY)) ctx.DrawGeometry(brush, null, ModeChevrons);
     }
+
+    private static readonly Geometry ModeChevrons = GlyphShape(gc =>
+    {
+        const double hh = 4, w = 5;
+        foreach (double x in new[] { 0, w + 1 })
+        {
+            gc.BeginFigure(new Point(x, -hh), isFilled: true);
+            gc.LineTo(new Point(x + w, 0));
+            gc.LineTo(new Point(x, hh));
+            gc.EndFigure(true);
+        }
+    });
 
     // A session's rolled-up resource use as two stacked micro-bars — CPU on top, RAM below — each filled
     // proportionally and coloured by load (green → red via Palette.UsageColor). CPU is a percentage of
@@ -5928,10 +5949,27 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // travels the rounded-rect perimeter over a faintly-lit base outline, with a few progressively wider/
     // fainter passes for a soft glow. Everything is clipped to the panel so the bloom only spills inward —
     // the crisp outer edge stays the filled rounded-rect boundary. Mirrors the WinForms DrawChaseBorder.
+    // The chase's perimeter samples and clip depend only on the panel's rect and corner, so they're kept until those
+    // change rather than rebuilt on every 30 fps frame; so are the per-sample intensity and colour buffers (PF18).
+    private (Rect Rect, double Radius) _chaseFor;
+    private Point[] _chasePts = [];
+    private Geometry? _chaseClip;
+    private double[] _chaseIntensity = [];
+    private Color[] _chaseColor = [];
+
     private void DrawChaseBorder(DrawingContext ctx, Rect rect, Color color)
     {
         double radius = _docked ? 0 : Math.Min(Corner, Math.Min(rect.Width, rect.Height) / 2);
-        var pts = RoundedRectSamples(rect, radius, out var clip);
+        if (_chaseClip is null || _chaseFor != (rect, radius))
+        {
+            _chasePts = RoundedRectSamples(rect, radius, out var built);
+            _chaseClip = built;
+            _chaseFor = (rect, radius);
+            _chaseIntensity = new double[_chasePts.Length];
+            _chaseColor = new Color[_chasePts.Length];
+        }
+        var pts = _chasePts;
+        var clip = _chaseClip;
         int samples = pts.Length;
         if (samples < 2)
         {
@@ -5953,20 +5991,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return t <= 0 ? 0 : t * t;
         }
 
+        // Each sample's intensity and colour are the same for every pass, so they're worked out once per frame.
+        for (int k = 0; k < samples; k++)
+        {
+            double inten = Intensity((k + 0.5) / samples);
+            _chaseIntensity[k] = inten;
+            // Heat the colour toward white near the head for the neon "hot core" look.
+            _chaseColor[k] = inten > 0.05 ? Palette.Blend(color, Colors.White, (float)(inten * 0.5)) : color;
+        }
+
         // Clip to the panel so the wide bloom passes glow inward only.
         using (ctx.PushGeometryClip(clip))
         {
             // Widest & faintest first so a bright, near-white core sits on a soft coloured halo.
-            (double w, double aMul)[] passes = { (7, 0.10), (4, 0.22), (2.2, 0.5), (1.4, 1.0) };
-            foreach (var (w, aMul) in passes)
+            foreach (var (w, aMul) in ChasePasses)
             {
                 for (int k = 0; k < samples; k++)
                 {
-                    double inten = Intensity((k + 0.5) / samples);
-                    int a = (int)Math.Clamp((BaseA + inten * PeakA) * aMul, 0, 255);
+                    int a = (int)Math.Clamp((BaseA + _chaseIntensity[k] * PeakA) * aMul, 0, 255);
                     if (a <= 1) continue;
-                    // Heat the colour toward white near the head for the neon "hot core" look.
-                    Color c = inten > 0.05 ? Palette.Blend(color, Colors.White, (float)(inten * 0.5)) : color;
+                    var c = _chaseColor[k];
                     var pen = OverlayDraw.SolidPen(Color.FromArgb((byte)a, c.R, c.G, c.B), w,
                         PenLineCap.Round, PenLineJoin.Round);
                     ctx.DrawLine(pen, pts[k], pts[(k + 1) % samples]);
@@ -5974,6 +6018,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
     }
+
+    private static readonly (double W, double AMul)[] ChasePasses = [(7, 0.10), (4, 0.22), (2.2, 0.5), (1.4, 1.0)];
 
     // Resamples the rounded-rect perimeter into evenly-spaced points (constant-rate motion everywhere,
     // corners and sides alike) and hands back a closed geometry of the same outline for clipping. Builds

@@ -117,7 +117,8 @@ Most of the first group are **S** changes.
 | PF13 | 9ed40ae | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
 | PF14 | 576cf3d | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
 | PF15 | 1fd806b | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
-| PF16 | (this commit) | Analysis off the UI thread and throttled; runaway scan 243 → 3.8 ms; activity skips out-of-window parses. |
+| PF16 | 0817dac | Analysis off the UI thread and throttled; runaway scan 243 → 3.8 ms; activity skips out-of-window parses. |
+| PF18 | (this commit) | Static glyph geometry; chase samples, clip and colours cached. 254 → 223 KB/frame. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -197,6 +198,12 @@ PF16 as built (resource monitor), measured on a real 5.2 MB recording (1,781 tic
 - **The runaway-process scan walks each process's own samples** (`ResourceAnalysis.BusyRuns`) instead of every tick of the recording per process: **243 ms → 3.8 ms**, the same 146 runs. A randomized test pins it to the old scan, including ties for the peak, gaps where a process is absent, and values exactly at the threshold. A full analysis now builds in about 248 ms, down from roughly 490 ms.
 - **The analysis builds on a worker** from `ResourceRecording.Snapshot()`, single-flight, with a rerun if the recording moved meanwhile. While recording, the next build waits at least four times as long as the last one took, so analysis stays under a fifth of a core however long the recording runs. The view shows the previous analysis until the next lands, at most one tick behind.
 - **The activity lane's transcript re-read skips parsing records more than a minute outside the window**, using the timestamp text first. Recording a long session used to fully JSON-parse its whole transcript every 30 s.
+
+PF18 as built (overlay paint):
+- **Row and strip glyphs are built once.** The teammate shoulders; the VS Code, Cursor, Windsurf and generic editor marks; mail, note, Markdown, PR merge and approval tick, Jira, warning and mode chevrons; the GitHub kind symbols; and the to-do tick are now `static readonly` geometry around their anchor point (`GlyphShape`), drawn under a translation (`At`), as `OverlayCanvas.Dnd` already did. 270 of 370 render images are byte-identical to the previous commit, including every 1× overlay with glyphs. The 1.5× overlays differ only in sub-pixel anti-aliasing from translating at fractional scale; checked side by side.
+- **The attention chase keeps its perimeter samples and clip** until the panel's rect or corner changes, and works out each sample's intensity and blended colour once per frame instead of once per pass. Its four passes of per-segment `DrawLine`s stay: the overlapping round caps compound the alpha, and that is the glow's look. Batching them into one stroked path would visibly dim it.
+- **Bench**, back to back against the previous commit: 254 → 223 KB allocated per frame; draw calls alone 1.41 → 1.32 ms. Mean frame time is within run-to-run noise (10.7–12.1 ms before, 11.1 ms after). Most of the remaining ~216 KB is the chase's segment records.
+- **The media strip's `FillTriangle`** takes arbitrary points per transport icon and is left as is.
 
 ## Suggested order
 
