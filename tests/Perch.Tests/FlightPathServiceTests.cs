@@ -161,4 +161,42 @@ public class FlightPathServiceTests
         Assert.True(report.IsEmpty);
         Assert.Equal(report.WindowStart, report.WindowEnd);
     }
+
+    [Fact]
+    public void BuildLane_SkipsOtherDays_ButKeepsTheProjectAndBranchFromThem()
+    {
+        SessionStatsService.IdleThreshold = TimeSpan.FromMinutes(5);
+        var day = new DateTime(2025, 8, 20, 0, 0, 0, DateTimeKind.Unspecified);
+        string Utc(DateTime local) => local.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        var path = Path.Combine(Path.GetTempPath(), "perch-flight-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        try
+        {
+            File.WriteAllLines(path,
+            [
+                // The day before: the only record naming the project and branch.
+                $$$"""{"type":"user","timestamp":"{{{Utc(day.AddHours(-3))}}}","cwd":"C:\\work\\lanes","gitBranch":"multi-day","message":{"role":"user","content":"start"}}""",
+                $$$"""{"type":"assistant","timestamp":"{{{Utc(day.AddHours(-2))}}}","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}""",
+                // The day itself.
+                $$$"""{"type":"user","timestamp":"{{{Utc(day.AddHours(10))}}}","message":{"role":"user","content":"again"}}""",
+                $$$"""{"type":"assistant","timestamp":"{{{Utc(day.AddHours(10).AddMinutes(1))}}}","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}""",
+                // The next day, and a malformed line from it.
+                $$$"""{"type":"user","timestamp":"{{{Utc(day.AddDays(1).AddHours(1))}}}","message":{"role":"user","content":"later"}}""",
+                $$$"""{"type":"user","timestamp":"{{{Utc(day.AddDays(1).AddHours(2))}}}","message":{""",
+            ]);
+            var lane = FlightPathService.BuildLane(path, day, day.AddDays(1), null, CancellationToken.None)!;
+            Assert.Equal("lanes", lane.Project);
+            Assert.Equal("multi-day", lane.Branch);
+            Assert.Equal(day.AddHours(10), lane.FirstActivity);
+            Assert.Equal(FlightState.Active, Assert.Single(lane.Segments).State);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void ForDay_Cancelled_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => FlightPathService.ForDay(FlightDay, cts.Token));
+    }
 }

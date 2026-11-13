@@ -199,18 +199,7 @@ public sealed record SessionActivity(string SessionId, string? Cwd, IReadOnlyLis
         catch { }
     }
 
-    private static DateTime? TimestampOf(string line)
-    {
-        int i = line.IndexOf("\"timestamp\":\"", StringComparison.Ordinal);
-        if (i < 0) return null;
-        i += "\"timestamp\":\"".Length;
-        int j = line.IndexOf('"', i);
-        if (j < 0) return null;
-        return DateTime.TryParse(line.AsSpan(i, j - i), System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t)
-            ? DateTime.SpecifyKind(t, DateTimeKind.Utc)
-            : null;
-    }
+    private static DateTime? TimestampOf(string line) => TranscriptJson.PeekTimestampUtc(line);
 
     private static string? FirstLine(string? s)
     {

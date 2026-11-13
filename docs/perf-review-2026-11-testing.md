@@ -135,6 +135,8 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Transcript search speed | Overlay → Search transcripts, type a word you've used in a few sessions. Note the time in the status line. | Several seconds | Noticeably faster for a big history. |
 | Refining a search | Type `capac`, let it finish, then go on to `capacitor`. | Every transcript searched again | "Searching… N of M" counts only the sessions that matched `capac` (plus any written since), and it finishes almost at once. |
 | Refining picks up new text | With a search finished, say the new word in a live session, then extend the query to it. | — | The live session shows up. |
+| Flight path stepping | Open the flight path, then hold ← for a couple of seconds and release. | CPU stays busy for a while as each day's scan runs in turn | The day you stop on loads; the skipped days' scans stop at once. |
+| Flight path unchanged | Look at today, yesterday and a day a few weeks back, including a session that ran across midnight. | — | The same lanes, colours, project and branch names. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

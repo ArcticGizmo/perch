@@ -25,6 +25,23 @@ internal static class TranscriptJson
     public static DateTime? ParseTimestamp(string? iso) =>
         !string.IsNullOrEmpty(iso) && DateTimeOffset.TryParse(iso, out var dto) ? dto.LocalDateTime : null;
 
+    /// <summary>The first <c>"timestamp"</c> value in a raw record line, in UTC, read without parsing the JSON;
+    /// null when there isn't one. It's a guess for skipping records far from a time window: a nested object's
+    /// timestamp can come ahead of the record's own, so callers keep a margin either side.</summary>
+    public static DateTime? PeekTimestampUtc(string line)
+    {
+        const string Key = "\"timestamp\":\"";
+        int i = line.IndexOf(Key, StringComparison.Ordinal);
+        if (i < 0) return null;
+        i += Key.Length;
+        int j = line.IndexOf('"', i);
+        if (j < 0) return null;
+        return DateTime.TryParse(line.AsSpan(i, j - i), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t)
+            ? DateTime.SpecifyKind(t, DateTimeKind.Utc)
+            : null;
+    }
+
     /// <summary>The <c>message.content</c> array of a record, or null when the body is not a block array
     /// (e.g. a plain-string user prompt, or a metadata record).</summary>
     public static JsonArray? ContentArray(JsonNode? record) => record?["message"]?["content"] as JsonArray;

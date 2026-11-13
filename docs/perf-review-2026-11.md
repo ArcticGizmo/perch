@@ -224,6 +224,18 @@ Tier 3, transcript search, as built. Measured single-threaded over this machine'
 - **A query that extends the last finished one** (same scope) searches only the transcripts that matched before, plus any written or created since (`TranscriptSearch.Narrowing`).
 - **`ListAll` still runs per search.** Its per-file reads are cached by length and mtime, so it's the directory walk and a stat per file; holding it for the window's life would hide sessions started while it's open.
 
+Tier 3, flight path, as built. Back to back on this machine's history, with identical lanes (a SHA-256 over every lane's id, project, branch, segment count, active time and API errors matched):
+
+| Day | Before | After |
+|---|---|---|
+| Yesterday | 680–820 ms, 445 MB | 510–670 ms, 345 MB |
+| A week ago | 1.8–1.9 s, 1.8 GB | 1.3–1.4 s, 1.2 GB |
+| 30 days ago | 6.6 s, 6.5 GB | 3.8–4.1 s, 3.6 GB |
+
+- **Records from other days are skipped unparsed**, judged by the first `"timestamp"` in the line (`TranscriptJson.PeekTimestampUtc`, now shared with the resource monitor's activity lane) with a minute's margin. A record still parses if the lane hasn't found its project (`cwd`) or branch yet, so those come from the same record as before.
+- **Each day's scan is cancellable**, and the window cancels the last one when you step to another day or close it. Holding ← used to queue a full scan per press.
+- **Left out:** a creation-time prefilter, because a copied transcript gets a new creation time and would vanish from its own past days. Reading from `SessionStatsCache` would serialise with the Stats window and could start a cold build. What remains is decoding every line of each transcript touched since the day; a byte-level peek like the transcript search's would cut it further if this still feels slow.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.
