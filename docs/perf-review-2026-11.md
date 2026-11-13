@@ -112,7 +112,8 @@ Most of the first group are **S** changes.
 | PF10 | cd2675b | Mutex probe 3.4 ms vs 13 ms by name. |
 | PF6 | ab3a544 | See below. |
 | PF11 | 44ae7b3 | Compression dropped; ReadyToRun rejected. See below. |
-| PF12 | (this commit) | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
+| PF12 | 8fa903e | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
+| PF17 | (this commit) | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -154,6 +155,20 @@ PF12 as built. A resume bench (`Rendering/ResumeBench.cs`, part of `PERCH_BENCH=
 - **Almost all of the freeze was building every item at bind, not parsing.** Full windows now use the newest-first backlog the Roost's panes already had: the newest 6 items are built at once, and older ones are prepended in ~6 ms background slices that input runs between. This covers resume, `/clear`, rewind and every theme change, because they all rebind. Everything that walks the whole thread (find, jump to top or to the previous prompt, revealing a background task, rewind selection) already flushed the backlog first.
 - **The parse moved to the worker** (`SessionConversation.ParseHistory`, then `LoadHistory(parsed)` on the UI thread), and `StreamJsonParser.Parse(JsonNode)` reuses the parse that classified the line, so each line is parsed once. Image recovery runs on the worker too.
 - **Still open: the background build costs the full price.** The bench's back-to-back drain is about 7.3 s for the synthetic transcript: older items are built, measured and then mostly dehydrated again by virtualization. Prepending them as estimated-height placeholders that `Realize` hydrates on approach would skip most of that work. `Realize` already corrects the offset when a placeholder above the viewport comes back a different height, but the scrollbar and prompt-jump targets would be estimates until visited. PF17 (cached diffs, lazy fold cards) makes each build cheaper, so do that first and re-measure.
+
+PF17 as built. `perch bench-resume [transcript.jsonl]` runs the resume bench headless. It loads the synthetic transcript whole and then without each kind of tool card, and it times a rebind (what a theme change, `/clear` or rewind does) after each load. Rebind on the synthetic transcript, warmed:
+
+| Variant | Before | After |
+|---|---|---|
+| Whole | 8.3 s | 5.2 s |
+| Without edits | 3.9 s | 3.6 s |
+| Without folds | 6.9 s | 4.5 s |
+| Real 14 MB transcript: rebind / deferred build / longest slice | 1,084 / 807 / 96 ms | 551 / 504 / 31 ms |
+
+- **Edit cards were the cost**: about 11 ms each for a 50-line diff, against under 2 ms for a fold card. The LCS wasn't the problem; the panel was. Each diff row was a Border, a Grid, a marker TextBlock and a SelectableTextBlock, so a 50-line edit made about 200 controls. `Views/DiffText` is now one `SelectableTextBlock` of coloured runs, with the +/- markers and change bands painted in a gutter and behind it, measured once per text layout with `HitTestTextRange`. An Edit card now costs about 4 ms. Copying works across diff lines and leaves out the markers. `render` gained `session_diff_wrap(_light)`, which covers wrapped and blank changed lines and the MultiEdit separator.
+- **The parsed input and the diff are cached on the `ToolCallPart`** (`Input`, `Diff`), so a rebuild after hydrate, rebind or theme change re-derives neither. This matters most for big edits, whose LCS table can be up to 1.6 MB per build. The file-path lookup for a file tool's header reads the cached input too, instead of parsing the JSON again.
+- **Fold cards are still built eagerly.** The bench puts their whole share at about 0.7 s across 800 cards, under 1 ms each. Building them on first expand would mean teaching find (which matches hidden text in collapsed folds), expand-all and sticky-header ordering to build on demand. That's not worth it at that price.
+- What's left of the resume cost is ordinary text layout, about 2.5 s for 800 prose-only items, and only the placeholder idea above avoids it.
 
 ## Suggested order
 

@@ -109,6 +109,37 @@ internal sealed class ToolCallPart(string toolUseId, string toolName, string sum
     /// <summary>The background task this call started (a <c>run_in_background</c> shell, a Monitor, an async agent),
     /// looked up in <see cref="SessionConversation.BackgroundTasks"/>. Null for an ordinary call.</summary>
     public string? BackgroundTaskId { get; internal set; }
+
+    // A card is rebuilt from its part on every hydrate, rebind and theme change, and the input never changes once the
+    // call lands, so the parse and (for an edit) the O(n·m) line diff are worked out once here (perf review PF17).
+    private System.Text.Json.Nodes.JsonNode? _input;
+    private bool _inputParsed;
+    private IReadOnlyList<GitDiffLine>? _diff;
+    private bool _diffBuilt;
+
+    /// <summary>The parsed <see cref="InputJson"/>, or null when it isn't JSON. Shared: treat it as read-only.</summary>
+    public System.Text.Json.Nodes.JsonNode? Input
+    {
+        get
+        {
+            if (_inputParsed) return _input;
+            try { _input = System.Text.Json.Nodes.JsonNode.Parse(InputJson); } catch { _input = null; }
+            _inputParsed = true;
+            return _input;
+        }
+    }
+
+    /// <summary>The unified diff of an Edit/MultiEdit/Write call (see <see cref="EditDiff.Build"/>), else null.</summary>
+    public IReadOnlyList<GitDiffLine>? Diff
+    {
+        get
+        {
+            if (_diffBuilt) return _diff;
+            _diff = EditDiff.IsEditTool(ToolName) ? EditDiff.Build(ToolName, Input) : null;
+            _diffBuilt = true;
+            return _diff;
+        }
+    }
 }
 
 /// <summary>A background task ended (or a Monitor delivered an event): a quiet one-line notice in the thread, never

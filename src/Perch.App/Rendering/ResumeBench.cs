@@ -20,18 +20,45 @@ internal static class ResumeBench
 {
     private const int SyntheticTurns = 400;
 
+    // Which tool cards the synthetic transcript carries, so `bench-resume` can price each kind by leaving it out.
+    [Flags]
+    private enum Content { Prose = 0, Fold = 1, Edit = 2, Bash = 4, All = Fold | Edit | Bash }
+
     public static void Run(string outDir, string cwd)
     {
         if (Environment.GetEnvironmentVariable("PERCH_BENCH") != "1") return;
 
-        Measure("synthetic", Synthetic(SyntheticTurns), cwd, Path.Combine(outDir, "session_resumed_1x.png"));
+        Measure("synthetic", Synthetic(SyntheticTurns, Content.All), cwd, Path.Combine(outDir, "session_resumed_1x.png"));
         if (Environment.GetEnvironmentVariable("PERCH_RESUME_TRANSCRIPT") is { Length: > 0 } real && File.Exists(real))
-        {
-            var (lines, _) = Perch.Data.TranscriptScan.LastLines(
-                Perch.Data.TranscriptChain.ActiveLines(() => File.ReadLines(real), null), 4000);
-            Measure(Path.GetFileName(real), lines, cwd, null);
-        }
+            Measure(Path.GetFileName(real), ReadReal(real), cwd, null);
     }
+
+    /// <summary><c>perch bench-resume [transcript.jsonl]</c>: the resume bench on its own, headless, with the synthetic
+    /// transcript once whole and once without each kind of tool card, so each kind's share of the cost shows.</summary>
+    public static int RunCli(string[] args)
+    {
+        Perch.Data.AppSettings.DisablePersistence();
+        AppBuilder.Configure<App>()
+            .UseSkia()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
+            .WithInterFont()
+            .SetupWithoutStarting();
+
+        const string cwd = @"C:\src\perch";
+        foreach (var (label, content) in new[]
+                 {
+                     ("synthetic", Content.All), ("  without edits", Content.All & ~Content.Edit),
+                     ("  without folds", Content.All & ~Content.Fold), ("  without bash", Content.All & ~Content.Bash),
+                     ("  prose only", Content.Prose),
+                 })
+            Measure(label, Synthetic(SyntheticTurns, content), cwd, null);
+        if (args.Length > 1 && File.Exists(args[1]))
+            Measure(Path.GetFileName(args[1]), ReadReal(args[1]), cwd, null);
+        return 0;
+    }
+
+    private static IReadOnlyList<string> ReadReal(string path) =>
+        Perch.Data.TranscriptScan.LastLines(Perch.Data.TranscriptChain.ActiveLines(() => File.ReadLines(path), null), 4000).Lines;
 
     private static void Measure(string label, IReadOnlyList<string> lines, string cwd, string? capture)
     {
@@ -60,22 +87,24 @@ internal static class ResumeBench
         // the slices back to back; in the app other input runs between them, so the longest slice is what a user feels.
         SessionThreadView.LongestBacklogSliceMs = 0;
         sw.Restart();
-        int passes = 0;
-        for (var last = (-1, -1); passes < 2000; passes++)
-        {
-            Dispatcher.UIThread.RunJobs();
-            w.UpdateLayout();
-            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-            var now = thread.BuiltItems;
-            if (now == last && passes > 6) break;
-            last = now;
-        }
+        Drain(w, thread);
         double drainMs = sw.Elapsed.TotalMilliseconds;
+        double slice = SessionThreadView.LongestBacklogSliceMs;
+        var builtAfter = thread.BuiltItems;
+
+        // A theme change (or /clear, or a rewind) rebinds the same conversation and rebuilds the column from the model.
+        SessionThreadView.LongestBacklogSliceMs = 0;
+        sw.Restart();
+        thread.Restyle();
+        w.UpdateLayout();
+        Drain(w, thread);
+        double rebindMs = sw.Elapsed.TotalMilliseconds;
 
         Console.WriteLine($"resume bench ({label}): {lines.Count:N0} lines -> {items:N0} items; " +
                           $"worker parse {workerMs:N0} ms; UI block {blockMs:N0} ms (built {builtAtBlock.Built}/{builtAtBlock.Total}); " +
-                          $"deferred build {drainMs:N0} ms, longest slice {SessionThreadView.LongestBacklogSliceMs:N0} ms " +
-                          $"(built {thread.BuiltItems.Built}/{thread.BuiltItems.Total})");
+                          $"deferred build {drainMs:N0} ms, longest slice {slice:N0} ms " +
+                          $"(built {builtAfter.Built}/{builtAfter.Total}); rebind {rebindMs:N0} ms, longest slice " +
+                          $"{SessionThreadView.LongestBacklogSliceMs:N0} ms");
 
         if (capture is not null && w.CaptureRenderedFrame() is { } frame)
         {
@@ -85,6 +114,21 @@ internal static class ResumeBench
         thread.Unbind();
         w.Close();
         Dispatcher.UIThread.RunJobs();
+    }
+
+    // Runs the view's deferred work until the built count stops moving.
+    private static void Drain(Window w, SessionThreadView thread)
+    {
+        var last = (-1, -1);
+        for (int pass = 0; pass < 2000; pass++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            w.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var now = thread.BuiltItems;
+            if (now == last && pass > 6) return;
+            last = now;
+        }
     }
 
     private static void Settle(Window w)
@@ -99,7 +143,7 @@ internal static class ResumeBench
 
     // A transcript shaped like a long agentic session: per turn a prompt, a thought, Grep/Read/Edit/Bash calls with
     // their results and two markdown replies, one record per line as Claude Code writes them.
-    private static List<string> Synthetic(int turns)
+    private static List<string> Synthetic(int turns, Content content)
     {
         var read = string.Join("\n", Enumerable.Range(1, 40).Select(i => $"{i,6}\t    var line{i} = Compute(screen, {i});"));
         var oldBody = string.Join("\n", Enumerable.Range(1, 30).Select(i => $"    var v{i} = px{i} / scale;"));
@@ -138,8 +182,11 @@ internal static class ResumeBench
                 ["type"] = "thinking",
                 ["thinking"] = $"Turn {t}: the clamp runs before the DPI conversion, so a shrunken screen pulls the window inward.",
             });
-            Tool($"g{t}", "Grep", new JsonObject { ["pattern"] = "PlacementMath" }, "6 files");
-            Tool($"r{t}", "Read", new JsonObject { ["file_path"] = "src/Perch.Core/Data/PlacementMath.cs" }, read);
+            if (content.HasFlag(Content.Fold))
+            {
+                Tool($"g{t}", "Grep", new JsonObject { ["pattern"] = "PlacementMath" }, "6 files");
+                Tool($"r{t}", "Read", new JsonObject { ["file_path"] = "src/Perch.Core/Data/PlacementMath.cs" }, read);
+            }
             Assistant(new JsonObject
             {
                 ["type"] = "text",
@@ -147,11 +194,13 @@ internal static class ResumeBench
                            "1. Round the DIP offset as soon as it's converted.\n2. Clamp against the target monitor's bounds.\n\n" +
                            "```csharp\nvar dip = Math.Round(px / scale);\nreturn Clamp(dip, bounds);\n```",
             });
-            Tool($"e{t}", "Edit", new JsonObject
-            {
-                ["file_path"] = "src/Perch.Core/Data/PlacementMath.cs", ["old_string"] = oldBody, ["new_string"] = newBody,
-            }, "The file has been updated.");
-            Tool($"b{t}", "Bash", new JsonObject { ["command"] = "dotnet test" }, tests);
+            if (content.HasFlag(Content.Edit))
+                Tool($"e{t}", "Edit", new JsonObject
+                {
+                    ["file_path"] = "src/Perch.Core/Data/PlacementMath.cs", ["old_string"] = oldBody, ["new_string"] = newBody,
+                }, "The file has been updated.");
+            if (content.HasFlag(Content.Bash))
+                Tool($"b{t}", "Bash", new JsonObject { ["command"] = "dotnet test" }, tests);
             Assistant(new JsonObject { ["type"] = "text", ["text"] = $"Turn {t} is green — the corner distance now survives a resolution change." });
         }
         return lines;

@@ -1514,8 +1514,8 @@ internal sealed partial class SessionThreadView : ScrollViewer
             _bg = bg;
             _expandState = expandState;
 
-            _input = ParseOrNull(part.InputJson);
-            _diffLines = EditDiff.Build(part.ToolName, _input);
+            _input = part.Input;
+            _diffLines = part.Diff;
             // An edit's diff shows by default; other detail stays closed. Compact density (a Roost pane) keeps
             // every card collapsed — the pane is a glance, the full window is for reading diffs. A card the user
             // toggled keeps that across a rebuild (virtualization, a reset).
@@ -1958,42 +1958,15 @@ internal sealed partial class SessionThreadView : ScrollViewer
             });
 
             const int cap = 200;   // a very long diff (e.g. a big new file) is clipped with a trailing note
-            int shown = 0;
-            foreach (var l in lines)
-            {
-                if (shown >= cap)
+            var shown = lines.Count > cap ? lines.Take(cap).ToList() : lines;
+            stack.Children.Add(new DiffText(shown, _p.Mono, 12, 12 * 1.55,
+                addFgB, remFgB, addBandB, remBandB, contextFg: _p.Muted, metaFg: _p.Faint));
+            if (lines.Count > cap)
+                stack.Children.Add(new TextBlock
                 {
-                    stack.Children.Add(new TextBlock
-                    {
-                        Text = $"… {lines.Count - shown} more line{(lines.Count - shown == 1 ? "" : "s")}",
-                        FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(0, 5, 0, 0),
-                    });
-                    break;
-                }
-                shown++;
-
-                (IBrush fg, IBrush? band, string marker) = l.Kind switch
-                {
-                    GitDiffLineKind.Added   => ((IBrush)addFgB, (IBrush?)addBandB, "+"),
-                    GitDiffLineKind.Removed => ((IBrush)remFgB, (IBrush?)remBandB, "-"),
-                    GitDiffLineKind.Meta    => ((IBrush)_p.Faint, (IBrush?)null, ""),
-                    _                       => ((IBrush)_p.Muted, (IBrush?)null, " "),
-                };
-                var rowGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("14,*") };
-                rowGrid.Children.Add(new TextBlock
-                {
-                    Text = marker, FontFamily = _p.Mono, FontSize = 12, LineHeight = 12 * 1.55, Foreground = fg,
-                    VerticalAlignment = VerticalAlignment.Top,
+                    Text = $"… {lines.Count - cap} more line{(lines.Count - cap == 1 ? "" : "s")}",
+                    FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(0, 5, 0, 0),
                 });
-                var code = new SelectableTextBlock
-                {
-                    Text = l.Text.Length == 0 ? " " : l.Text, FontFamily = _p.Mono, FontSize = 12,
-                    LineHeight = 12 * 1.55, Foreground = fg, TextWrapping = TextWrapping.Wrap,
-                };
-                Grid.SetColumn(code, 1);
-                rowGrid.Children.Add(code);
-                stack.Children.Add(new Border { Background = band ?? Brushes.Transparent, Child = rowGrid });
-            }
             return stack;
         }
 
@@ -2019,8 +1992,8 @@ internal sealed partial class SessionThreadView : ScrollViewer
         {
             string? raw = part.ToolName switch
             {
-                "Read" or "Edit" or "MultiEdit" or "Write" => InputString(part.InputJson, "file_path"),
-                "NotebookEdit"                             => InputString(part.InputJson, "notebook_path"),
+                "Read" or "Edit" or "MultiEdit" or "Write" => TranscriptJson.AsString((part.Input as JsonObject)?["file_path"]),
+                "NotebookEdit"                             => TranscriptJson.AsString((part.Input as JsonObject)?["notebook_path"]),
                 _                                          => null,
             };
             if (string.IsNullOrWhiteSpace(raw)) return null;

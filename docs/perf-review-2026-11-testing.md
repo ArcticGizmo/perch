@@ -68,4 +68,15 @@ Compare the installed v0.6.10 (before) with the first release cut from this bran
 | `/clear` and rewind | Run `/clear` in a long session, or rewind to an early prompt. | A stall while the column rebuilds | No stall. |
 | Bench | `PERCH_BENCH=1` render, optionally with `PERCH_RESUME_TRANSCRIPT=<path to a .jsonl>` | `resume bench` lines are new | UI block about 20 ms (synthetic) |
 
+## PF17 (cheaper Edit cards)
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Diff looks the same | Open a session with Edit, MultiEdit and Write calls, in dark and light themes. | One row per diff line | Same look: markers in the gutter, red and green bands, `+N -M` header, "… N more lines" past 200. |
+| Wrapped lines | Narrow the window until a long changed line wraps. | Marker on the first row, band on every row | The same. |
+| Copy | Drag-select across several diff lines and copy. | Selection stopped at each line | It spans lines, and the copied text has no `+`/`-` markers. |
+| Find in a diff | Ctrl+F for a word inside an open diff. | Highlighted | Still highlighted on the right glyphs. |
+| Scrolling a long session | Scroll quickly through a session with many edits. | Brief hitches as edit cards rebuild | Smoother. Each card builds in about a third of the time and never re-diffs. |
+| Bench | `perch bench-resume [path.jsonl]` | — | Per-variant timings; "without edits" now close to "whole" |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.
