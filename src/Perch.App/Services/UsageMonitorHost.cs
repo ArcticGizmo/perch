@@ -77,12 +77,16 @@ internal sealed class UsageMonitorHost : IDisposable
     /// track the same readings the overlay does.</summary>
     public event Action<IReadOnlyList<OrgUsage>>? Updated;
 
-    public UsageMonitorHost(Action<IReadOnlyList<OrgUsage>> onUsage, IClaudeCredentials primaryCredentials)
+    public UsageMonitorHost(Action<IReadOnlyList<OrgUsage>> onUsage, IClaudeCredentials primaryCredentials, LockWatch? lockWatch = null)
     {
         _onUsage = onUsage;
         _primaryCredentials = primaryCredentials;
         _timer = new DispatcherTimer { Interval = Interval };
-        _timer.Tick += (_, _) => _ = Poll();
+        _timer.Tick += (_, _) =>
+        {
+            if (lockWatch?.Defer(this, () => { if (_started) _ = Poll(); }) == true) return;
+            _ = Poll();
+        };
     }
 
     /// <summary>Sets which config dirs to poll: the <paramref name="active"/> ones (a live session's + the

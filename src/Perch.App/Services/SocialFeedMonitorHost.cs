@@ -66,7 +66,8 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? onGames = null,
         Action<GameRequest>? onNewGameInvite = null,
         Action<IReadOnlyList<DrawGameSummary>, IReadOnlyList<DrawRequest>>? onDrawGames = null,
-        Action<DrawRequest>? onNewDrawInvite = null)
+        Action<DrawRequest>? onNewDrawInvite = null,
+        LockWatch? lockWatch = null)
     {
         _social = social;
         _onRoster = onRoster;
@@ -81,7 +82,13 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         // one poll in flight, a burst collapses into one trailing poll, and polls start >= 2s apart -- so a flood of
         // inbox broadcasts can't turn into a flood of the ~6 REST reads each poll makes.
         _poll = new CoalescingTrigger(Poll, TimeSpan.FromSeconds(2));
-        _timer.Tick += (_, _) => _poll.Request();
+        // Only the cadence tick waits out a lock: a realtime nudge or the user's own action still polls, and the
+        // catch-up at unlock surfaces whatever arrived meanwhile.
+        _timer.Tick += (_, _) =>
+        {
+            if (lockWatch?.Defer(this, RefreshSoon) == true) return;
+            _poll.Request();
+        };
     }
 
     private readonly CoalescingTrigger _poll;

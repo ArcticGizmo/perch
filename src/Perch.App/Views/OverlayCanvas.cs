@@ -1890,6 +1890,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _anyMismatchThisFrame = false;
         Draw(ctx, Bounds.Width);
         UpdatePulseTimer();
+        UpdateTickTimer();
     }
 
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
@@ -5808,10 +5809,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Starts/stops the per-second label tick to match what's on screen: a running session's elapsed run
-    // time or a blocked session's "waiting on you" timer, and only while the panel is expanded.
+    // time or a blocked session's "waiting on you" timer, and only while the panel is expanded with roomy
+    // rows (compact rows drop the line those labels live on).
     private void UpdateTickTimer()
     {
-        bool need = ShowFullPanel && _sessions.Any(s =>
+        bool need = ShowFullPanel && !_compactRows && _sessions.Any(s =>
             s.Status == SessionStatus.Running
             || (_showWaitingTimer && s.Status == SessionStatus.AwaitingInput));
         _tickTimer ??= CreateTickTimer();
@@ -5819,11 +5821,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         else if (!need && _tickTimer.IsEnabled) _tickTimer.Stop();
     }
 
+    // Like the pulse, it stops itself once the overlay can't be seen; Render restarts it on the next paint.
     private DispatcherTimer CreateTickTimer()
     {
         var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         t.Tick += (_, _) =>
         {
+            if (!OnScreen())
+            {
+                t.Stop();
+                return;
+            }
             RecomputeMismatches();   // a /login flipping a row's account (see RecomputeMismatches)
             InvalidateVisual();
         };

@@ -127,6 +127,8 @@ public partial class App : Application
     private INotifier? _notifier;
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
+    // The usage, status and social polls wait out a locked desktop through this, catching up on unlock.
+    private LockWatch? _lockWatch;
 
     // Achievement badges: evaluates lifetime trophies against an all-time scan and toasts newly-unlocked
     // ones (once). The all-time scan is the slowest stats path, so checks are throttled — one at startup,
@@ -209,6 +211,7 @@ public partial class App : Application
                 _feedsHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
+                _lockWatch?.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // already done on the overlay's Closing; harmless twice
                 _overlay?.Canvas.DisposeDense();
@@ -287,7 +290,9 @@ public partial class App : Application
                 settings.LastSeenVersion = AppInfo.Version;
                 settings.Save();
             }
-            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
+            _sessionLock = PlatformServices.CreateSessionLock();
+            _lockWatch = new LockWatch(_sessionLock);
+            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials, _lockWatch);
             // The opt-in sign-in refresher (started from ApplyDisplaySettings per AutoRefreshSignIn). A renewal or a
             // recovered login re-polls usage so the strip leaves its stale/expired state without waiting 5 minutes.
             _signInHost = new SignInRefreshHost(PlatformServices.ClaudeCredentials);
@@ -308,7 +313,7 @@ public partial class App : Application
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
-            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
+            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes, _lockWatch);
             // System media session → the overlay's now-playing strip (opt-in; started below when enabled).
             _mediaHost = new MediaMonitorHost(PlatformServices.CreateMediaController(), _overlay.Canvas.UpdateMedia);
             // Who holds the microphone → the overlay's mic strip (opt-in; started below).
@@ -327,7 +332,8 @@ public partial class App : Application
                 (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
                 OnGameInvited,
                 (games, requests) => _overlay?.Canvas.SetDrawGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
-                OnDrawInvited);
+                OnDrawInvited,
+                _lockWatch);
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
@@ -508,7 +514,6 @@ public partial class App : Application
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
             // acknowledges it.
-            _sessionLock = PlatformServices.CreateSessionLock();
             Func<Screen?> toastScreen =
                 () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
 #if WINDOWS

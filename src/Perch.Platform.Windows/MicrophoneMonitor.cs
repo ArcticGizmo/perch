@@ -38,6 +38,11 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
 
+    // WASAPI means a COM endpoint activation per capture device, the costly half of a poll. While the privacy
+    // ledger names no holder it only runs every Nth poll, as the backstop for a stream the ledger missed.
+    private const int IdleAudioEvery = 5;
+    private int _idleTicks;
+
     private readonly object _gate = new();
 
     // path -> version-info FileDescription. Resolved once per executable: it never changes while the app is
@@ -108,13 +113,16 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
 
     private MicSnapshot Build()
     {
-        var audio = ReadAudio();
-
         var holders = new List<Holder>();
 
         // The identity half: every app the privacy ledger currently records as using the mic.
         foreach (var entry in ReadConsentStore())
             holders.Add(new Holder(entry.Identity, 0, false, entry.Since));
+
+        // A holder only WASAPI saw keeps audio running, or the next skipped poll would drop it again.
+        bool readAudio = holders.Count > 0 || Current?.InUse == true
+            || Interlocked.Increment(ref _idleTicks) % IdleAudioEvery == 0;
+        var audio = readAudio ? ReadAudio() : new AudioState([], null);
 
         // The live half: attribute each active capture session to a holder, adding one when the ledger
         // didn't mention it (belt-and-braces — it should have).
@@ -158,7 +166,9 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
                 CallWindow: callWindows.GetValueOrDefault(h.Identity)))
             .ToList();
 
-        return new MicSnapshot(users, audio.DeviceName);
+        // The device is only ever shown beside a holder; naming the idle fallback endpoint would make the idle
+        // snapshot differ between polls that read audio and polls that skip it.
+        return new MicSnapshot(users, users.Count > 0 ? audio.DeviceName : null);
     }
 
     private readonly record struct Holder(string Identity, int ProcessId, bool IsStreaming, DateTimeOffset? Since);

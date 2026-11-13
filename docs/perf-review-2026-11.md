@@ -97,6 +97,32 @@ Most of the first group are **S** changes.
 - **perch-hook.** It's NativeAOT and uses `Utf8JsonReader`. It handles only 3 events and makes no pipe connects.
 - **Build settings.** TieredPGO is on by default. `InvariantGlobalization` and trimming aren't viable: culture-formatted dates, COM interop and the reflection-based `JsonSerializer` and `SalvageMerge` rule them out.
 
+## Progress (branch `perf/review-2026-11`)
+
+| ID | Commit | Notes |
+|---|---|---|
+| PF1 | 7927c76 | `render` prints a spinner check: 2 hidden spinners animating before, 0 after. |
+| PF2 | 7908bc3 | |
+| PF3 | 9e93572 | |
+| PF4 | dc20ca2 | |
+| PF5 | b29a4f3 | |
+| PF7 | 65162e5 | Overlay bench now allocates 254 KB/frame (292 KB at the baseline). |
+| PF8 | c799c5e, 3e95abe | Debounce only; PF19 is the proper fix. |
+| PF9 | a67d6ae | |
+| PF10 | cd2675b | Mutex probe 3.4 ms vs 13 ms by name. |
+| PF6 | (this batch) | See below. |
+
+PF6 as built:
+- **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
+- **Merged and closed PRs** are re-checked every 30 minutes, or at the user's interval if that's longer (`PrStatusService.FinalisedTtl`). Open PRs keep polling while locked, because those polls drive the away-from-desk merge and review pushes.
+- **The mic monitor** reads WASAPI only while the privacy ledger names a holder (or the last snapshot had one), plus every 5th poll as a backstop. The ledger walk still runs every 2 s.
+- **The overlay's 1 s tick** stops when the overlay can't be seen (`Render` restarts it) and doesn't run with compact rows.
+
+Left out on purpose:
+- **Backing the social poll off while Realtime is up.** The socket only carries post inserts, so reactions and game state would lag by up to 5 minutes, and the client doesn't expose whether the socket is joined.
+- **Lock-gating the mic.** Its `Stop` resets the call-window tracker, so a lock would forget which window holds the call.
+- **Pausing PR polls for long-idle sessions.** A review on an idle session's open PR is exactly what the alert is for.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.

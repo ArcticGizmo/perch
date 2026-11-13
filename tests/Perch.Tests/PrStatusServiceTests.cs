@@ -566,4 +566,27 @@ public sealed class PrStatusServiceRetryTests : IDisposable
         await GetUntil(svc, _repo, () => Volatile.Read(ref n), 2, seconds: 0.5);   // gives a retry every chance to happen
         Assert.Equal(1, Volatile.Read(ref n));
     }
+
+    [Theory]
+    [InlineData(PrState.Open, 5, 5)]
+    [InlineData(PrState.Draft, 5, 5)]
+    [InlineData(PrState.Merged, 5, 30)]
+    [InlineData(PrState.Closed, 5, 30)]
+    [InlineData(PrState.Merged, 60, 60)]   // a longer user interval still wins
+    public void FinalisedPrsAreRecheckedRarely(PrState state, int intervalMinutes, int expectedMinutes)
+    {
+        var pr = Pr with { State = state };
+        var fresh = PrStatusService.FreshFor(pr, failed: false, TimeSpan.FromMinutes(intervalMinutes), TimeSpan.FromSeconds(30));
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), fresh);
+    }
+
+    [Fact]
+    public void FailedLookupOfAFinalisedPrStillRetriesSoon()
+    {
+        var merged = Pr with { State = PrState.Merged };
+        Assert.Equal(TimeSpan.FromSeconds(30),
+            PrStatusService.FreshFor(merged, failed: true, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30)));
+        Assert.Equal(TimeSpan.FromMinutes(5),
+            PrStatusService.FreshFor(null, failed: false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30)));
+    }
 }

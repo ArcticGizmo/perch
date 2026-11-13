@@ -19,11 +19,15 @@ internal sealed class StatusMonitorHost : IDisposable
     /// <summary>The most recent reading. <see cref="StatusInfo.Healthy"/> until the first fetch completes.</summary>
     public StatusInfo Last { get; private set; } = StatusInfo.Healthy;
 
-    public StatusMonitorHost(Action<StatusInfo> onStatus, int intervalMinutes)
+    public StatusMonitorHost(Action<StatusInfo> onStatus, int intervalMinutes, LockWatch? lockWatch = null)
     {
         _onStatus = onStatus;
         _timer = new DispatcherTimer { Interval = ClampInterval(intervalMinutes) };
-        _timer.Tick += (_, _) => _ = Poll();
+        _timer.Tick += (_, _) =>
+        {
+            if (lockWatch?.Defer(this, () => { if (_timer.IsEnabled) _ = Poll(); }) == true) return;
+            _ = Poll();
+        };
     }
 
     /// <summary>Starts the timer and kicks off the first fetch. Call on the UI thread.</summary>
