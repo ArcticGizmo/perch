@@ -38,6 +38,13 @@ internal sealed class SessionMonitorHost : IDisposable
     private readonly ConcurrentQueue<Action> _pending = new();
     private volatile bool _disposed;
 
+    // Worker-only: the list last posted to the UI, so a scan that found nothing new skips the post (see
+    // SessionListComparer). An explicit rescan or a queued monitor change always posts: the UI may have changed
+    // what it adds to the list (a dormant row ending) and is waiting on this callback to redraw.
+    private IReadOnlyList<ClaudeSession>? _lastPosted;
+    private int _forcePost;
+    private bool _forceThisScan;
+
     // One-shot timer armed to the monitor's next deferred-completion deadline (a busy->idle settle or a
     // sub-agent grace). Without this the "done" badge only appears on the next incidental file event, so
     // a finished session lingers as Running/Idle far too long — the Avalonia port of the WinForms
@@ -134,7 +141,7 @@ internal sealed class SessionMonitorHost : IDisposable
 
     /// <summary>Requests an immediate rescan. Replay calls this right after each projection so scrubbing
     /// reflects the new state without waiting out the watcher debounce / reconcile cadence.</summary>
-    public void Reconcile() => RequestScan();
+    public void Reconcile() => ForcedScan();
 
     /// <summary>Flips a session's external-notify opt-in (writes/deletes its marker file) and rescans so
     /// the overlay's mail glyph + menu wording refresh.</summary>
@@ -157,7 +164,7 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Requests an immediate rescan. For actions that change the live session set from *outside* the
     /// sessions directory — terminating a session kills the process but leaves its <c>{pid}.json</c> behind,
     /// so no file event fires and the row would linger until the reconcile poll.</summary>
-    public void Rescan() => RequestScan();
+    public void Rescan() => ForcedScan();
 
     /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
     /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.</summary>
@@ -171,17 +178,24 @@ internal sealed class SessionMonitorHost : IDisposable
         if (!_disposed) _scan.Request();
     }
 
+    private void ForcedScan()
+    {
+        Interlocked.Exchange(ref _forcePost, 1);
+        RequestScan();
+    }
+
     // Queues a change to the monitor's state for the worker (so it never races a scan), then scans.
     private void OnWorker(Action action)
     {
         _pending.Enqueue(action);
-        RequestScan();
+        ForcedScan();
     }
 
     // The worker body: apply queued UI requests, then scan. Never runs concurrently with itself.
     private void ScanOnce()
     {
         if (_disposed) return;
+        _forceThisScan = Interlocked.Exchange(ref _forcePost, 0) == 1;
         while (_pending.TryDequeue(out var action))
         {
             try { action(); } catch { /* best-effort, like the direct calls it replaces */ }
@@ -204,9 +218,12 @@ internal sealed class SessionMonitorHost : IDisposable
     {
         var deadline = _monitor.NextNeedsAttentionDeadline;
         var fastPoll = _monitor.HasWorkingControlledSession || _monitor.HasRunningSubAgents;
+        bool changed = _forceThisScan || !SessionListComparer.Same(_lastPosted, sessions);
+        _forceThisScan = false;
+        if (changed) _lastPosted = sessions;
         Post(() =>
         {
-            _onSessions(sessions);
+            if (changed) _onSessions(sessions);
             ArmDeadlineTimer(deadline);
             UpdateFastPoll(fastPoll);
         });

@@ -93,4 +93,13 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Scrolled-in history | Scroll past 2,000 commits (Load more), then edit a file. | The extra pages were dropped | They stay. |
 | Subfolder | Open View tree from a session whose cwd is a subfolder of the repo, and modify a file elsewhere in the repo. | — | The "≈ no net change" marks are still right. |
 
+## PF14 (no-op scans)
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Idle CPU | With a few idle sessions and the overlay open, watch `perch.exe` CPU for a minute. | A UI update every scan | Scans that find nothing new don't touch the UI. |
+| Rows still update | Start a turn, let it finish, answer a permission prompt, rename a session (`/rename`). | Updates | Each still updates promptly. |
+| Explicit actions | Acknowledge a done row, toggle external notify, add a project note, end a dormant Perch session. | Immediate | Still immediate (these always post). |
+| Sub-agents | Run a task that spawns a sub-agent. | Its row and activity follow | The same. |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

@@ -114,7 +114,8 @@ Most of the first group are **S** changes.
 | PF11 | 44ae7b3 | Compression dropped; ReadyToRun rejected. See below. |
 | PF12 | 8fa903e | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
 | PF17 | 67ce045 | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
-| PF13 | (this commit) | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
+| PF13 | 9ed40ae | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
+| PF14 | (this commit) | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -177,6 +178,12 @@ PF13 as built (git graph window):
 - **Paused while minimised.** Watcher and busy-poll refreshes are owed while the window is minimised and run once on restore.
 - **The invisible-change check diffs only its candidate paths** (`GetWorkingTreeDiff(cwd, staged, paths)` with `:(top,literal)` pathspecs, so it works from a subfolder and a file name like `[x].txt` matches only itself). A path list too long for a command line falls back to the whole tree.
 - **A reload keeps the pages already loaded** (`pageSize = max(PageSize, loaded)`), so scrolled-in history no longer vanishes on a refresh.
+
+PF14 as built:
+- **`SessionListComparer` compares scans on the scan worker.** It uses record equality with the four list fields swapped for a shared empty array, then compares the lists element by element, recursing into sub-agent children. When a scan matches the last one posted, only the deadline and fast-poll timers are re-armed on the UI thread. The overlay update, Roost sync, session-window activity mirroring and the rest are skipped.
+- **Explicit requests always post.** That covers `Rescan`, `Reconcile`, and the acknowledge, notify and note changes queued through `OnWorker`. Some of them change what the App adds to the list (a dormant row ending) and rely on the callback to redraw. The force flag is consumed when a scan starts, so the scan that runs after the request is the one that posts.
+- **Checked against live sessions:** two scans of this machine's real `~/.claude` 4 s apart (6 sessions, 4 running) came back equal for 5 of them. The sixth genuinely differed: its sub-agent's activity had moved on. A throwaway verb printed the per-field differences; it was not committed.
+- **The resize half needed nothing.** `SizeFloatingToContent` already writes the window height only when it differs. The measure pass stays, because a posted update by definition changed something.
 
 ## Suggested order
 
