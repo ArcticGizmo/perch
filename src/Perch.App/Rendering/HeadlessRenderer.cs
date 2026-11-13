@@ -3317,6 +3317,29 @@ internal static class HeadlessRenderer
             thread.JumpToBottom();
             Settle(w);
             Console.WriteLine($"  after jump to bottom: built {Built(thread)}");
+
+            // Ctrl+F in the long thread: a phrase from a few turns, and a one-letter query that matches everywhere.
+            // Search time includes rebuilding what it must walk; a scroll frame repaints the highlights.
+            foreach (var q in new[] { "Turn 7 is green", "e" })
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                int n = thread.Search(q);
+                double searchMs = sw.Elapsed.TotalMilliseconds;
+                string built = Built(thread);
+                Settle(w);
+                sw.Restart();
+                for (int i = 0; i < 10; i++)
+                {
+                    thread.Offset = new Vector(0, Math.Max(0, thread.Offset.Y - 37));
+                    Dispatcher.UIThread.RunJobs();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                }
+                Console.WriteLine($"  find \"{q}\": {n} matches, search {searchMs:N0} ms (built {built}), " +
+                                  $"scroll frame with matches {sw.Elapsed.TotalMilliseconds / 10:N1} ms");
+                thread.ClearSearch();
+                thread.JumpToBottom();
+                Settle(w);
+            }
         }
         Close(w, thread);
         if (!bench) return;

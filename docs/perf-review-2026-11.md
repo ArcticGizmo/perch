@@ -118,7 +118,8 @@ Most of the first group are **S** changes.
 | PF14 | 576cf3d | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
 | PF15 | 1fd806b | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
 | PF16 | 0817dac | Analysis off the UI thread and throttled; runaway scan 243 → 3.8 ms; activity skips out-of-window parses. |
-| PF18 | (this commit) | Static glyph geometry; chase samples, clip and colours cached. 254 → 223 KB/frame. |
+| PF18 | 429a2fc | Static glyph geometry; chase samples, clip and colours cached. 254 → 223 KB/frame. |
+| PF19 | (this commit) | Find builds only items that can match; one owner-drawn highlight layer. Phrase search 523 → 12 ms. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -204,6 +205,19 @@ PF18 as built (overlay paint):
 - **The attention chase keeps its perimeter samples and clip** until the panel's rect or corner changes, and works out each sample's intensity and blended colour once per frame instead of once per pass. Its four passes of per-segment `DrawLine`s stay: the overlapping round caps compound the alpha, and that is the glow's look. Batching them into one stroked path would visibly dim it.
 - **Bench**, back to back against the previous commit: 254 → 223 KB allocated per frame; draw calls alone 1.41 → 1.32 ms. Mean frame time is within run-to-run noise (10.7–12.1 ms before, 11.1 ms after). Most of the remaining ~216 KB is the chase's segment records.
 - **The media strip's `FillTriangle`** takes arbitrary points per transport icon and is left as is.
+
+PF19 as built (Ctrl+F). Measured with the long-thread bench (240 items), back to back with the previous view code:
+
+| Query | Before | After |
+|---|---|---|
+| "Turn 7 is green" (1 match) | 523 ms, all 240 items built | **12 ms**, 6 built |
+| "e" (7,320 matches) | 685 ms | 411 ms |
+| Scroll frame with matches up | 4–7 ms | 5–6 ms (noise) |
+
+- **Search builds only items that could match.** That's items already built, plus dehydrated ones whose model text holds the query (`ConversationFind`). It compares letters and digits only, lower-cased, so Markdown markers, punctuation and line breaks don't hide a phrase. A tool's input is matched on its decoded string values. A query with no letters or digits narrows nothing.
+- **Known gap:** text a card derives rather than stores (a tool's "Read 42 lines" summary, status labels) is found only in items already built, near the viewport.
+- **One owner-drawn `FindLayer`** paints every highlight with cached brushes, skipping matches more than 400 DIPs outside the viewport using their item's wrapper bounds. It replaces a `Border` per match, which was rebuilt and re-measured on every reflow (every streamed frame). It repaints on scroll and reflow.
+- What's left of the one-letter case is the walk and glyph mapping over 7,000 matches. Indexing the model text would go further, but it isn't worth it for a one-character query, which only searches on Enter since PF8.
 
 ## Suggested order
 

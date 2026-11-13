@@ -118,4 +118,14 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Findings unchanged | Open an old recording (Load). | — | The same findings, including "busy for …" runaways. |
 | Activity lane | Record while a session works. | Tool calls appear | Still appear (the window's last few minutes are parsed as before). |
 
+## PF18 and PF19
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Glyphs | Look over rows with IDE icons, PR (incl. approved tick), Jira, mail, note, Markdown, warning, mode chevrons; the GitHub and To-do strips; at 100% and 150% scaling. | — | Identical. |
+| Attention chase | Let a session finish to trigger the chase. | Neon comet around the panel | The same. |
+| Find a phrase in a long session | Ctrl+F, type a phrase from an early turn of a long session. | A pause before results | Near-instant. The highlights and next/previous work as before. |
+| Find while streaming | Search for a common word, then send a prompt and watch while it streams. | Stutter as every highlight was rebuilt per frame | Smooth. |
+| Find text inside an edit | Search for a line from an Edit diff far up the thread. | Found | Found. |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

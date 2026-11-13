@@ -34,7 +34,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
     private readonly SessionPalette _p;
     private readonly StackPanel _stack;
     private readonly Panel _content;           // the scrolled content: the column plus the layers drawn over it
-    private readonly Canvas _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
+    private readonly FindLayer _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
     private readonly BlockSelection _selection; // drag-select across blocks (a heading and its paragraph, list items, messages)
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
     private readonly Dictionary<CompactionItem, CompactionCard> _compactions = new();
@@ -223,7 +223,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         };
         // The find-match overlay sits above the thread in the same scrolled coordinate space, so its
         // translucent rectangles ride along as the content scrolls. Click-through so it never eats selection.
-        _highlightLayer = new Canvas { IsHitTestVisible = false };
+        _highlightLayer = new FindLayer(this) { IsHitTestVisible = false };
         // Each Markdown block is its own SelectableTextBlock, whose native selection can't leave it; the shared
         // cross-block selection lets a drag run across blocks and messages. It only starts on text, so presses on
         // cards, buttons and empty space behave as before.
@@ -240,8 +240,10 @@ internal sealed partial class SessionThreadView : ScrollViewer
             RecomputeScrollState();   // keep the floating jump buttons in sync with every scroll/growth
             QueueRealize();           // build what scrolled near, drop what scrolled far
             UpdateSticky();           // pin (or move, or drop) the header of the tall card the viewport is inside
-            // A reflow (extent changed — expand/collapse, streaming) moves match rectangles; repaint them.
-            if (e.ExtentDelta.Y != 0) { if (_matches.Count > 0) RefreshHighlightLayer(); return; }
+            // The layer paints only the matches near the viewport, so any scroll or reflow (expand/collapse,
+            // streaming) repaints it. Repainting reads only those matches' positions, never the whole list's.
+            if (_matches.Count > 0) RefreshHighlightLayer();
+            if (e.ExtentDelta.Y != 0) return;
             if (e.OffsetDelta.Y == 0) return;
             _stickToBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
         };
@@ -326,7 +328,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         _wraps.Clear();
         _matches.Clear();
         _matchCurrent = -1;
-        _highlightLayer.Children.Clear();
+        _highlightLayer.InvalidateVisual();
         _compactions.Clear();
         _selection.Reset();
         ClearSticky();
@@ -711,14 +713,6 @@ internal sealed partial class SessionThreadView : ScrollViewer
         }, DispatcherPriority.Loaded);
     }
 
-    // Rebuilds every dehydrated item and settles layout — before anything that walks the rendered text (find).
-    private void HydrateAll()
-    {
-        bool any = false;
-        foreach (var (item, wrap) in _wraps)
-            if (wrap.Child is null) { Hydrate(item, wrap); any = true; }
-        if (any) UpdateLayout();
-    }
 
     private void UpdateItem(ConversationItem item)
     {
@@ -763,11 +757,21 @@ internal sealed partial class SessionThreadView : ScrollViewer
         ClearSearch();
         if (_conv is null || string.IsNullOrWhiteSpace(query)) return 0;
         FlushBacklog();
-        HydrateAll();   // the walk reads rendered text; nothing is dropped again while matches are up
+        // The walk reads rendered text, so a dehydrated item that could match is rebuilt first; one whose model can't
+        // hold the query is skipped rather than rebuilt (PF19). Nothing is dropped again while matches are up.
+        var key = ConversationFind.Key(query);
+        bool anyHydrated = false;
+        foreach (var item in _conv.Items)
+            if (_wraps.TryGetValue(item, out var w) && w.Child is null && (key is null || ConversationFind.MayContain(item, key)))
+            {
+                Hydrate(item, w);
+                anyHydrated = true;
+            }
+        if (anyHydrated) UpdateLayout();
 
         for (int itemIndex = 0; itemIndex < _conv.Items.Count; itemIndex++)
         {
-            if (!_wraps.TryGetValue(_conv.Items[itemIndex], out var wrap)) continue;
+            if (!_wraps.TryGetValue(_conv.Items[itemIndex], out var wrap) || wrap.Child is null) continue;
             var collapsedSeen = new HashSet<Control>();   // dedup: one hit per collapsed section within this item
             foreach (var tb in wrap.Child?.GetVisualDescendants().OfType<TextBlock>() ?? [])
             {
@@ -834,7 +838,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
     /// <summary>Clear all find highlighting and match state (find bar closed, or the query emptied).</summary>
     public void ClearSearch()
     {
-        _highlightLayer.Children.Clear();
+        _highlightLayer.InvalidateVisual();
         _matches.Clear();
         _matchCurrent = -1;
         QueueRealize();   // find hydrated everything; let the far items go again
@@ -843,25 +847,35 @@ internal sealed partial class SessionThreadView : ScrollViewer
     // Repaint the overlay: every match dim, the current one brighter. Rectangles are computed from each match's
     // glyph geometry (or its collapsed card's bounds) and placed in the layer's coordinate space, which is the
     // scrolled content's — so they track the text as it scrolls. Cheap; called on search, navigation and reflow.
-    private void RefreshHighlightLayer()
-    {
-        _highlightLayer.Children.Clear();
-        if (_matches.Count == 0) return;
+    private void RefreshHighlightLayer() => _highlightLayer.InvalidateVisual();
 
-        var dim = new SolidColorBrush(Tint(0x2E));
-        var cur = new SolidColorBrush(Tint(0x66));
+    // One owner-drawn layer for every match, painting only those near the viewport (PF19). It replaced a Border per
+    // match, all rebuilt and re-measured on every reflow: a streaming reply reflows each frame, and a one-letter query
+    // in a long thread has thousands of matches.
+    private sealed class FindLayer(SessionThreadView owner) : Control
+    {
+        public override void Render(DrawingContext context) => owner.PaintMatches(context);
+    }
+
+    // How far beyond the viewport a match is still painted, so a short scroll doesn't show it arriving late.
+    private const double MatchPaintMargin = 400;
+
+    private void PaintMatches(DrawingContext ctx)
+    {
+        if (_matches.Count == 0 || _conv is not { } conv) return;
+        var dim = OverlayDraw.Brush(Tint(0x2E));
+        var cur = OverlayDraw.Brush(Tint(0x66));
+        double top = Offset.Y - MatchPaintMargin, bottom = Offset.Y + Viewport.Height + MatchPaintMargin;
         for (int i = 0; i < _matches.Count; i++)
         {
+            var m = _matches[i];
+            // The item's wrapper places it in the column without mapping any glyphs; most matches stop here.
+            if (m.ItemIndex < conv.Items.Count && _wraps.TryGetValue(conv.Items[m.ItemIndex], out var wrap)
+                && RowTop(wrap) is { } y && (y > bottom || y + wrap.Bounds.Height < top))
+                continue;
             var brush = i == _matchCurrent ? cur : dim;
-            foreach (var r in RectsFor(_matches[i]))
-            {
-                var box = new Border { Background = brush, CornerRadius = new CornerRadius(2), IsHitTestVisible = false };
-                Canvas.SetLeft(box, r.X);
-                Canvas.SetTop(box, r.Y);
-                box.Width = r.Width;
-                box.Height = r.Height;
-                _highlightLayer.Children.Add(box);
-            }
+            foreach (var r in RectsFor(m))
+                ctx.DrawRectangle(brush, null, new RoundedRect(r, 2));
         }
     }
 
