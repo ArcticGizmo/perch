@@ -62,6 +62,47 @@ public sealed class TranscriptFoldTests : IDisposable
     }
 
     [Fact]
+    public void Prefetch_folds_many_files_in_parallel_the_same_as_one_at_a_time()
+    {
+        var paths = Enumerable.Range(0, 24).Select(f =>
+        {
+            var p = P($"f{f}.jsonl");
+            File.WriteAllText(p, string.Concat(Enumerable.Range(0, 50 + f * 13).Select(i => Rec(f * 1000 + i) + "\n")));
+            return p;
+        }).ToList();
+        var missing = P("missing.jsonl");
+
+        var serial = new TranscriptFold(Lines);
+        var expected = paths.Select(p => Get(serial, p)).ToList();
+
+        var parallel = new TranscriptFold(Lines);
+        parallel.Prefetch([.. paths, missing], maxParallel: 4);
+        Assert.Equal(serial.BytesRead, parallel.BytesRead);
+        long afterPrefetch = parallel.BytesRead;
+        Assert.Equal(expected, paths.Select(p => Get(parallel, p)).ToList());
+        Assert.Equal(afterPrefetch, parallel.BytesRead);   // Get took what Prefetch read
+        Assert.Equal(["<fallback>"], Get(parallel, missing));
+    }
+
+    [Fact]
+    public void After_a_prefetched_get_the_next_get_sees_new_appends()
+    {
+        File.WriteAllText(P(), Rec(1) + "\n");
+        var fold = new TranscriptFold(Lines);
+        fold.Prefetch([P()], maxParallel: 2);
+        Assert.Single(Get(fold, P()));
+
+        Append(P(), Rec(2) + "\n");
+        Assert.Equal(2, Get(fold, P()).Count);
+
+        // A path prefetched but never read takes a fresh look at the next Prefetch.
+        fold.Prefetch([P()], maxParallel: 2);
+        Append(P(), Rec(3) + "\n");
+        fold.Prefetch([P(), P("other.jsonl")], maxParallel: 2);
+        Assert.Equal(3, Get(fold, P()).Count);
+    }
+
+    [Fact]
     public void An_unchanged_file_costs_no_read()
     {
         File.WriteAllText(P(), Rec(1) + "\n" + Rec(2) + "\n");

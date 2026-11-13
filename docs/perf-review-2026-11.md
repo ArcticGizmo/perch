@@ -236,6 +236,17 @@ Tier 3, flight path, as built. Back to back on this machine's history, with iden
 - **Each day's scan is cancellable**, and the window cancels the last one when you step to another day or close it. Holding ← used to queue a full scan per press.
 - **Left out:** a creation-time prefilter, because a copied transcript gets a new creation time and would vanish from its own past days. Reading from `SessionStatsCache` would serialise with the Stats window and could start a cold build. What remains is decoding every line of each transcript touched since the day; a byte-level peek like the transcript search's would cut it further if this still feels slow.
 
+Tier 3, cold stats rebuild, as built. All-time report over this machine's transcripts untouched in the last hour (2.2 GB), with a fresh in-memory cache, back to back; the serialised reports were identical:
+
+| | Before | After |
+|---|---|---|
+| Cold build | 9.2–10.5 s | **3.2–3.9 s** |
+| Warm report | 189–260 ms | 165–196 ms |
+
+- **`TranscriptFold.Prefetch`** brings every changed transcript up to date across up to 8 cores, biggest first, before the report reads them one by one. Each worker touches only its own file's entry; the fold's byte and generation counters are now atomic. The stat pass runs in parallel too, and the next `Get` of each path uses what Prefetch saw, so a warm report doesn't stat every file twice.
+- **Not done: the fast path for tool_result-only user lines.** Telling such a line apart from one with a text block needs most of a parse anyway, and with the parse spread across cores the rebuild is now mostly read and decode. Allocation is unchanged (about 10.5 GB for 2.2 GB of transcripts).
+- Teammate transcripts still fold one at a time; they're a small share of the bytes.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.

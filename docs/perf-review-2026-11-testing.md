@@ -137,6 +137,8 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Refining picks up new text | With a search finished, say the new word in a live session, then extend the query to it. | — | The live session shows up. |
 | Flight path stepping | Open the flight path, then hold ← for a couple of seconds and release. | CPU stays busy for a while as each day's scan runs in turn | The day you stop on loads; the skipped days' scans stop at once. |
 | Flight path unchanged | Look at today, yesterday and a day a few weeks back, including a session that ran across midnight. | — | The same lanes, colours, project and branch names. |
+| Cold stats rebuild | Quit Perch, delete `stats-cache.bin` beside `settings.json`, start it, and open Stats → All time. | About 10 s of "loading" on a big history | A few seconds, with every core busy briefly. |
+| Stats unchanged | Compare the All time, Last 7 days and Today figures, and the Achievements window, with the release build. | — | The same numbers. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.
