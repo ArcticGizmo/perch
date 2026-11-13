@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.11] - 2026-11-13
+
+- Resuming a long session no longer freezes the window
+- Edit cards build three times faster
+- Find in a session lands on a phrase near-instantly
+- Transcript search about 3x faster; refining a query is near-instant
+- Stats rebuild from scratch in a third of the time
+- Flight path days load faster (holding ← no longer queues a scan per press)
+- Git graph refreshes only what changed, and keeps history you scrolled in
+- Background polls rest while your screen is locked (they've earned it)
+- Less memory, both at launch and after days of uptime
+- Settings text fields save when you pause typing
+- Hidden spinners stop spinning for nobody
+
+---
+
 ## [v0.6.10] - 2026-11-12
 
 - Status lines with git counts refresh about 3x faster (it was mostly waiting on git; re-apply your profile)
