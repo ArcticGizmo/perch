@@ -266,6 +266,10 @@ Tier 3, session window items, as built:
 - **The branch chip and changed-files timers restart only when a tool call newly finishes** (and isn't a read-only tool such as Read, Grep or WebFetch), not on every streamed delta.
 - **The slash palette and @-mention list restyle two rows on hover** instead of rebuilding every row, which also stops a hover from scrolling the list. Arrow keys still scroll the highlighted row into view.
 
+Tier 3, diagnostic windows, as built:
+- **`HookActivityView`** repaints on a pointer move only when the hovered card header or event row changes (judged against the last paint's hit areas).
+- **`ResourceTimelineView` is left as is.** Its guide line and tooltip follow the pointer, so a move genuinely changes the picture, and it already skipped moves that land on the same point. Its band geometry and activity lane are cached per analysis and width, so a hover repaint is cached-path draws plus text. Splitting the tooltip into its own layer would save rasterising the charts, which can wait until the window feels slow.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.

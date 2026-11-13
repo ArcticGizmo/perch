@@ -147,6 +147,7 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Branch chip | Ask Claude to `git checkout -b` a new branch, and separately to just explain some code. | The chip updates after the checkout | The same; the explanation alone no longer schedules branch reads. |
 | Changed files panel | Open the panel, have Claude edit two files. | The list refreshes | The same, about a second after each edit lands. |
 | Palette and @ hover | Type `/` and move the mouse down the list; then type `@` and do the same. Use ↑/↓ too. | The highlight follows | The same. The list no longer jumps while hovering; arrow keys keep the highlight in view. |
+| Hook activity hover | Open the hook activity view, move the mouse over card headers and event rows, and off them. | Rows light up | The same; the highlight follows from row to row and clears off them. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.
