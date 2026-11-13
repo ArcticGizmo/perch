@@ -32,12 +32,14 @@ internal static class GraphLoader
         // worktree's status and the log run side by side: the query names branches rather than resolved hashes, so
         // none of them waits on another.
         var trees = ScanWorktrees(root);
-        var (query, baseRef, candidates) = QueryFor(scope, root, trees, baseOverride, hidden);
-        Mark("scope");
         var refsTask = Task.Run(() => GraphLogReader.LoadRefs(root));
-        var logTask = Task.Run(() => GraphLogReader.ReadLog(root, pageSize, 0, query));
         var statusTask = Task.Run(() => ReadStatuses(trees));
         var stashTask = Task.Run(() => GraphLogReader.LoadStashes(root));
+        // Only the log needs the scope's query, and the Branch scope runs git to build it (base candidates and the
+        // merge base), so the rest is already under way meanwhile.
+        var (query, baseRef, candidates) = QueryFor(scope, root, trees, baseOverride, hidden);
+        Mark("scope");
+        var logTask = Task.Run(() => GraphLogReader.ReadLog(root, pageSize, 0, query));
         Task.WaitAll(refsTask, logTask, statusTask, stashTask);
         Mark("git: refs, status, log, stashes");
         var refs = refsTask.Result;

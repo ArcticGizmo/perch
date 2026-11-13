@@ -148,6 +148,7 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Changed files panel | Open the panel, have Claude edit two files. | The list refreshes | The same, about a second after each edit lands. |
 | Palette and @ hover | Type `/` and move the mouse down the list; then type `@` and do the same. Use ↑/↓ too. | The highlight follows | The same. The list no longer jumps while hovering; arrow keys keep the highlight in view. |
 | Hook activity hover | Open the hook activity view, move the mouse over card headers and event rows, and off them. | Rows light up | The same; the highlight follows from row to row and clears off them. |
+| Git graph, Branch scope | From a feature branch, open View tree and switch to the Branch scope; pick another base from its menu. | Loads | Loads a little sooner, with the same rows, lanes and base candidates. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

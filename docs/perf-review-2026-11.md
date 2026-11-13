@@ -270,6 +270,10 @@ Tier 3, diagnostic windows, as built:
 - **`HookActivityView`** repaints on a pointer move only when the hovered card header or event row changes (judged against the last paint's hit areas).
 - **`ResourceTimelineView` is left as is.** Its guide line and tooltip follow the pointer, so a move genuinely changes the picture, and it already skipped moves that land on the same point. Its band geometry and activity lane are cached per analysis and width, so a hover repaint is cached-path draws plus text. Splitting the tooltip into its own layer would save rasterising the charts, which can wait until the window feels slow.
 
+Tier 3, git graph items, as built:
+- **`LaneAllocator`** drops a row's duplicate edges with a reused `HashSet` instead of `List.Contains`, which was quadratic in the lanes open at that row. Duplicates still occur (two merge parents bound for lane 0), so the dedupe stays.
+- **The Branch scope's base-ref and merge-base lookups now overlap** the refs, status and stash reads, which don't depend on them; only the log walk waits for its query. On this repo, from a feature branch: 565 → 520 ms median over 7 loads. The log walk is the long pole, so the rest of the git stage is mostly hidden behind it already.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.
