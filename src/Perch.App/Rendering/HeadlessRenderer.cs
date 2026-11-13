@@ -3075,6 +3075,7 @@ internal static class HeadlessRenderer
 
         RenderStreaming(outDir, cwd);
         RenderLongThread(outDir, cwd);
+        ResumeBench.Run(outDir, cwd);
         RenderStickyHeaders(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,

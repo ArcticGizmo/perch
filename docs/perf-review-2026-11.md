@@ -111,7 +111,8 @@ Most of the first group are **S** changes.
 | PF9 | a67d6ae | |
 | PF10 | cd2675b | Mutex probe 3.4 ms vs 13 ms by name. |
 | PF6 | ab3a544 | See below. |
-| PF11 | (this commit) | Compression dropped; ReadyToRun rejected. See below. |
+| PF11 | 44ae7b3 | Compression dropped; ReadyToRun rejected. See below. |
+| PF12 | (this commit) | Resume bench added; UI-thread block 5,200 → 21 ms. See below. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -142,6 +143,17 @@ The tray itself wasn't launched: a dev-profile launch rewrites the dev hook mark
 - **Compression** only saves 2 MB of download, because Velopack's package is a zip anyway. In exchange it holds every loaded assembly decompressed in private memory for the life of the tray: 23 MB more in the Roost probe and 88 MB more in the render probe. It's now off in `publish.bat` and `release.yml`; the macOS publish never had it.
 - **ReadyToRun** is rejected. It nearly doubles the download (+38 MB), and no startup win showed: launch time on this machine tracks file size, because EDR scans the whole exe on each start (see the `--version` medians), and `bench-roost` timing was within its own ±1 s noise. In addition, every `render` run of both R2R builds died with an access violation in Skia's PNG encoder, reached through `CaptureRenderedFrame().Save` in `HeadlessRenderer` (0 of 6 non-R2R runs did). That suggests a lifetime bug in the headless capture path that R2R's different GC and JIT timing exposes. It's test-harness only, and worth a look if the render harness ever crashes on CI.
 - The real tray number now lands in `launch.log` on every start (`startup: overlay open N ms after process start`). Compare it across the next release to confirm the cold start didn't regress.
+
+PF12 as built. A resume bench (`Rendering/ResumeBench.cs`, part of `PERCH_BENCH=1 … render`) loads a transcript into a conversation already bound to a full-size thread, as a resumed session window does. It uses a synthetic 400-turn transcript and, if set, the file named by `PERCH_RESUME_TRANSCRIPT`.
+
+| Transcript | Lines → items | UI-thread block before | After | Longest background slice after |
+|---|---|---|---|---|
+| Synthetic, 400 turns | 4,800 → 800 | 5,200 ms + 46 ms parse | **21 ms** | 41 ms |
+| A real 14 MB transcript | 1,710 → 24 | 1,679 ms + 49 ms parse | **187 ms** | 132 ms (one 100-tool turn is one item) |
+
+- **Almost all of the freeze was building every item at bind, not parsing.** Full windows now use the newest-first backlog the Roost's panes already had: the newest 6 items are built at once, and older ones are prepended in ~6 ms background slices that input runs between. This covers resume, `/clear`, rewind and every theme change, because they all rebind. Everything that walks the whole thread (find, jump to top or to the previous prompt, revealing a background task, rewind selection) already flushed the backlog first.
+- **The parse moved to the worker** (`SessionConversation.ParseHistory`, then `LoadHistory(parsed)` on the UI thread), and `StreamJsonParser.Parse(JsonNode)` reuses the parse that classified the line, so each line is parsed once. Image recovery runs on the worker too.
+- **Still open: the background build costs the full price.** The bench's back-to-back drain is about 7.3 s for the synthetic transcript: older items are built, measured and then mostly dehydrated again by virtualization. Prepending them as estimated-height placeholders that `Realize` hydrates on approach would skip most of that work. `Realize` already corrects the offset when a placeholder above the viewport comes back a different height, but the scrollbar and prompt-jump targets would be estimates until visited. PF17 (cached diffs, lazy fold cards) makes each build cheaper, so do that first and re-measure.
 
 ## Suggested order
 

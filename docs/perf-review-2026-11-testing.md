@@ -56,4 +56,16 @@ Compare the installed v0.6.10 (before) with the first release cut from this bran
 | Cold start | After a reboot (or with the tray quit for a while), start Perch and read the last `startup:` line in `%APPDATA%\Perch\logs\launch.log`. | No `startup:` line (v0.6.10 doesn't write it) | `startup: overlay open N ms after process start`. Note N across a few launches, so the next release can be compared. |
 | Download and install size | Look at the release assets and `%LOCALAPPDATA%\Perch\current\perch.exe`. | Setup about 64 MB, perch.exe 50 MB | Setup about 2 MB bigger, perch.exe about 115 MB |
 
+## PF12 (resume without freezing)
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Resume a long session | In the session launcher, resume your longest session (several MB of transcript). Try to scroll or type as soon as the window appears. | The window paints, then freezes for one to several seconds before anything responds | The newest turns show at once and respond. Older turns fill in above over the next seconds; the scrollbar grows as they arrive. |
+| Scrolled up while it loads | Right after resuming, scroll up. | — | The view stays where you put it as older items are added above (no jumps). |
+| Jump to top / previous prompt | Right after resuming, click jump-to-top, then the previous-prompt button a few times. | Works | Works the same: it builds anything not yet built first, so it may pause briefly the first time. |
+| Ctrl+F straight after resume | Search for a word from the first prompt. | Finds it | Still finds it. |
+| Theme change | Open a long session and switch theme in Settings → Appearance. | Each open session window stalls | Newest content re-tints at once; the rest follows. |
+| `/clear` and rewind | Run `/clear` in a long session, or rewind to an early prompt. | A stall while the column rebuilds | No stall. |
+| Bench | `PERCH_BENCH=1` render, optionally with `PERCH_RESUME_TRANSCRIPT=<path to a .jsonl>` | `resume bench` lines are new | UI block about 20 ms (synthetic) |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

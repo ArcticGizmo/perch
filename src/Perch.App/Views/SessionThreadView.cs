@@ -43,13 +43,18 @@ internal sealed partial class SessionThreadView : ScrollViewer
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
 
-    // Compact threads materialise newest-first: Bind builds the last EagerItems items, then older ones are
-    // prepended in time-boxed batches at background priority. _backlog = how many of the bound conversation's
+    // Threads materialise newest-first: Bind builds the last EagerItems items, then older ones are prepended in
+    // time-boxed batches at background priority, so a resumed history, /clear, rewind or theme change never builds
+    // the whole column in one UI-thread block (perf review PF12). _backlog = how many of the bound conversation's
     // leading items aren't built yet; _bindGen invalidates a pending batch when the view rebinds or unbinds.
     private const int EagerItems = 6;
     private static readonly TimeSpan BacklogSlice = TimeSpan.FromMilliseconds(6);
     private int _backlog;
     private int _bindGen;
+
+    /// <summary>Render bench only: the longest backlog slice since the bench last reset it, in ms. A slice always
+    /// builds at least one item, so one huge turn can overrun <see cref="BacklogSlice"/>.</summary>
+    internal static double LongestBacklogSliceMs;
 
     // Ctrl+F find. Each item's Root is wrapped in a Border (so a hidden/collapsed section can be located by
     // its visible card). Matches are painted as translucent rectangles in an overlay layer above the thread
@@ -277,10 +282,9 @@ internal sealed partial class SessionThreadView : ScrollViewer
         Unbind(keepExpandState: ReferenceEquals(conversation, _expandOwner));   // a rebuild (reset, restyle) keeps what was open
         _conv = conversation;
         _expandOwner = conversation;
-        // Unbind cleared the column. A compact (Roost) thread builds its newest items now and the older ones in
-        // background batches.
+        // Unbind cleared the column. Build the newest items now and the older ones in background batches.
         var items = conversation.Items;
-        _backlog = Compact ? Math.Max(0, items.Count - EagerItems) : 0;
+        _backlog = Math.Max(0, items.Count - EagerItems);
         for (int i = _backlog; i < items.Count; i++) AddItem(items[i]);
         if (_backlog > 0) ScheduleBacklog(_bindGen);
         conversation.Changed += OnChanged;
@@ -328,7 +332,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         ClearSticky();
     }
 
-    // History landed in front of the live items: rebuild the whole column (cheap — a few hundred controls).
+    // History landed in front of the live items: rebuild the column, newest first.
     private void OnReset()
     {
         if (_conv is { } c) Bind(c);
@@ -440,6 +444,7 @@ internal sealed partial class SessionThreadView : ScrollViewer
         var started = System.Diagnostics.Stopwatch.StartNew();
         do PrependNext(conv);
         while (_backlog > 0 && started.Elapsed < BacklogSlice);
+        LongestBacklogSliceMs = Math.Max(LongestBacklogSliceMs, started.Elapsed.TotalMilliseconds);
         if (!_stickToBottom)
             Dispatcher.UIThread.Post(() =>
             {
