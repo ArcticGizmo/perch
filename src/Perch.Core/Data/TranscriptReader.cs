@@ -62,6 +62,19 @@ internal sealed class TranscriptReader
     /// <summary>Bytes the whole-file readers have read from disk (test/benchmark probe; see <see cref="TranscriptFold"/>).</summary>
     internal long FoldBytesRead => _fold.BytesRead;
 
+    /// <summary>Forgets transcripts not read for <paramref name="idle"/>; see <see cref="TranscriptFold.Sweep"/>.</summary>
+    internal void Sweep(TimeSpan idle)
+    {
+        _fold.Sweep(idle);
+        _activity.Sweep(idle);
+        _burnRate.Sweep(idle);
+        _bareCommand.Sweep(idle);
+        _interrupted.Sweep(idle);
+        _awaitingAssistant.Sweep(idle);
+        _stuck.Sweep(idle);
+        _apiError.Sweep(idle);
+    }
+
     // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
     // real transcripts (see the throwaway analysis behind this feature): with proper per-command
     // fingerprinting a window of 10 cleanly separates a genuine retry-the-same-failing-thing loop

@@ -64,6 +64,15 @@ internal sealed class SubAgentReader
         _legacy = parentFold ?? new(LegacyFolder);
     }
 
+    /// <summary>Forgets transcripts and agent sidecars not read for <paramref name="idle"/>; see
+    /// <see cref="TranscriptFold.Sweep"/>.</summary>
+    internal void Sweep(TimeSpan idle)
+    {
+        _legacy.Sweep(idle);
+        _agentState.Sweep(idle);
+        _meta.Sweep(idle);
+    }
+
     /// <summary>
     /// Returns the sub-agents currently working under the given session as a tree (each
     /// <see cref="SubAgent.Children"/> holds the agents it has itself spawned), or an empty list if the

@@ -279,6 +279,21 @@ internal sealed class SessionMonitor : IDisposable
         EnsureWatchers();
     }
 
+    // Every scan reads each live session's transcript, so anything unread for this long belongs to a session that
+    // has ended; its cached state goes rather than piling up over a tray's weeks of uptime.
+    private static readonly TimeSpan SweepIdle = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan SweepEvery = TimeSpan.FromMinutes(10);
+    private long _nextSweepMs = Environment.TickCount64 + (long)SweepEvery.TotalMilliseconds;
+
+    private void SweepIfDue()
+    {
+        long now = Environment.TickCount64;
+        if (now < _nextSweepMs) return;
+        _nextSweepMs = now + (long)SweepEvery.TotalMilliseconds;
+        _transcripts.Sweep(SweepIdle);
+        _subAgents.Sweep(SweepIdle);
+    }
+
     public IReadOnlyList<ClaudeSession> Scan()
     {
         // Pick up a config dir that appeared since the last scan (throttled; a no-op while pinned).
@@ -286,6 +301,7 @@ internal sealed class SessionMonitor : IDisposable
 
         // A sessions directory may be created after we start; (re)attach watchers lazily.
         EnsureWatchers();
+        SweepIfDue();
 
         var sessions = new List<ClaudeSession>();
         var now = Clock.Now;

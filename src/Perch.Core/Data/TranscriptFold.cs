@@ -101,6 +101,16 @@ internal sealed class TranscriptFold
         if (_entries.Remove(path)) Interlocked.Increment(ref _generation);
     }
 
+    /// <summary>Drops the state for every file not read for <paramref name="idle"/>, so a long-running reader
+    /// doesn't hold state for every transcript it ever saw. A dropped file is folded from the start if it's
+    /// read again.</summary>
+    internal void Sweep(TimeSpan idle)
+    {
+        long cutoff = Environment.TickCount64 - (long)idle.TotalMilliseconds;
+        foreach (var (path, e) in _entries)
+            if (e.LastUsedMs < cutoff) Forget(path);
+    }
+
     /// <summary>Brings every file in <paramref name="paths"/> up to date, several at once, so a cold build (a fresh
     /// install, a fold-version bump) isn't one core parsing the whole history. Each file's read and fold run on one
     /// worker and touch only that file's entry, so the folders' steps must not share mutable state across files.
@@ -169,6 +179,7 @@ internal sealed class TranscriptFold
         public object[] States = [];
         public int Version;               // bumps whenever any state changes, so derived results can be cached
         public bool Prefetched;           // Prefetch just brought it up to date, so the next Get needn't stat it
+        public long LastUsedMs = Environment.TickCount64;
         public readonly Dictionary<int, (int Version, object? Result)> Results = new();
     }
 
@@ -201,10 +212,14 @@ internal sealed class TranscriptFold
     // caller's fallback applies, and the entry keeps its last good state for the next attempt).
     private Entry Advance(string path)
     {
-        if (_entries.TryGetValue(path, out var fresh) && fresh.Prefetched)
+        if (_entries.TryGetValue(path, out var known))
         {
-            fresh.Prefetched = false;
-            return fresh;
+            known.LastUsedMs = Environment.TickCount64;
+            if (known.Prefetched)
+            {
+                known.Prefetched = false;
+                return known;
+            }
         }
         var fi = new FileInfo(path);
         long length = fi.Length;   // throws FileNotFoundException for a missing file
