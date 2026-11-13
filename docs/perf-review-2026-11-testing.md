@@ -142,6 +142,7 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Open in GitKraken | With GitKraken's CLI on PATH, right-click a git session row a few seconds after launch. | "Open in GitKraken" | Still there. Without the CLI, still absent. |
 | Long uptime | Leave Perch running for a working day with sessions starting and ending, and note `perch.exe`'s private memory morning and evening. | Creeps up with every session | Levels off. Rows, task lists and sub-agents of running sessions are unaffected. |
 | Resume after a break | End a session, wait over 40 minutes, resume it. | Its row details return | The same (its transcript is folded again from the start). |
+| File links | In a session, ask Claude to create a new file and name it in its reply; then scroll a long thread up and down. | Links appear | The new file's link still appears (within half a minute if it was named before it was written). Paths that exist stay clickable. |
 | Search results unchanged | Search a Windows path (`C:\src`), a quoted phrase, an accented word (`café`), and with "Tools & thinking" on and off. | — | The same sessions and hits as before. |
 
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

@@ -259,6 +259,8 @@ Tier 3, unbounded caches, as built:
   - `TranscriptLocator`'s hit and miss maps are already capped at 4,096, and the shared tail cache at 256.
   - The stats cache prunes itself on every all-time report.
 
+Tier 3, file-ref probes, as built: `FileRefResolver` keeps a found path for 10 minutes and a missing one for 30 seconds (both were 5 seconds), and a full cache (now 4,096 spans) drops its least recently used half instead of emptying. Scrolling back through a settled thread no longer stats every inline path again. The probe itself still runs on the UI thread on a cache miss; moving it off would mean re-rendering a span when its answer lands, which isn't worth it for one `File.Exists` per new span.
+
 ## Suggested order
 
 1. **Batch A (one sitting, all S):** PF1, PF2, PF3, PF4, PF5, PF7, PF8 (the debounce), PF9, PF10. Verify with the existing render bench, the fold equivalence tests and a fresh PERCH_BENCH run.
