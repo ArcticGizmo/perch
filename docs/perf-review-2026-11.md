@@ -116,7 +116,8 @@ Most of the first group are **S** changes.
 | PF17 | 67ce045 | Cached parse and diff; diff as one text block. Lazy folds not done. See below. |
 | PF13 | 9ed40ae | Status-only refresh for edits, single-flight, paused while minimised, scoped diff, pages kept. |
 | PF14 | 576cf3d | A scan that changed nothing isn't posted to the UI. Resize part already guarded. |
-| PF15 | (this commit) | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
+| PF15 | 1fd806b | One fold per transcript, one shared tail, cached Resolve hits and settings model. |
+| PF16 | (this commit) | Analysis off the UI thread and throttled; runaway scan 243 → 3.8 ms; activity skips out-of-window parses. |
 
 PF6 as built:
 - **Usage, service status and the social feed** wait out a locked desktop. A new `Services/LockWatch` samples `ISessionLock` every 5 s and runs each skipped poller's catch-up at unlock. Only the cadence tick is held: a manual refresh, a settings change or a realtime nudge still polls.
@@ -191,6 +192,11 @@ PF15 as built:
 - **One tail per change.** The seven tail readers (activity, burn rate, stuck, API error, bare command, interrupted, awaiting assistant) used to read the same 32 KB tail each. They now share `TranscriptScan.CachedTailLines`, cached by (path, length, last write), so a change costs one read.
 - **`TranscriptLocator.Resolve` keeps a found path for 2 s.** Each reader resolves the transcript itself, about a dozen times per session per scan, and each call used to encode the cwd and stat the file. `EncodeProjectDir` is now a plain loop instead of a regex (pinned to the regex by a test, including non-ASCII and surrogate pairs).
 - **The settings `model` lookup** (up to three `settings.json` files on each transcript growth) is cached per file by length and mtime.
+
+PF16 as built (resource monitor), measured on a real 5.2 MB recording (1,781 ticks, 5,193 processes):
+- **The runaway-process scan walks each process's own samples** (`ResourceAnalysis.BusyRuns`) instead of every tick of the recording per process: **243 ms → 3.8 ms**, the same 146 runs. A randomized test pins it to the old scan, including ties for the peak, gaps where a process is absent, and values exactly at the threshold. A full analysis now builds in about 248 ms, down from roughly 490 ms.
+- **The analysis builds on a worker** from `ResourceRecording.Snapshot()`, single-flight, with a rerun if the recording moved meanwhile. While recording, the next build waits at least four times as long as the last one took, so analysis stays under a fifth of a core however long the recording runs. The view shows the previous analysis until the next lands, at most one tick behind.
+- **The activity lane's transcript re-read skips parsing records more than a minute outside the window**, using the timestamp text first. Recording a long session used to fully JSON-parse its whole transcript every 30 s.
 
 ## Suggested order
 

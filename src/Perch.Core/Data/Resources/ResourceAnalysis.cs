@@ -520,11 +520,8 @@ public sealed partial class ResourceAnalysis
         var found = new List<(ResourceFinding finding, double weight)>();
         foreach (var (id, series) in SeriesByProc())
         {
-            var byTick = series.ToDictionary(x => x.tick, x => x.sample.Cpu);
-            foreach (var (start, end) in Runs(i => byTick.GetValueOrDefault(i) >= threshold, minTicks))
+            foreach (var (start, end, peak, avg) in BusyRuns(series, threshold, minTicks))
             {
-                int peak = PeakOf(start, end, i => byTick.GetValueOrDefault(i));
-                double avg = Enumerable.Range(start, end - start + 1).Average(i => byTick.GetValueOrDefault(i));
                 var length = TickInterval * (end - start + 1);
                 var group = GroupOf(id);
                 // One core of many is worth knowing about; two or more, or a quarter of the machine, is a problem.
@@ -539,6 +536,34 @@ public sealed partial class ResourceAnalysis
             }
         }
         return found.OrderByDescending(f => f.weight).Take(5).Select(f => f.finding).ToList();
+    }
+
+    /// <summary>
+    /// The runs of consecutive ticks where a process's CPU is at least <paramref name="threshold"/>, at least
+    /// <paramref name="minTicks"/> long, with each run's first highest tick and its average. Walks the process's own
+    /// samples (a tick it's absent from counts as idle, ending a run), not every tick of the recording for every
+    /// process: that was O(processes × ticks) on each rebuild, about 5 s apart for a 4-hour recording (perf review PF16).
+    /// </summary>
+    internal static IEnumerable<(int Start, int End, int Peak, double Avg)> BusyRuns(
+        IReadOnlyList<(int tick, ProcSample sample)> series, double threshold, int minTicks)
+    {
+        int start = -1, prev = -1, peak = -1;
+        double sum = 0, peakCpu = double.NegativeInfinity;
+        foreach (var (tick, sample) in series)
+        {
+            bool on = sample.Cpu >= threshold;
+            if (start >= 0 && (!on || tick != prev + 1))
+            {
+                if (prev - start + 1 >= minTicks) yield return (start, prev, peak, sum / (prev - start + 1));
+                start = -1;
+            }
+            if (!on) continue;
+            if (start < 0) { start = tick; sum = 0; peakCpu = double.NegativeInfinity; }
+            sum += sample.Cpu;
+            if (sample.Cpu > peakCpu) { peakCpu = sample.Cpu; peak = tick; }
+            prev = tick;
+        }
+        if (start >= 0 && prev - start + 1 >= minTicks) yield return (start, prev, peak, sum / (prev - start + 1));
     }
 
     // Never "end it" for the kernel, Windows services or security agents: those can't (or mustn't) be ended, and

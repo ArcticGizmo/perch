@@ -102,4 +102,20 @@ Open *View tree* on a repo with a session working in it. To count git runs, use 
 | Explicit actions | Acknowledge a done row, toggle external notify, add a project note, end a dormant Perch session. | Immediate | Still immediate (these always post). |
 | Sub-agents | Run a task that spawns a sub-agent. | Its row and activity follow | The same. |
 
+## PF15 (one read per transcript)
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Row details still right | With several sessions, check titles (`/rename`), task checklists, artifacts, the Markdown glyph, the PR/Jira glyph following a worktree, permission-mode badges, sub-agent rows and the context bar. | Correct | Identical. |
+| Activity and stuck | Watch a running row's activity line, the burn readout and a stuck warning (if enabled). | Correct | Identical. |
+| CPU while a long session works | Compare `perch.exe` CPU while a session with a multi-MB transcript runs a long turn. | Higher | Lower: its new bytes are read once per scan, not four times, plus one tail read instead of seven. |
+
+## PF16 (resource monitor)
+
+| Check | Do this | Before | After |
+|---|---|---|---|
+| Long recording stays responsive | Overlay right-click → Analyse resource usage → record for 30+ minutes while you work, and keep interacting with the window. | Clicks and scrolling hitched on every 5 s tick, worse as it grew | Smooth. Findings update a moment after each tick. |
+| Findings unchanged | Open an old recording (Load). | — | The same findings, including "busy for …" runaways. |
+| Activity lane | Record while a session works. | Tool calls appear | Still appear (the window's last few minutes are parsed as before). |
+
 Not reproducible on demand: the mic backstop (an app streaming without a privacy-ledger entry), and the Realtime-off social poll.

@@ -67,6 +67,19 @@ public sealed class ResourceRecording
         return best;
     }
 
+    /// <summary>A copy that stops here, for building an analysis on a worker while the live recording keeps growing on
+    /// the UI thread. The records themselves are immutable and shared; only the collections are copied.</summary>
+    public ResourceRecording Snapshot()
+    {
+        var copy = new ResourceRecording { FilePath = FilePath, Header = Header, End = End, Version = Version };
+        foreach (var (id, p) in _procs) copy._procs[id] = p;
+        foreach (var (pid, list) in _procsByPid) copy._procsByPid[pid] = [.. list];
+        copy._sessions.AddRange(_sessions);
+        copy._ticks.AddRange(_ticks);
+        copy._hooks.AddRange(_hooks);
+        return copy;
+    }
+
     public static ResourceRecording Load(string path)
     {
         var recording = new ResourceRecording { FilePath = path };
