@@ -76,6 +76,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     internal const double PrApprovedTickWidth = 8; // extra room the PR glyph takes for its approval tick
     private const double JiraIconWidth    = 15; // the Jira ticket (tag) glyph on a row whose branch has a key
     private const double MdIconWidth      = 18; // the Markdown glyph on a row whose session produced a .md file
+    private const double WorktreeIconWidth = 14; // the tree glyph on a row working in a linked git worktree
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -778,6 +779,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showConfigDirLabels = true;
     private bool _showPullRequests;
     private bool _showJiraTickets;
+    private bool _showWorktreeGlyph = true;
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
@@ -1312,6 +1314,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide the worktree (tree) glyph on a session row. Display only — the data layer's worktree
+    /// lookup is gated separately (see <c>WorktreeGlyphEnabled</c>), so both are set together.</summary>
+    public void SetShowWorktreeGlyph(bool show)
+    {
+        if (_showWorktreeGlyph == show) return;
+        _showWorktreeGlyph = show;
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
     /// the note is still stored and editable from the right-click menu, just no glyph. The note's text is
     /// never previewed inline — hover the glyph or open the editor — so this doesn't change row height.</summary>
@@ -1383,7 +1394,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int _hoveredArtifactRow = -1;
     private int _hoveredMarkdownRow = -1;
     private int _hoveredPrRow = -1;
-    private bool _hoveredNewSession;      // the "+ New session" launcher row (session-control)
+    private int _hoveredWorktreeRow = -1;
+    private bool _hoveredNewSession;     // the "+ New session" launcher row (session-control)
     private Rect _newSessionRect;         // captured at paint for hit-testing
     private bool _showRoostButton = true; // the split-panes Roost button at the right of that row
     private bool _hoveredRoost;
@@ -1402,6 +1414,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, string> _originLabels = new();
     private readonly Dictionary<int, Rect> _prRects = new();
     private readonly Dictionary<int, Rect> _jiraRects = new();
+    private readonly Dictionary<int, Rect> _worktreeRects = new();
     private readonly Dictionary<int, Rect> _dirRects = new();
 
     // Layer-2 live-org lookup for the config-dir chip's hover tooltip. Cached (mtime-invalidated) so a
@@ -1713,7 +1726,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Worktree, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1962,6 +1975,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _originLabels.Clear();
                 _prRects.Clear();
                 _jiraRects.Clear();
+                _worktreeRects.Clear();
                 _dirRects.Clear();
                 _subChevronRects.Clear();
 
@@ -2950,6 +2964,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // leftmost-indicator block above), so they no longer reserve a cluster slot — the name reclaims it.
         double originW  = session.IsBackground ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
+        // Leads the branch glyphs, since the PR and Jira ticket beside it are read from that worktree's branch.
+        bool showWorktree = _showWorktreeGlyph && session.LinkedWorktree is not null;
+        double wtW = showWorktree ? WorktreeIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         bool prApproved = showPr && session.PullRequest!.Value.IsApproved;
         double prW  = showPr ? PrIconWidth + (prApproved ? PrApprovedTickWidth : 0) : 0;
@@ -3011,7 +3028,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
-                         - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
+                         - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - wtW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -3039,27 +3056,33 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawNoteIcon(ctx, noteGlyphX, nameMidY, NoteBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
+        if (showWorktree)
+        {
+            double wtGlyphX = left + 14 + warnW + artW + mailW + rcW + originW + noteW;
+            DrawWorktreeIcon(ctx, wtGlyphX, nameMidY, _hoveredWorktreeRow == rowIndex ? FgBrush : MutedBrush);
+            _worktreeRects[rowIndex] = new Rect(wtGlyphX - 2, nameMidY - 9, WorktreeIconWidth + 2, 18);
+        }
         if (showPr)
         {
-            double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW;
+            double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex, approved: prApproved);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, prW + 2, 18);
         }
         if (showJira)
         {
-            double jiraGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW;
+            double jiraGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW;
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
         if (showMd)
         {
-            double mdGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW + jiraW;
+            double mdGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW + jiraW;
             DrawMdIcon(ctx, mdGlyphX, nameMidY, hovered: _hoveredMarkdownRow == rowIndex);
             _mdRects[rowIndex] = new Rect(mdGlyphX - 2, nameMidY - 9, MdIconWidth + 2, 18);
         }
 
-        double nameX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + prW + jiraW + mdW;
+        double nameX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -3847,6 +3870,27 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawEllipse(null, pen, new Point(x + 6 + 0.5, midY), 1.0, 1.0);
     }
 
+    // A two-tier pine outline on a short trunk. A tree rather than git's branch mark, which reads too close to the
+    // PR glyph's merge mark beside it.
+    private static void DrawWorktreeIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        var pen = OverlayDraw.Pen(brush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        using (At(ctx, x, midY)) ctx.DrawGeometry(null, pen, WorktreePine);
+        ctx.DrawLine(pen, new Point(x + 6, midY + 3), new Point(x + 6, midY + 6));
+    }
+
+    private static readonly Geometry WorktreePine = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(6, -6), isFilled: false);
+        gc.LineTo(new Point(9.5, -1.5));
+        gc.LineTo(new Point(8, -1.5));
+        gc.LineTo(new Point(11, 3));
+        gc.LineTo(new Point(1, 3));
+        gc.LineTo(new Point(4, -1.5));
+        gc.LineTo(new Point(2.5, -1.5));
+        gc.EndFigure(true);
+    });
+
     private static readonly Geometry JiraTag = GlyphShape(gc =>
     {
         const double midY = 0, top = midY - 4.5, bot = midY + 4.5, tipX = 2, bodyX = 6, rightX = 13;
@@ -4247,6 +4291,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The Jira glyph doesn't change on hover, so it needs no repaint — just the hand cursor + tooltip.
         int jiraIcon = HitRect(_jiraRects, p);
 
+        int wtIcon = HitRect(_worktreeRects, p);
+        if (wtIcon != _hoveredWorktreeRow) { _hoveredWorktreeRow = wtIcon; InvalidateVisual(); }
+
         bool overUpdate = _updateAvailable && !UpdateInProgress && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
@@ -4299,7 +4346,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         bool overLogin = UpdateLoginButtonHover(p);
         Cursor = overResize ? ResizeCursor
-            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate || overDnd
+            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || wtIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
                || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds)
             ? HandCursor : Cursor.Default;
@@ -4324,6 +4371,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
+            HitRect(_worktreeRects, p) is var wt && wt >= 0 ? (TipKind.Worktree, wt) :
             HitRect(_dirRects, p) is var di && di >= 0 ? (TipKind.Dir, di) :
             HitTestOriginIcon(p) is var oi && oi >= 0 ? (TipKind.Origin, oi) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
@@ -4382,6 +4430,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Mic:     ShowMicTooltip();            break;
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
+            case TipKind.Worktree: ShowWorktreeTooltip(_tipRow); break;
             case TipKind.Dir:     ShowDirTooltip(_tipRow);     break;
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
@@ -4434,7 +4483,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredWorktreeRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
@@ -4445,7 +4494,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         changed |= ClearScrollHover();
         _hoveredNewSession = false;
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
-        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
+        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = _hoveredWorktreeRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredDnd = false;
         _hoveredFooter = false;
@@ -4811,6 +4860,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The worktree glyph opens the git graph, which lays the repo out by worktree.
+        int wtRow = HitRect(_worktreeRects, p);
+        if (wtRow >= 0 && _rows[wtRow].Session is { LinkedWorktree: not null } wtSession)
+        {
+            ViewTreeRequested?.Invoke(wtSession);
+            return;
+        }
+
         // The Jira glyph is a single deterministic deep-link (unlike the PR/artifact pickers), so a left
         // click opens it directly — the dwell tooltip has already shown which key that is. Middle-click for
         // a fresh browser window is handled in OnPointerPressed.
@@ -5037,6 +5094,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
 
+        // Right-clicking the worktree glyph picks which worktree the session counts as in, the same picker the row
+        // menu nests. With nothing to choose it falls through to the row menu.
+        int wtGlyphRow = HitRect(_worktreeRects, p);
+        if (wtGlyphRow >= 0 && _rows[wtGlyphRow].Session is { } wtSession && WorktreeMenuItems(wtSession) is { } wtItems)
+        {
+            ShowFlyout([new MenuItem { Header = "Session worktree", IsEnabled = false }, .. wtItems]);
+            return;
+        }
+
         var items = new List<Control>();
 
         int row = HitTestRow(p);
@@ -5082,7 +5148,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             bool isRepo = !subRow && GitRepoService.IsRepo(s.Cwd);
             if (isRepo && _gitKrakenAvailable)
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
-            if (isRepo && (_showPullRequests || _showJiraTickets) && WorktreeSubmenu(s) is { } worktreeMenu)
+            if (isRepo && (_showPullRequests || _showJiraTickets || _showWorktreeGlyph) && WorktreeSubmenu(s) is { } worktreeMenu)
                 actions.Add(worktreeMenu);
             if (!subRow && _showNoteLine)
             {
@@ -5187,7 +5253,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The row menu's worktree picker, as a submenu. Null when there's nothing to choose (see WorktreeMenuItems).
     private MenuItem? WorktreeSubmenu(ClaudeSession s) =>
         WorktreeMenuItems(s) is { } entries
-            ? new MenuItem { Header = _showPullRequests ? "Pull request worktree" : "Jira ticket worktree", ItemsSource = entries }
+            ? new MenuItem
+            {
+                Header = _showPullRequests ? "Pull request worktree" : _showJiraTickets ? "Jira ticket worktree" : "Session worktree",
+                ItemsSource = entries,
+            }
             : null;
 
     // Which of the repo's worktrees the PR/Jira glyphs follow: "Automatic" (Claude Code's cwd never moves into a
@@ -5420,6 +5490,29 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             new(jira.Key, OverlayTooltip.FgColor, true),
             new("Click to open in Jira", OverlayTooltip.MutedColor, false),
+        };
+        Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    // Hover tooltip for the worktree glyph: the worktree's folder and branch, and how Perch knows the session is
+    // there, since a worktree followed from edits is a guess the user may want to correct by pinning.
+    private void ShowWorktreeTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.LinkedWorktree is not { } wt) return;
+        if (!_worktreeRects.TryGetValue(row, out var r)) return;
+
+        string how = wt.Source switch
+        {
+            WorktreeSource.Pinned        => "Pinned from the menu",
+            WorktreeSource.FollowedEdits => "Followed from the session's latest edits",
+            _                            => "The session's own folder",
+        };
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new($"Worktree {wt.Name}", OverlayTooltip.FgColor, true),
+            new(wt.Branch is { } b ? $"Branch {b}" : "Detached HEAD", OverlayTooltip.FgColor, false),
+            new(how, OverlayTooltip.MutedColor, false),
+            new("Click: git graph · Right-click: pick worktree", OverlayTooltip.MutedColor, false),
         };
         Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
     }

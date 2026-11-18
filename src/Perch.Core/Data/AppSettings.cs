@@ -431,6 +431,11 @@ internal sealed class AppSettings
     // feature costs nothing when disabled. A missing key keeps it off.
     public bool ShowGitStats { get; set; }
 
+    // Whether to draw the tree glyph on a session working in a linked git worktree, rather than the repo's main
+    // checkout. Offline (a few small reads under the repo's git dir), so it defaults to true; a missing key keeps
+    // it on.
+    public bool ShowWorktreeGlyph { get; set; } = true;
+
     // The git Tree diff layout: false = unified (one column), true = side-by-side split. Persisted so the
     // choice sticks between openings; set from the window's own toolbar mode selector — not a Settings
     // control (see SettingsRegistryTests.NotSettings). A missing key defaults to split (with

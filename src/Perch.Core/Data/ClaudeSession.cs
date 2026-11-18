@@ -255,8 +255,14 @@ public record ClaudeSession(
 
     /// <summary>The worktree <see cref="PullRequest"/> and <see cref="JiraTicket"/> were read from when it isn't
     /// the one holding <see cref="Cwd"/>: pinned from the row menu, or inferred from where the session last wrote
-    /// a file. Null when they follow <see cref="Cwd"/>, or both integrations are off. See <see cref="SessionWorktree"/>.</summary>
+    /// a file. Null when they follow <see cref="Cwd"/>, or the PR, Jira and worktree glyphs are all off. See
+    /// <see cref="SessionWorktree"/>.</summary>
     public SessionWorktreeChoice? Worktree { get; init; }
+
+    /// <summary>The linked worktree this session works in, for the overlay's worktree glyph: the one holding
+    /// <see cref="Cwd"/>, or <see cref="Worktree"/> when set. Null for the repo's main checkout, outside a repo, or
+    /// while the glyph is off.</summary>
+    public SessionWorktreeInfo? LinkedWorktree { get; init; }
 
     /// <summary>True when this session's branch has a pull request to surface.</summary>
     public bool HasPullRequest => PullRequest != null;

@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- A little tree marks any session working in a git worktree, whether it started there or wandered in to edit
+
 ---
 
 ## [v0.6.11] - 2026-11-13

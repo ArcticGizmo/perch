@@ -491,6 +491,7 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.BurnRate        => ("12.3k / m",   Palette.Fg, Color.FromRgb(38, 38, 52)),
             PreviewTarget.GitStats        => ("+142  −18", Palette.Green, Color.FromRgb(24, 40, 30)),
             PreviewTarget.PullRequest     => ("PR #1135",    Palette.Accent,  Color.FromRgb(38, 49, 74)),
+            PreviewTarget.Worktree        => ("worktree",    Palette.Muted,  Color.FromRgb(38, 38, 52)),
             PreviewTarget.Note            => ("note",        Palette.Yellow,  Color.FromRgb(45, 42, 28)),
             PreviewTarget.UsageBars       => ("62%  weekly", Palette.Green,   Color.FromRgb(24, 40, 30)),
             PreviewTarget.ExpectedRate    => ("| on pace",   Palette.Muted, Color.FromRgb(38, 38, 52)),
