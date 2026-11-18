@@ -471,6 +471,10 @@ internal sealed class AppSettings
     // own chevron — not a Settings control (see SettingsRegistryTests.NotSettings).
     public bool GitTreeFilesCollapsed { get; set; }
 
+    // Whether the git Tree window's files pane shows a folder tree rather than flat path rows. Set from the pane's own
+    // List/Tree toggle — not a Settings control (see SettingsRegistryTests.NotSettings).
+    public bool GitTreeFilesAsTree { get; set; }
+
     // Whether the git graph paints each commit's author picture (initials until one is found) on its node, looked up
     // through gh and GitHub's avatar host. Set from the window's own header button — not a Settings control (see
     // SettingsRegistryTests.NotSettings). On by default.

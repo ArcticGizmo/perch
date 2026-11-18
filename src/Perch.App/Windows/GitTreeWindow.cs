@@ -99,9 +99,9 @@ internal sealed partial class GitTreeWindow : Window
     private TreePalette _pal;
     private bool _light;
 
-    private readonly FuncDataTemplate<GitFileChange> _unstagedRowTemplate;
-    private readonly FuncDataTemplate<GitFileChange> _stagedRowTemplate;
-    private readonly FuncDataTemplate<GitDiffFile> _commitFileTemplate;
+    private readonly FuncDataTemplate<object> _unstagedRowTemplate;
+    private readonly FuncDataTemplate<object> _stagedRowTemplate;
+    private readonly FuncDataTemplate<object> _commitFileTemplate;
 
     private string? _cwd;
     private string? _prUrl;
@@ -202,6 +202,7 @@ internal sealed partial class GitTreeWindow : Window
         MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
+        _filesAsTree = settings.GitTreeFilesAsTree;
         _unstagedRowTemplate = WipRowTemplate(staged: false);
         _stagedRowTemplate = WipRowTemplate(staged: true);
         _commitFileTemplate = CommitFileTemplate();
@@ -467,6 +468,9 @@ internal sealed partial class GitTreeWindow : Window
         OpensDiff(_filesList);
         OpensDiff(_unstagedList);
         OpensDiff(_stagedList);
+        TightenTreeRows(_filesList);
+        TightenTreeRows(_unstagedList);
+        TightenTreeRows(_stagedList);
 
         _filesLabel = PaneLabel("Files");
         _filesLabel.SetValue(DockPanel.DockProperty, Dock.Left);
@@ -483,7 +487,7 @@ internal sealed partial class GitTreeWindow : Window
         var filesHeader = new DockPanel
         {
             LastChildFill = false, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
-            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel },
+            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, BuildViewToggle(), _filesLabel },
         };
         ToolTip.SetTip(filesHeader, "Hide the files pane");
         filesHeader.Tapped += (_, e) => { if (!FromButton(e, filesHeader)) SetFilesCollapsed(true); };
@@ -710,7 +714,7 @@ internal sealed partial class GitTreeWindow : Window
             bool onRow = false;
             for (var v = e.Source as Visual; v is not null && v != list; v = v.GetVisualParent())
             {
-                if (v is Button) return;
+                if (v is Button or Control { Tag: FolderRowTag }) return;
                 if (v is ListBoxItem) onRow = true;
             }
             if (onRow) OpenDiff();
@@ -718,7 +722,8 @@ internal sealed partial class GitTreeWindow : Window
         list.KeyDown += (_, e) =>
         {
             if (e.Key != Key.Enter) return;
-            OpenDiff();
+            if (list.SelectedItem is FolderRow f) ToggleFolder(f.Key);
+            else OpenDiff();
             e.Handled = true;
         };
     }
@@ -1351,6 +1356,8 @@ internal sealed partial class GitTreeWindow : Window
         _filesList.ItemsSource = null;
         _unstagedList.ItemsSource = null;
         _stagedList.ItemsSource = null;
+        _commitFiles = [];
+        _unstagedFiles = _stagedFiles = [];
         _suppressSelect = false;
         _diff.SetDiff(null, "");
         _diffPlaceholder.IsVisible = true;
@@ -1379,6 +1386,7 @@ internal sealed partial class GitTreeWindow : Window
             _commitAreaHost.IsVisible = false;
             _shownCommit = null;
             _filesList.ItemsSource = null;
+            _commitFiles = [];
             PopulateWip(_lastStatus?.Changes ?? [], wantFile, wantStaged);
         }
         else
@@ -1391,6 +1399,7 @@ internal sealed partial class GitTreeWindow : Window
             _suppressSelect = true;
             _unstagedList.ItemsSource = null;
             _stagedList.ItemsSource = null;
+            _unstagedFiles = _stagedFiles = [];
             _suppressSelect = false;
 
             string hash = node.Commit.Hash;
@@ -1403,7 +1412,7 @@ internal sealed partial class GitTreeWindow : Window
                     if (!IsVisible || gen != _gen) return;
                     _selectedCommitDiff = t.Result;
                     var files = t.Result?.Files ?? [];
-                    PopulateFiles(files, wantFile is null ? -1 : IndexOfDiffFile(files, wantFile));
+                    PopulateFiles(files, wantFile);
                 });
             });
         }
@@ -1425,10 +1434,16 @@ internal sealed partial class GitTreeWindow : Window
     {
         var unstaged = changes.Where(c => c.Untracked || c.Unstaged != GitChangeKind.None).ToList();
         var staged = changes.Where(c => c.Staged != GitChangeKind.None).ToList();
+        int uRaw = IndexOfPath(unstaged, wantPath), sRaw = IndexOfPath(staged, wantPath);
+        // Asked for by name, a file inside a collapsed folder comes into view; a quiet refresh leaves folders as the
+        // person set them.
+        if (!quiet && !preferUnstagedTop && (uRaw >= 0 || sRaw >= 0)) RevealFile(wantPath);
 
         _suppressSelect = true;
-        _unstagedList.ItemsSource = unstaged;
-        _stagedList.ItemsSource = staged;
+        _unstagedFiles = unstaged;
+        _stagedFiles = staged;
+        _unstagedList.ItemsSource = ArrangeUnstaged();
+        _stagedList.ItemsSource = ArrangeStaged();
         _unstagedList.SelectedIndex = -1;
         _stagedList.SelectedIndex = -1;
 
@@ -1442,9 +1457,9 @@ internal sealed partial class GitTreeWindow : Window
         if (preferUnstagedTop)
         {
             _suppressSelect = false;
-            if (unstaged.Count > 0 && _diffOverlay.IsVisible)
+            if (FirstFileIndex(_unstagedList) is var top and >= 0 && _diffOverlay.IsVisible)
             {
-                _unstagedList.SelectedIndex = 0; // fires OnWipFileSelected → loads the topmost Changes diff
+                _unstagedList.SelectedIndex = top; // fires OnWipFileSelected → loads the topmost Changes diff
             }
             else
             {
@@ -1456,20 +1471,30 @@ internal sealed partial class GitTreeWindow : Window
             return;
         }
 
-        int uidx = wantPath is not null ? IndexOfPath(unstaged, wantPath) : -1;
-        int sidx = wantPath is not null ? IndexOfPath(staged, wantPath) : -1;
+        int uidx = uRaw >= 0 ? IndexOfItem(_unstagedList, unstaged[uRaw]) : -1;
+        int sidx = sRaw >= 0 ? IndexOfItem(_stagedList, staged[sRaw]) : -1;
+
+        // Quiet, and the shown file is still on its side but folded away in a collapsed folder: nothing to highlight,
+        // and the diff stays as it is.
+        if (quiet && (wantStaged ? sRaw : uRaw) >= 0 && (wantStaged ? sidx : uidx) < 0)
+        {
+            _suppressSelect = false;
+            UpdateEmptyStates();
+            return;
+        }
 
         // Choose the row to select: the requested side first, then the other side (the file may have moved
         // sides — e.g. its last unstaged hunk was staged), then, only while the diff is open and needs something to
         // show, the first row of either group. A highlighted row means "this is the one you opened".
         bool showFirst = _diffOverlay.IsVisible;
+        int uTop = FirstFileIndex(_unstagedList), sTop = FirstFileIndex(_stagedList);
         (ListBox list, int idx, bool side) =
             !wantStaged && uidx >= 0 ? (_unstagedList, uidx, false)
           : wantStaged && sidx >= 0 ? (_stagedList, sidx, true)
           : uidx >= 0 ? (_unstagedList, uidx, false)
           : sidx >= 0 ? (_stagedList, sidx, true)
-          : showFirst && unstaged.Count > 0 ? (_unstagedList, 0, false)
-          : showFirst && staged.Count > 0 ? (_stagedList, 0, true)
+          : showFirst && uTop >= 0 ? (_unstagedList, uTop, false)
+          : showFirst && sTop >= 0 ? (_stagedList, sTop, true)
           : (_unstagedList, -1, false);
 
         if (idx < 0)
@@ -1561,14 +1586,17 @@ internal sealed partial class GitTreeWindow : Window
     // Sets the commit-node files list and selects the asked-for row, which fires OnCommitFileSelected to load the
     // diff. Nothing is selected otherwise unless the diff is open (it then shows the first file), so a highlighted row
     // is always one the user opened.
-    private void PopulateFiles<T>(IReadOnlyList<T> items, int select)
+    private void PopulateFiles(IReadOnlyList<GitDiffFile> files, string? wantPath)
     {
+        int raw = IndexOfDiffFile(files, wantPath);
+        if (raw >= 0) RevealFile(wantPath);
+        _commitFiles = files;
         _suppressSelect = true;
-        _filesList.ItemsSource = items;
+        _filesList.ItemsSource = ArrangeCommit();
         _filesList.SelectedIndex = -1;
         _suppressSelect = false;
 
-        int idx = select >= 0 ? select : _diffOverlay.IsVisible && items.Count > 0 ? 0 : -1;
+        int idx = raw >= 0 ? IndexOfItem(_filesList, files[raw]) : _diffOverlay.IsVisible ? FirstFileIndex(_filesList) : -1;
         _filesList.SelectedIndex = idx;
 
         UpdateEmptyStates();
@@ -2411,6 +2439,7 @@ internal sealed partial class GitTreeWindow : Window
 
         UpdateModeButtons();
         UpdateContentButtons();
+        UpdateViewButtons();
         UpdateScopeButtons();
         ApplyActionPalette();
         _diff.SetLight(_light);
@@ -2520,9 +2549,6 @@ internal sealed partial class GitTreeWindow : Window
     // A WIP file row for one group: the coloured status + path, with a stage ("+") button on unstaged rows
     // and an unstage ("−") button on staged rows docked to the right. The button moves the whole file between
     // the two groups (git add / git restore --staged).
-    private FuncDataTemplate<GitFileChange> WipRowTemplate(bool staged) =>
-        new((fc, _) => fc.Path is null ? new Control() : WipRow(fc, staged), supportsRecycling: false);
-
     private Control WipRow(GitFileChange fc, bool staged)
     {
         string path = fc.Path!;
@@ -2538,13 +2564,8 @@ internal sealed partial class GitTreeWindow : Window
         ToolTip.SetTip(btn, staged ? "Unstage this file" : "Stage this file");
         btn.Click += (_, e) => { ToggleStage(path, !staged); e.Handled = true; };
 
-        var text = new TextBlock
-        {
-            Text = WipFileLabel(fc, staged), FontFamily = Mono, FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center,
-            Foreground = WipFileColor(fc, staged),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
+        var text = FileRowContent(WipFileCode(fc, staged), WipFileColor(fc, staged), path, fc.OrigPath,
+            TreeDepth(staged ? _stagedDepth : _unstagedDepth, path));
         var row = new DockPanel
         {
             LastChildFill = true, Margin = new Thickness(10, 5, 8, 5),
@@ -2583,28 +2604,13 @@ internal sealed partial class GitTreeWindow : Window
         RunWorkingTreeOp(cwd => stage ? _git.StagePaths(cwd, paths) : _git.UnstagePaths(cwd, paths));
     }
 
-    private FuncDataTemplate<GitDiffFile> CommitFileTemplate() => new((gf, _) =>
-    {
-        string? path = gf.NewPath ?? gf.OldPath;
-        return new TextBlock
-        {
-            Text = path is null ? "" : $"{CommitFileCode(gf)}  {(gf.OldPath is { } o && gf.NewPath is { } n && o != n ? $"{o} → {n}" : path)}",
-            FontFamily = Mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
-            Foreground = path is null ? _pal.Muted : CommitFileColor(gf),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-    }, supportsRecycling: true);
-
-    // The status code + path for a WIP row, reflecting the relevant side: the staged kind in the staged
-    // group, else the unstaged kind (with '≈' for a BOM/EOL-only change). An untracked file is 'A', not git's '??':
-    // to the person looking it's a file they added, and it keeps that letter once staged.
-    private string WipFileLabel(GitFileChange fc, bool staged)
-    {
-        char code = !staged && fc.Untracked ? 'A'
-                  : !staged && _invisiblePaths.Contains(fc.Path) ? '≈'
-                  : CodeOf(staged ? fc.Staged : fc.Unstaged);
-        return fc.OrigPath is { } o ? $"{code}  {o} → {fc.Path}" : $"{code}  {fc.Path}";
-    }
+    // The status code for a WIP row, reflecting the relevant side: the staged kind in the staged group, else the
+    // unstaged kind (with '≈' for a BOM/EOL-only change). An untracked file is 'A', not git's '??': to the person
+    // looking it's a file they added, and it keeps that letter once staged.
+    private char WipFileCode(GitFileChange fc, bool staged) =>
+        !staged && fc.Untracked ? 'A'
+        : !staged && _invisiblePaths.Contains(fc.Path) ? '≈'
+        : CodeOf(staged ? fc.Staged : fc.Unstaged);
 
     private IBrush WipFileColor(GitFileChange fc, bool staged)
     {

@@ -169,6 +169,15 @@ internal sealed partial class GitTreeWindow
 
     internal string PreviewShownFile => CurrentFilePath() ?? "(none)";
 
+    /// <summary>For the headless render: switches the Files pane between path rows and the folder tree.</summary>
+    internal void PreviewFilesAsTree(bool tree) => SetFilesAsTree(tree);
+
+    /// <summary>For the headless render: collapses the first folder in Changes, as a click on its row would.</summary>
+    internal void PreviewCollapseFolder()
+    {
+        if (_unstagedList.Items.OfType<FolderRow>().FirstOrDefault() is { } f) ToggleFolder(f.Key);
+    }
+
     /// <summary>For the headless render: selects this window's uncommitted-changes row, so the Files pane shows its lists.</summary>
     internal void PreviewSelectWip()
     {
@@ -179,9 +188,10 @@ internal sealed partial class GitTreeWindow
     /// opens their right-click menu, and says what the header button and rows show.</summary>
     internal string PreviewPickFiles(int n)
     {
-        if (_unstagedList.ItemCount < n) return $"only {_unstagedList.ItemCount} files in Changes";
+        var files = _unstagedList.Items.OfType<GitFileChange>().ToList();
+        if (files.Count < n) return $"only {files.Count} files in Changes";
         _unstagedList.SelectedItems!.Clear();
-        for (int i = 0; i < n; i++) _unstagedList.SelectedItems.Add(_unstagedList.Items[i]);
+        for (int i = 0; i < n; i++) _unstagedList.SelectedItems.Add(files[i]);
         Dispatcher.UIThread.RunJobs();
         int buttons = _unstagedList.GetRealizedContainers().SelectMany(c => c.GetVisualDescendants().OfType<Button>())
             .Count(b => Equals(b.Tag, RowStageTag) && b.IsVisible);
