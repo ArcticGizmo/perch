@@ -141,6 +141,16 @@ Use a throwaway clone with a few local branches (one checked out in an extra wor
 4. **Show all, per section.** With branches hidden in both sections, Remotes' **⋯** offers **Show all N hidden remote branches** and Local's the local ones; each brings back only its own section. *Before:* one "Show all hidden branches" for both.
 5. **The setting reads as a setting.** In Remotes' **⋯**, a divider separates the actions above from **Hide new remote branches that aren't mine**, which has a real checkbox (ticked when on). Clicking it flips the setting with a toast, as before. Local's **⋯** has no such checkbox (it's about remote branches). *Before:* the setting sat at the top of the menu with a ✓ text prefix, looking like one more action.
 
+## Feedback round 13: file names first, List/Tree view
+
+Use a repo with changes deep in a folder (e.g. 6+ files under `frontend/spa/apps/client/src/...`), both in the working tree and in a commit. Narrow the Files pane to ~300px. Compare `captures/20261118-files-tree-3/git_tree_wip_selected_1x.png`, `git_tree_wip_tree_1x.png` and `git_tree_wip_tree_collapsed_1x.png`.
+
+1. **Rows keep the file name.** In List view, a path too long for the row loses characters from the middle of its directory (`frontend/…/dynamicForms/fields/Text.vue`), never from the name; the directory is muted, the name in the status colour. Hovering a row shows the full path. Renames read `old → new` with the new name intact. *Before:* every row was trimmed from the right, so a column of identical `frontend/spa/apps/client/src/dynamicForms/…` hid every file name.
+2. **List | Tree toggle.** The Files heading has a small **List | Tree** segment left of the collapse chevron. **Tree** groups the files by folder: folders first, then files, alphabetically; a folder with nothing but one subfolder folds into one row (`frontend/spa/apps/client/src`). Each folder row shows its file count on the right. It works for a commit's files and for both Changes and Staged. The choice survives closing the window and restarting Perch. Clicking the toggle doesn't change which file's diff is shown.
+3. **Collapse folders.** Click a folder row: it collapses to `▸ name/` and its files hide; click again to open. The click never highlights the folder or opens a diff, and picked files (Ctrl+click) stay picked. With the folder row focused by arrow keys, Enter toggles it.
+4. **Collapsed folders and refreshes.** Open a file's diff, then collapse its folder: the diff stays. Edit that file on disk: the auto-refresh leaves the folder collapsed and the diff repaints. Pressing **Refresh**, or opening the Tree window focused on that file from a session, opens its folder again so the shown file is highlighted.
+5. **Stage from the tree.** The **+**/**−** on a file row in Tree view stages/unstages as in List view, and the folder layout updates in both groups.
+
 ## Feedback round 12: picking several files
 
 Use a throwaway clone. Make four changes: edit two tracked files (`a`, `b`), add a new file (`new.txt`), and delete a tracked file (`gone`) with `del`/`rm`, not git. Select the uncommitted-changes row so the Files pane shows Changes. Compare `captures/20261104-085900-files-multiselect/git_tree_files_multi_1x.png`.

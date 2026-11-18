@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.13] - 2026-11-18
+
+- Git graph file rows keep the file name when space runs out (the directory takes the hit)
+- List | Tree toggle for the git graph's files, with collapsible folders
+
+---
+
 ## [v0.6.12] - 2026-11-18
 
 - A little tree marks sessions working in a git worktree (started there or wandered in)

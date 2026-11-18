@@ -1044,6 +1044,11 @@ internal static class HeadlessRenderer
             // Three files picked in Changes: the header reads "Stage (3)", the rows lose their +, and the shared menu opens.
             tw.PreviewSelectWip();
             Frame11("git_tree_wip_selected_1x.png");
+            tw.PreviewFilesAsTree(true);
+            Frame11("git_tree_wip_tree_1x.png");
+            tw.PreviewCollapseFolder();
+            Frame11("git_tree_wip_tree_collapsed_1x.png");
+            tw.PreviewFilesAsTree(false);
             Console.WriteLine($"git graph multi-pick: {tw.PreviewPickFiles(3)}");
             Frame11("git_tree_files_multi_1x.png");
             tw.Close();
