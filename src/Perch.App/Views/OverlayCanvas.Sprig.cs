@@ -154,7 +154,8 @@ public sealed partial class OverlayCanvas
             OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), h - 6), FeedHoverBrush, null, 6);
 
         DrawChevron(ctx, HorizPad + 4, midY, _sprigExpanded);
-        DrawSprigMark(ctx, HorizPad + 17, midY, _sprigFeed == SprigFeed.Live ? Palette.Green : IdleColor);
+        // Sprig's brand green while the feed is live; greyed while connecting, reconnecting or not installed.
+        DrawSprigMark(ctx, HorizPad + 17, midY, 13, _sprigFeed == SprigFeed.Live ? Palette.SprigBrush : OverlayDraw.Brush(IdleColor));
         var capFt = OverlayDraw.Text("SPRIG", FeedCaptionSize, MutedBrush);
         double x = HorizPad + 26;
         OverlayDraw.TextLeftMid(ctx, capFt, x, midY);
@@ -249,33 +250,30 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // A small sprout: a stem with a leaf either side, ~12px around (cx, cy).
-    private static void DrawSprigMark(DrawingContext ctx, double cx, double cy, Color color)
+    // Sprig's own mark (its sprig.svg path, verbatim): a leaf on a stem that forks to three ringed nodes. The
+    // source is a 256-unit square; parsed once on first use.
+    private const string SprigMarkPath =
+        "M 183.27874 6.9923381 C 158.83902 7.5605893 145.45555 9.0962712 129.58175 21.490678 C 126.50668 23.891713 122.01354 27.461442 114.4571 36.067049 C 91.328822 66.402568 112.17866 95.804677 114.4571 101.20829 C 120.88779 77.104358 130.90769 55.064197 156.78061 42.139547 C 127.72662 71.885245 125.64448 90.392403 119.05785 110.7767 L 119.05785 165.42918 L 92.574711 138.94656 A 24.72245 24.72245 0 0 0 94.98645 128.29656 A 24.72245 24.72245 0 0 0 70.263928 103.57404 A 24.72245 24.72245 0 0 0 45.541406 128.29656 A 24.72245 24.72245 0 0 0 70.263928 153.01908 A 24.72245 24.72245 0 0 0 82.337093 149.87044 L 118.13749 185.67084 L 118.13749 200.69783 A 24.72245 24.72245 0 0 0 101.492 224.06333 A 24.72245 24.72245 0 0 0 126.21452 248.78585 A 24.72245 24.72245 0 0 0 150.93704 224.06333 A 24.72245 24.72245 0 0 0 133.59495 200.46838 L 133.59495 185.85481 L 169.67026 149.77949 A 24.72245 24.72245 0 0 0 181.90518 153.01908 A 24.72245 24.72245 0 0 0 206.6277 128.29656 A 24.72245 24.72245 0 0 0 181.90518 103.57404 A 24.72245 24.72245 0 0 0 157.18265 128.29656 A 24.72245 24.72245 0 0 0 159.8135 139.39459 L 133.68693 165.52116 L 133.68693 114.27313 L 138.56312 104.1523 C 166.5092 89.190839 191.20939 68.524071 183.27874 6.9923381 z " +
+        "M 70.263928 118.14731 A 10.149215 10.149215 0 0 1 80.41318 128.29656 A 10.149215 10.149215 0 0 1 70.263928 138.44581 A 10.149215 10.149215 0 0 1 60.114677 128.29656 A 10.149215 10.149215 0 0 1 70.263928 118.14731 z " +
+        "M 181.90518 118.14731 A 10.149215 10.149215 0 0 1 192.05443 128.29656 A 10.149215 10.149215 0 0 1 181.90518 138.44581 A 10.149215 10.149215 0 0 1 171.75592 128.29656 A 10.149215 10.149215 0 0 1 181.90518 118.14731 z " +
+        "M 126.21452 213.91407 A 10.149215 10.149215 0 0 1 136.36377 224.06333 A 10.149215 10.149215 0 0 1 126.21452 234.21258 A 10.149215 10.149215 0 0 1 116.06527 224.06333 A 10.149215 10.149215 0 0 1 126.21452 213.91407 z";
+
+    private static Geometry? _sprigMark;
+
+    // The sprig mark centred on (cx, cy), fitted into a size×size box. The mark is taller than it is wide, so it
+    // takes the box's height.
+    private static void DrawSprigMark(DrawingContext ctx, double cx, double cy, double size, IBrush brush)
     {
-        var brush = OverlayDraw.Brush(color);
-        ctx.DrawLine(OverlayDraw.Pen(brush, 1.3, null, PenLineCap.Round), new Point(cx, cy + 5.5), new Point(cx, cy - 1));
-        using (At(ctx, cx, cy))
-        {
-            ctx.DrawGeometry(brush, null, SprigLeafLeft);
-            ctx.DrawGeometry(brush, null, SprigLeafRight);
-        }
+        var mark = _sprigMark ??= Geometry.Parse(SprigMarkPath);
+        var b = mark.Bounds;
+        if (b.Width <= 0 || b.Height <= 0) return;
+        double scale = size / Math.Max(b.Width, b.Height);
+        var m = Matrix.CreateTranslation(-(b.X + b.Width / 2), -(b.Y + b.Height / 2))
+              * Matrix.CreateScale(scale, scale)
+              * Matrix.CreateTranslation(cx, cy);
+        using (ctx.PushTransform(m))
+            ctx.DrawGeometry(brush, null, mark);
     }
-
-    private static readonly Geometry SprigLeafLeft = GlyphShape(g =>
-    {
-        g.BeginFigure(new Point(0, 2), isFilled: true);
-        g.QuadraticBezierTo(new Point(-6, 1.5), new Point(-5.5, -3.5));
-        g.QuadraticBezierTo(new Point(-1, -3), new Point(0, 2));
-        g.EndFigure(true);
-    });
-
-    private static readonly Geometry SprigLeafRight = GlyphShape(g =>
-    {
-        g.BeginFigure(new Point(0, -0.5), isFilled: true);
-        g.QuadraticBezierTo(new Point(5.5, -1), new Point(5, -6));
-        g.QuadraticBezierTo(new Point(0.5, -5.5), new Point(0, -0.5));
-        g.EndFigure(true);
-    });
 
     // ── hit-testing ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -453,8 +451,9 @@ public sealed partial class OverlayCanvas
     {
         if (_hoveredSprigRow == rowIndex)
             OverlayDraw.Panel(ctx, new Rect(x - 2, midY - 8, SprigRowIconWidth, 16), FeedHoverBrush, null, 4);
+        // Sprig's own mark, but in the workspace's state colour: on a row it's a status glyph first.
         var color = w.State == SprigWorkspaceState.Running && w.AnyFailed ? Palette.Red : SprigStateColor(w.State);
-        DrawSprigMark(ctx, x + 5, midY, color);
+        DrawSprigMark(ctx, x + 5, midY, 14, OverlayDraw.Brush(color));
         _sprigRowRects[rowIndex] = new Rect(x - 2, midY - 9, SprigRowIconWidth + 2, 18);
     }
 

@@ -74,6 +74,7 @@ public static class Palette
         JiraBrush.Color        = Fixed.Jira.ToColor();
         BasketballBrush.Color  = Fixed.Basketball.ToColor();
         HypertreeBrush.Color   = Fixed.Hypertree.ToColor();
+        SprigBrush.Color       = Fixed.Sprig.ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -225,6 +226,8 @@ public static class Palette
     public static readonly SolidColorBrush BasketballBrush = new(FixedColors.Default.Basketball.ToColor());
     // The Hypertree mark on the overlay's Hypertree strip; Hypertree's brand green under every theme.
     public static readonly SolidColorBrush HypertreeBrush = new(FixedColors.Default.Hypertree.ToColor());
+    // The sprig mark heading the overlay's Sprig section; sprig's brand green under every theme.
+    public static readonly SolidColorBrush SprigBrush = new(FixedColors.Default.Sprig.ToColor());
 
     // ── Draw with Perch swatches ──
     // The fixed drawing palette (see Perch.Games.DrawPalette). Theme-independent on purpose: a drawing must look
