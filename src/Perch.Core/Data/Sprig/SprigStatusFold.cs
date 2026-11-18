@@ -151,7 +151,22 @@ internal sealed class SprigStatusFold
             Str(w, "folder"),
             dirs,
             Str(w, "madeForAgent"),
-            apps);
+            apps)
+        {
+            Readiness = ReadReadiness(w),
+        };
+    }
+
+    // Absent from a sprig that predates it, and then null, so SprigWorkspace works it out from the apps instead.
+    private static SprigReadiness? ReadReadiness(JsonElement w)
+    {
+        if (!w.TryGetProperty("readiness", out var r) || r.ValueKind != JsonValueKind.Object || Str(r, "health") is not { } health)
+            return null;
+        var down = new List<string>();
+        if (r.TryGetProperty("down", out var d) && d.ValueKind == JsonValueKind.Array)
+            foreach (var e in d.EnumerateArray())
+                if (e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } app) down.Add(app);
+        return new SprigReadiness(health, Int(r, "ready") ?? 0, Int(r, "started") ?? 0, Int(r, "total") ?? 0, down);
     }
 
     private static SprigApp? ReadApp(JsonElement a)

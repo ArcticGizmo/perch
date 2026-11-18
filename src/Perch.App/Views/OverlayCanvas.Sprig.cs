@@ -90,7 +90,7 @@ public sealed partial class OverlayCanvas
 
     // What needs you first: a failure (a whole workspace, or one app of a running one), then what's on its way up,
     // then what's running, then what's parked.
-    private static int SprigOrder(SprigWorkspace w) => HasFailedApp(w) ? 0 : w.Shown switch
+    private static int SprigOrder(SprigWorkspace w) => w.InTrouble ? 0 : w.Shown switch
     {
         SprigWorkspaceState.Failed => 0,
         SprigWorkspaceState.Starting => 1,
@@ -99,9 +99,6 @@ public sealed partial class OverlayCanvas
         SprigWorkspaceState.Stopped => 4,
         _ => 5,
     };
-
-    // A workspace that's up (or on its way up) with an app that has fallen over: red wherever it's shown.
-    private static bool HasFailedApp(SprigWorkspace w) => w.State == SprigWorkspaceState.Running && w.AnyFailed;
 
     private static Color SprigStateColor(SprigWorkspaceState s) => s switch
     {
@@ -231,16 +228,16 @@ public sealed partial class OverlayCanvas
     private static (string Text, Color Color) SprigLineDetail(SprigWorkspace w)
     {
         var muted = Palette.Active.TextMuted.ToColor();
-        int active = w.ActiveCount;
-        int failedApps = w.Apps.Count(a => a.IsFailed);
-        if (HasFailedApp(w))
-            return (failedApps == 1 ? "1 app failed" : $"{failedApps} apps failed", Palette.Red);
+        // Red wherever it's shown: up, but an app has exited, failed or is crash-looping.
+        if (w.InTrouble)
+            return (w.Down.Count <= 1 ? "1 app down" : $"{w.Down.Count} apps down", Palette.Red);
+        var (ready, of) = w.ReadyOf;
         switch (w.Shown)
         {
             case SprigWorkspaceState.Running:
-                return (active > 0 ? $"{w.ReadyCount}/{active} ready" : "running", w.ReadyCount == active ? Palette.Green : muted);
+                return (of > 0 ? $"{ready}/{of} ready" : "running", ready == of ? Palette.Green : muted);
             case SprigWorkspaceState.Starting:
-                return (active > 0 ? $"starting {w.ReadyCount}/{active}" : "starting", Palette.Accent);
+                return (of > 0 ? $"starting {ready}/{of}" : "starting", Palette.Accent);
             case SprigWorkspaceState.Failed:
                 return ("failed", Palette.Red);
             case SprigWorkspaceState.Paused:
@@ -454,7 +451,7 @@ public sealed partial class OverlayCanvas
         if (_hoveredSprigRow == rowIndex)
             OverlayDraw.Panel(ctx, new Rect(x - 2, midY - 8, SprigRowIconWidth, 16), FeedHoverBrush, null, 4);
         // Sprig's own mark, but in the workspace's state colour: on a row it's a status glyph first.
-        var color = HasFailedApp(w) ? Palette.Red : SprigStateColor(w.Shown);
+        var color = w.InTrouble ? Palette.Red : SprigStateColor(w.Shown);
         DrawSprigMark(ctx, x + 5, midY, 14, OverlayDraw.Brush(color));
         _sprigRowRects[rowIndex] = new Rect(x - 2, midY - 9, SprigRowIconWidth + 2, 18);
     }

@@ -65,9 +65,81 @@ public class SprigStatusTests
         fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"stopping"}""");
         Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);   // going down isn't starting
 
-        // A crash loop mustn't hold the workspace at starting for good (sprig's own rule leaves it out too).
+        // A crash loop isn't a start: it's trouble (red), as sprig's own readiness counts it.
         fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"restarting","restarts":4}""");
-        Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);
+        var looping = fold.Current.Find("shop/1")!;
+        Assert.Equal(SprigWorkspaceState.Running, looping.Shown);
+        Assert.True(looping.InTrouble);
+        Assert.Equal(["shop/web"], looping.Down);
+    }
+
+    // A workspace line from a sprig that sends readiness (its starting-state change).
+    private const string WithReadiness = """
+        {"type":"workspace","key":"shop/1","orchestration":"shop","name":"1","label":"feat-cart","state":"running","paused":false,"dirs":[],"readiness":{"health":"HEALTH","ready":1,"started":3,"total":4,"down":DOWN}}
+        """;
+
+    private static SprigWorkspace Readied(string health, string down = "[]")
+    {
+        var fold = Folded();
+        Assert.True(fold.Apply(WithReadiness.Replace("HEALTH", health).Replace("DOWN", down)));
+        return fold.Current.Find("shop/1")!;
+    }
+
+    [Fact]
+    public void Readiness_IsRead_AndWinsOverTheAppList()
+    {
+        var w = Readied("starting");
+        var r = Assert.IsType<SprigReadiness>(w.Readiness);
+        Assert.Equal(("starting", 1, 3, 4), (r.Health, r.Ready, r.Started, r.Total));
+        Assert.Empty(r.Down);
+        Assert.Equal(SprigWorkspaceState.Starting, w.Shown);
+        Assert.Equal((1, 3), w.ReadyOf);   // sprig's counts (jobs and apps stopped on purpose left out)
+
+        // "up" from sprig wins even though the app lines we hold still have web building.
+        var up = Readied("up");
+        Assert.Equal(SprigWorkspaceState.Running, up.Shown);
+        Assert.True(up.AllUp);
+        Assert.False(up.InTrouble);
+    }
+
+    [Fact]
+    public void Readiness_Trouble_IsRedWithWhatsDown()
+    {
+        var w = Readied("trouble", """["shop/api","shop/web"]""");
+        Assert.True(w.InTrouble);
+        Assert.Equal(["shop/api", "shop/web"], w.Down);
+        Assert.Equal(SprigWorkspaceState.Running, w.Shown);
+    }
+
+    [Fact]
+    public void Readiness_OnlyMattersWhileRunning()
+    {
+        var fold = Folded();
+        fold.Apply(WithReadiness.Replace("\"running\"", "\"paused\"").Replace("HEALTH", "trouble").Replace("DOWN", "[]"));
+        var w = fold.Current.Find("shop/1")!;
+        Assert.Equal(SprigWorkspaceState.Paused, w.Shown);
+        Assert.False(w.InTrouble);
+    }
+
+    [Fact]
+    public void Readiness_Absent_FallsBackToTheApps()
+    {
+        var w = Folded().Current.Find("shop/1")!;   // the 0.9.10-shaped snapshot has no readiness
+        Assert.Null(w.Readiness);
+        Assert.Equal((1, 2), w.ReadyOf);
+        Assert.False(w.AllUp);
+    }
+
+    [Fact]
+    public void Notices_Ready_UsesSprigsReadinessWhenItHasIt()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        fold.Apply(WithReadiness.Replace("HEALTH", "up").Replace("DOWN", "[]"));
+        var awaiting = new HashSet<string> { "shop/1" };
+
+        var n = Assert.Single(SprigNotices.Diff(before, fold.Current, awaiting));
+        Assert.Equal("feat-cart is ready", n.Title);
 
         Assert.Equal(SprigWorkspaceState.Paused, fold.Current.Find("shop/2")!.Shown);
     }

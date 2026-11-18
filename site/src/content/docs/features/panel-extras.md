@@ -141,7 +141,7 @@ If you run your apps with [sprig](https://arcticgizmo.github.io/sprig/), turn on
 - **Click a line** to open sprig on that workspace.
 - **Right-click a line** to start, stop, pause or resume it, restart one app, or open a ready app in your browser.
 - **Hover a line** to see every app with its state and port.
-- **Session rows:** a session working in a sprig slot shows a small sprout, coloured by the slot's state. Click it to open sprig there.
+- **Session rows:** a session working in a sprig slot shows sprig's icon, coloured by the slot's state: blue while its apps are still coming up, green once they're ready, red if one is down. Click it to open sprig there.
 
 Perch keeps one `sprig watch` running while the section is on, so changes show within about a second without polling. It needs sprig 0.9.10 or later. **Notify on sprig changes** adds a notification when an app exits or fails, and when a workspace you started from Perch is ready.
 
@@ -183,7 +183,7 @@ how often Perch checks with **Service status poll interval**.
 | Feeds check interval | How often, in minutes, each feed is checked. |
 | Notify on new feed entries | A notification when a feed publishes something new. |
 | Hypertree | The Hypertree branch line. |
-| Sprig | The Sprig workspaces section, and the sprout on sessions working in a sprig slot. Needs sprig installed. |
+| Sprig | The Sprig workspaces section, and sprig's icon on sessions working in a sprig slot. Needs sprig installed. |
 | Notify on sprig changes | A notification when a sprig app exits or fails, or a workspace you started from Perch is ready. |
 | Jira ticket | A ticket glyph on sessions whose branch carries a Jira key. |
 | Jira site | Your Jira sub-domain that ticket glyphs link into. |

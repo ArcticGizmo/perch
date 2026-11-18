@@ -1,8 +1,8 @@
 # Sprig integration: testing
 
-The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app failed", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S5: the session-row glyph is check 10 and notifications are check 11.
+The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app down", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S5: the session-row glyph is check 10 and notifications are check 11.
 
-- **Header:** a chevron, a green sprout, `SPRIG`, and on the right "2 running · 1 starting" (or `connecting…`, `reconnecting…`, `not installed`, `nothing running`, `N paused`). Clicking it collapses or expands the section, and that's remembered.
+- **Header:** a chevron, sprig's icon in its brand green, `SPRIG`, and on the right "2 running · 1 starting" (or `connecting…`, `reconnecting…`, `not installed`, `nothing running`, `N paused`). Clicking it collapses or expands the section, and that's remembered.
 - **Line click:** opens sprig on that workspace (`sprig open <orch> <slot>`).
 - **Line right-click:**
   - Restart / Pause / Stop, or Resume / Stop, or Start, depending on the state;
@@ -10,7 +10,8 @@ The overlay gains a collapsible **Sprig** section. Under it is one line per work
   - **Apps ▸**, with a submenu per app (Start or Restart / Stop, Open log);
   - Open in sprig / Open folder / Copy path.
 - **Hover a line:** the branch, `<orch> · slot N`, every app with its state and port, and any error.
-- **Order:** anything failed (or with a failed app) first, then starting, running, paused, stopped.
+- **Order:** anything failed (or with an app down) first, then starting, running, paused, stopped.
+- **Starting vs running:** sprig says `running` as soon as any app is alive. Perch shows a running slot as **starting** (blue) while an app is still building, waiting or booting, and as **red** while one has exited, failed or is restarting. With a sprig that sends `readiness` (branch `starting-state`), Perch uses that. Otherwise it works it out from the apps, the same way.
 
 How it gets its data: one `sprig watch --json` child for as long as the setting is on, never a poll. Actions run `sprig <verb> <orch> <slot> [app] --json --no-wait` off the UI thread. A failure gives one toast. When sprig needs you (`untrusted`, `inputs-needed`, `held` …), sprig is opened on the workspace. Diagnostics go to `%APPDATA%\Perch (Dev)\logs\sprig.log`.
 
@@ -87,7 +88,7 @@ Right-click the slot's line.
 
 - **Docker off.** Quit Docker Desktop, then **Start** a slot that has infra. Expected: one toast, "Couldn't start <branch>", "Docker isn't running. Start Docker Desktop and try again."
 - **Needs sprig.** On a slot whose definition isn't approved (edit its `sprig.yaml` so it's untrusted again), **Start**. Expected: one toast saying sprig needs you, and sprig opens on that workspace.
-- **An app that crashes.** Break one app (a bad port in its config, say) and start the slot. Expected: the line moves to the top reading `1 app failed` (red), and hovering shows that app as `exited (<code>)` with its error.
+- **An app that crashes.** Break one app (a bad port in its config, say) and start the slot. Expected: the line moves to the top reading `1 app down` (red; an app with a restart policy reads the same while it crash-loops), and hovering shows that app as `exited (<code>)` with its error.
 
 ## 6. Sprig's host comes and goes
 
@@ -128,7 +129,7 @@ Also try ending the dev `perch.exe` from Task Manager: the watch should still en
 
 ## 10. Session rows (S4)
 
-A session working in a sprig slot gets a small sprout between its worktree and PR glyphs, coloured by the workspace's state: green running, blue starting, red failed (or an app of it failed), amber paused, grey stopped. A session is in a workspace when sprig's hook made the slot for it (`madeForAgent`), or when the worktree it's editing in, or else its folder, is inside one of the workspace's repo folders. Free slots never match.
+A session working in a sprig slot gets sprig's icon between its worktree and PR glyphs, coloured by the workspace's state: green running, blue starting (apps still coming up), red failed (or an app of it down), amber paused, grey stopped. A session is in a workspace when sprig's hook made the slot for it (`madeForAgent`), or when the worktree it's editing in, or else its folder, is inside one of the workspace's repo folders. Free slots never match.
 
 In a terminal in `C:\Users\JonHowell\Documents\git\Safety-Virtual--1` (a slot), start `claude` and paste:
 
@@ -136,13 +137,13 @@ In a terminal in `C:\Users\JonHowell\Documents\git\Safety-Virtual--1` (a slot), 
 
 | | Before | After |
 |---|---|---|
-| The session's row | No sprout | Sprout, coloured by slot 1's state |
+| The session's row | No sprig icon | Sprig icon, coloured by slot 1's state |
 | Hover it | — | `Sprig · <branch>`, `Safety-Virtual · slot 1`, the state detail, each running app |
 | Click it | — | Sprig opens on slot 1 |
 | Right-click it | — | Slot 1's menu, the same one as its line in the Sprig section |
-| `sprig resume Safety-Virtual 1` | — | The sprout turns blue, then green |
+| `sprig resume Safety-Virtual 1` | — | The icon turns blue while apps build and boot, then green |
 
-Also start `claude` in a folder sprig doesn't know: no sprout. Turn **Sprig** off: every sprout disappears.
+Also start `claude` in a folder sprig doesn't know: no icon. Turn **Sprig** off: every row icon disappears.
 
 ## 11. Notifications (S5)
 

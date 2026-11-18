@@ -52,15 +52,34 @@ internal sealed record SprigWorkspace(
 {
     public bool IsFree => State == SprigWorkspaceState.Free;
 
+    /// <summary>How far its apps have got, as sprig works it out; null from a sprig that doesn't send it (0.9.10 and
+    /// earlier), when the properties below work it out from <see cref="Apps"/> instead.</summary>
+    public SprigReadiness? Readiness { get; init; }
+
     /// <summary>
-    /// The state Perch shows. Sprig up to 0.9.10 says <c>starting</c> only while it prepares the workspace
-    /// (worktrees, files, infra) and <c>running</c> as soon as any app is alive, which includes apps still building
-    /// or booting. Read as "up" that's green for the whole start-up, so a running workspace with apps still on
-    /// their way up shows as <see cref="SprigWorkspaceState.Starting"/> until they've settled. Sprig's
-    /// <c>starting-state</c> change reports this itself, after which this is a no-op.
+    /// The state Perch shows. <see cref="State"/> answers "is anything going": sprig says <c>running</c> as soon as
+    /// any app is alive, including apps still building or booting. Read as "up" that's green for the whole
+    /// start-up, so a running workspace whose apps are still on their way up shows as
+    /// <see cref="SprigWorkspaceState.Starting"/> until they've settled.
     /// </summary>
     public SprigWorkspaceState Shown
-        => State == SprigWorkspaceState.Running && Apps.Any(a => a.IsComingUp) ? SprigWorkspaceState.Starting : State;
+        => State == SprigWorkspaceState.Running && (Readiness is { } r ? r.Health == SprigReadiness.Starting : Apps.Any(a => a.IsComingUp))
+            ? SprigWorkspaceState.Starting : State;
+
+    /// <summary>Running, but an app has exited, failed or is restarting. Outweighs starting.</summary>
+    public bool InTrouble
+        => State == SprigWorkspaceState.Running && (Readiness is { } r ? r.Health == SprigReadiness.Trouble : Apps.Any(a => a.IsDown));
+
+    /// <summary>Every app that was started is up (and something was).</summary>
+    public bool AllUp
+        => Readiness is { } r ? r.Health == SprigReadiness.Up : ActiveCount > 0 && ReadyCount == ActiveCount && !Apps.Any(a => a.IsDown);
+
+    /// <summary>"<c>Ready</c> of <c>Of</c>" for the line's detail: sprig's counts (jobs and apps stopped on purpose left
+    /// out) when it sends them, else apps ready out of apps with a runner.</summary>
+    public (int Ready, int Of) ReadyOf => Readiness is { } r ? (r.Ready, r.Started) : (ReadyCount, ActiveCount);
+
+    /// <summary>The apps (<c>repo/app</c>) that are down: exited, failed or restarting.</summary>
+    public IReadOnlyList<string> Down => Readiness?.Down ?? Apps.Where(a => a.IsDown).Select(a => a.Name).ToArray();
 
     /// <summary>Apps that are up: ready, or a job that finished.</summary>
     public int ReadyCount => Apps.Count(a => a.IsReady);
@@ -69,6 +88,21 @@ internal sealed record SprigWorkspace(
     public int ActiveCount => Apps.Count(a => !a.IsOff);
 
     public bool AnyFailed => Apps.Any(a => a.IsFailed);
+}
+
+/// <summary>A workspace's <c>readiness</c> as sprig sends it (from its <c>starting-state</c> change on).</summary>
+/// <param name="Health"><see cref="None"/>, <see cref="Starting"/>, <see cref="Up"/> or <see cref="Trouble"/>; a value
+/// a newer sprig adds is kept as written and reads as none of them.</param>
+/// <param name="Started">Apps that were started (jobs and apps stopped on purpose left out).</param>
+/// <param name="Down">The apps (<c>repo/app</c>) that exited, failed or are restarting.</param>
+internal sealed record SprigReadiness(string Health, int Ready, int Started, int Total, IReadOnlyList<string> Down)
+{
+    public const string None = "none";
+    /// <summary>An app is building, waiting or booting, or a job is still running.</summary>
+    public const string Starting = "starting";
+    public const string Up = "up";
+    /// <summary>An app exited, failed or is restarting. Outweighs <see cref="Starting"/>.</summary>
+    public const string Trouble = "trouble";
 }
 
 /// <param name="Name"><c>repo/app</c>.</param>
@@ -84,9 +118,12 @@ internal sealed record SprigApp(
     public bool IsReady => State is "ready" or "completed";
     public bool IsFailed => State is "exited" or "failed";
 
+    /// <summary>Not working: exited, failed, or restarting after a crash. Sprig's own readiness counts the same.</summary>
+    public bool IsDown => IsFailed || State == "restarting";
+
     /// <summary>On its way up: building, waiting on what it depends on, starting, or a job (a migration, say) still
-    /// running. Not restarting: an app in a crash loop would otherwise hold its workspace at "starting" for good.
-    /// The same rule sprig's own state uses from its <c>starting-state</c> change on.</summary>
+    /// running. Not restarting, which is <see cref="IsDown"/>: a crash loop is trouble, not a start. The same split
+    /// sprig's own readiness makes.</summary>
     public bool IsComingUp => State is "building" or "waiting" or "starting" or "running";
 
     /// <summary>On its way somewhere: building, waiting on what it depends on, starting, restarting, or stopping.</summary>

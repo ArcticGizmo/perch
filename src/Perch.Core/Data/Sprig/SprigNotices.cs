@@ -56,13 +56,13 @@ internal static class SprigNotices
             bool wasParked = was.State is SprigWorkspaceState.Stopped or SprigWorkspaceState.Paused;
             if (parked && !wasParked) awaitingReady.Remove(w.Key);
 
-            if (awaitingReady.Contains(w.Key) && w.State == SprigWorkspaceState.Running
-                && w.ActiveCount > 0 && w.ReadyCount == w.ActiveCount && !w.AnyFailed)
+            if (awaitingReady.Contains(w.Key) && w.State == SprigWorkspaceState.Running && w.AllUp)
             {
                 awaitingReady.Remove(w.Key);
                 var ports = w.Apps.Where(a => a is { IsReady: true, Port: not null }).Select(a => $"{a.ShortName} :{a.Port}").ToArray();
+                int ready = w.ReadyOf.Ready;
                 var body = ports.Length > 0 ? string.Join(" · ", ports)
-                    : w.ReadyCount == 1 ? "1 app is ready." : $"{w.ReadyCount} apps are ready.";
+                    : ready == 1 ? "1 app is ready." : $"{ready} apps are ready.";
                 notices.Add(new($"{w.Label} is ready", body, w.Key, false));
             }
         }
