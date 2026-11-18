@@ -21,6 +21,8 @@ public class SettingsRegistryTests
         // The social region's expand/collapse is UI state toggled by the region's own chevron on the overlay,
         // not a Settings-window control.
         nameof(AppSettings.SocialRegionExpanded),
+        // Likewise the Sprig section's, toggled by its header's chevron.
+        nameof(AppSettings.SprigSectionExpanded),
         // Compact vs roomy session rows, toggled by the overlay's own density button.
         nameof(AppSettings.CompactSessionRows),
         // How long a friend's status stays visible before going stale is set from the Friends window's own

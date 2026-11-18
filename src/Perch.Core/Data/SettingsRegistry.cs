@@ -472,6 +472,16 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.HypertreeEnabled),
             s => s.HypertreeEnabled, (s, v) => s.HypertreeEnabled = v),
 
+        Toggle("sprig", "Sprig",
+            "A collapsible overlay section of the workspaces sprig has checked out: each one's branch, whether it's " +
+            "running and how many of its apps are ready. Click one to open it in sprig; right-click to start, stop, " +
+            "pause or resume it, or open a running app. Needs sprig installed.",
+            SettingSurface.Integrations,
+            ["sprig", "workspace", "workspaces", "slot", "slots", "apps", "services", "run", "start", "stop", "pause",
+             "resume", "docker", "worktree", "integration"],
+            PreviewTarget.Sprig, nameof(AppSettings.ShowSprig),
+            s => s.ShowSprig, (s, v) => s.ShowSprig = v),
+
         // Not a catalogue control — edited by dragging the sections in the live preview's "Rearrange" mode —
         // but listed so search surfaces it and it points the user at the preview.
         Info("section-order", "Section arrangement",

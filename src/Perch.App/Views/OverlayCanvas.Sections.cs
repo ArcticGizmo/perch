@@ -49,6 +49,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Todo          => TodosStripVisible,
         OverlaySection.GitHub        => GitHubStripVisible,
         OverlaySection.Feeds         => FeedsRowVisible,
+        OverlaySection.Sprig         => SprigSectionVisible,
         OverlaySection.Sessions      => true,
         OverlaySection.Friends       => FeedStripVisible || SocialSignInStripVisible,
         OverlaySection.Media         => MediaStripVisible,
@@ -67,6 +68,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Todo          => TodosStripHeight,
         OverlaySection.GitHub        => GitHubStripHeight,
         OverlaySection.Feeds         => FeedsRowHeight,
+        OverlaySection.Sprig         => SprigSectionHeight,
         OverlaySection.Sessions      => SessionsSectionHeight,
         OverlaySection.Friends       => FriendsSectionHeight,
         OverlaySection.Media         => MediaStripHeight,
@@ -132,6 +134,7 @@ public sealed partial class OverlayCanvas
             case OverlaySection.Todo:          DrawTodosStrip(ctx, width, top); break;
             case OverlaySection.GitHub:        DrawGitHubStrip(ctx, width, top); break;
             case OverlaySection.Feeds:         DrawFeedsRow(ctx, width, top); break;
+            case OverlaySection.Sprig:         DrawSprigSection(ctx, width, top); break;
             case OverlaySection.Sessions:      PaintSessions(ctx, width, top); break;
             case OverlaySection.Friends:
                 if (FeedStripVisible) DrawSocialRegion(ctx, width, top);

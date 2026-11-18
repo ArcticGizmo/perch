@@ -31,6 +31,8 @@ public enum OverlaySection
     GitHub,
     /// <summary>The one-line row of story-style feed heads (docs/feeds-plan.md).</summary>
     Feeds,
+    /// <summary>The collapsible list of sprig workspaces (docs/sprig-integration-plan.md).</summary>
+    Sprig,
     /// <summary>The session rows (and, directly beneath them, the daemon-worker strip). Sessions that ended lately
     /// aren't a section: they're behind the Recent button on this section's "+ New session" row.</summary>
     Sessions,
@@ -59,6 +61,7 @@ public static class OverlaySectionOrder
         OverlaySection.Todo,
         OverlaySection.Feeds,
         OverlaySection.GitHub,
+        OverlaySection.Sprig,
         OverlaySection.Sessions,
         OverlaySection.Friends,
         OverlaySection.Media,

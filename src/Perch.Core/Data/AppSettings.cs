@@ -639,6 +639,16 @@ internal sealed class AppSettings
     // See Perch.Data.Hypertree and docs/hypertree-integration.md.
     public bool HypertreeEnabled { get; set; }
 
+    // Sprig (the workspace runner). When on, the overlay grows a collapsible "Sprig" section listing the workspaces
+    // sprig has checked out and how many of each one's apps are ready, with start/stop/pause/resume and "open in
+    // sprig" on each. Off by default and load-bearing while off: no `sprig` process runs until it's turned on, and
+    // then only one long-lived `sprig watch --json`. See Perch.Data.Sprig and docs/sprig-integration-plan.md.
+    public bool ShowSprig { get; set; }
+
+    // Whether the Sprig section is open, toggled from its header's chevron — UI state, not a Settings control (see
+    // SettingsRegistryTests.NotSettings). On by default.
+    public bool SprigSectionExpanded { get; set; } = true;
+
     // GitHub pull requests. When on, each session whose working directory is a GitHub repo grows a merge
     // glyph on its overlay row once its current branch has a PR — clicking it opens a small flyout (title,
     // state, number) that links out to the PR in a browser. Off by default and load-bearing while off:

@@ -510,7 +510,8 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.RecentSessions  => ("◷ Recent",    Palette.Orange, Color.FromRgb(48, 40, 30)),
             PreviewTarget.GitHubAlerts    => ("2 PRs need you", Palette.Yellow, Color.FromRgb(45, 42, 28)),
             PreviewTarget.Feeds           => ("◉ ◉ ◎ 3 new", Palette.Accent,  Color.FromRgb(38, 49, 74)),
-            _                           => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
+            PreviewTarget.Sprig           => ("● feat-cart  3/4", Palette.Green, Color.FromRgb(24, 40, 30)),
+            _                         => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
         };
 
         // No single glyph (notifications, behaviour toggles) — no preview chip at all, rather than an empty

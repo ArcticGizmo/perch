@@ -1726,7 +1726,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Worktree, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Worktree, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, SprigLine, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1993,6 +1993,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // click must not still land on where it used to be).
             if (!showBody || !SectionVisible(OverlaySection.QuickLinks)) _noteButtonRect = default;
             if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hypertreeRect = default;
+            if (!showBody || !SectionVisible(OverlaySection.Sprig)) ClearSprigHitRects();
             if (!showBody || !MicStripVisible) ClearMicHitRects();
             if (!showBody || !MediaStripVisible) ClearMediaHitRects();
             if (!showBody || !FeedStripVisible) ClearSocialRegionHitRects();
@@ -4325,6 +4326,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The feeds row: each head, the "+N" chip and the "+" are separate controls.
         bool overFeeds = UpdateFeedsHover(p);
 
+        // The Sprig section: the header toggles it, each workspace line opens it in sprig.
+        bool overSprig = UpdateSprigHover(p);
+
         // The Social sign-in strip highlights on hover and takes the hand cursor like any other control.
         bool overSocial = _socialSignInRect.Contains(p);
         if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
@@ -4348,7 +4352,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || wtIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds)
+               || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds || overSprig)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4387,6 +4391,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestTodos(p)                           ? (TipKind.Todos, -1) :
             HitTestFeedHead(p) is var fh && fh >= 0   ? (TipKind.FeedHead, fh) :
             HitTestFeedMore(p)                        ? (TipKind.FeedMore, -1) :
+            HitTestSprigLine(p) is var sl && sl >= 0  ? (TipKind.SprigLine, sl) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
@@ -4441,6 +4446,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Todos:   ShowTodosTooltip();          break;
             case TipKind.FeedHead: ShowFeedHeadTooltip(_tipRow); break;
             case TipKind.FeedMore: ShowFeedMoreTooltip();       break;
+            case TipKind.SprigLine: ShowSprigLineTooltip(_tipRow); break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
@@ -4486,6 +4492,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredWorktreeRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
+        changed |= ClearSprigHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         changed |= ClearLoginButtonHover();
         _hoveredSocial = false;
@@ -4956,6 +4963,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The feeds row: a head plays its story, "+N" plays the next unread, "+" adds a feed.
         if (RouteFeedsClick(p)) return;
 
+        // The Sprig section: the header toggles it, a workspace line opens it in sprig.
+        if (RouteSprigClick(p)) return;
+
         // The Todo strip: anywhere on the line opens the Todos window.
         if (HitTestTodos(p)) { TodosRequested?.Invoke(); return; }
 
@@ -5045,6 +5055,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The feeds row has its own menu (per head, or the row's).
         if (ShowFeedsMenu(p)) return;
+
+        // The Sprig section has its own menu (per workspace line, or "Open sprig").
+        if (ShowSprigMenu(p)) return;
 
         // Right-click within the social region (or its sign-in strip): the Social actions live here now — a
         // right-click on the overlay header no longer carries them.
