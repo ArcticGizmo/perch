@@ -16,7 +16,8 @@ public enum WorktreeSource
     /// <summary>The session's newest file write landed there, though its folder is elsewhere in the repo.</summary>
     FollowedEdits,
 
-    /// <summary>The user chose it from the row menu.</summary>
+    /// <summary>The user pinned the session's PR/Jira lookups to it from the row menu. Perch's choice only: Claude
+    /// never sees the pin, so it says which PR to show, not where Claude is working.</summary>
     Pinned,
 }
 

@@ -110,7 +110,7 @@ internal static class SettingsRegistry
             s => s.ShowGitStats, (s, v) => s.ShowGitStats = v),
 
         Toggle("worktree-glyph", "Worktree glyph",
-            "A tree glyph on a session working in a git worktree rather than the repo's main checkout - whether it started there or moved in to edit. Hover for the worktree and branch; click for the git graph; right-click to pick the worktree.",
+            "A tree glyph on a session working in a git worktree rather than the repo's main checkout - whether it started there or moved in to edit. Hover for the worktree and branch; click for the git graph.",
             SettingSurface.SessionRow, ["worktree", "git", "tree", "branch", "checkout", "linked", "glyph"],
             PreviewTarget.Worktree, nameof(AppSettings.ShowWorktreeGlyph),
             s => s.ShowWorktreeGlyph, (s, v) => s.ShowWorktreeGlyph = v),

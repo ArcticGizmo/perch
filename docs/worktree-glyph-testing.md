@@ -4,16 +4,16 @@ A session row now shows a small pine-tree glyph when the session is working in a
 
 How Perch decides (`SessionWorktree.Locate`, on top of the existing `SessionWorktree.Resolve` from [pr-glyph-worktree-testing.md](pr-glyph-worktree-testing.md)):
 
-1. **Pinned.** A worktree picked from the row menu or the glyph's right-click wins.
+1. **Pinned.** A worktree the PR/Jira lookups were pinned to from the row menu wins, so the tree always agrees with the PR beside it. The pin is Perch's own: Claude never sees it and it never moves the session, which is why the glyph itself offers no way to set one.
 2. **Followed edits.** Otherwise, the worktree holding the session's newest successful Write/Edit, if that isn't the session's own folder.
 3. **Started there.** Otherwise, the worktree holding the session's own folder: `claude --worktree`, a `.claude/worktrees/<name>` folder, or a session simply started in a sibling worktree.
 
 The main checkout never gets the glyph. In a bare layout (`.bare` + worktrees) every checkout is a linked worktree, so every session there gets it. A submodule is never mistaken for a worktree. Worktree lists come from a few small reads under the repo's `.git`, cached for 30 s per repo, with no git process.
 
-- **Hover:** `Worktree <folder>`, `Branch <name>` (or `Detached HEAD`), how Perch knows (`The session's own folder` / `Followed from the session's latest edits` / `Pinned from the menu`), and the click hints.
+- **Hover:** `Worktree <folder>`, `Branch <name>` (or `Detached HEAD`), how Perch knows (`The session's own folder` / `Followed from the session's latest edits` / `PR pinned to this worktree`), and `Click to open the git graph`.
 - **Click:** opens the git graph for the session.
-- **Right-click:** a `Session worktree` caption over the same Automatic + per-worktree picker the PR glyph uses.
-- **Setting:** Settings → Session row → **Worktree glyph** (search "worktree"). On by default. While it's on, the row menu's worktree picker appears even with the PR and Jira glyphs off, labelled **Session worktree**.
+- **Right-click:** the ordinary row menu. The worktree picker stays where it was, under **Pull request worktree** / **Jira ticket worktree**, only while one of those glyphs is on.
+- **Setting:** Settings → Session row → **Worktree glyph** (search "worktree"). On by default.
 
 Unit coverage: `SessionWorktreeTests` (`Classify` for each source, main checkout, bare layout, and `Locate` against an on-disk repo). The checks below are the live ones.
 
@@ -59,21 +59,13 @@ Then: *"Edit README.md in the current folder (not the worktree) to append a blan
 |---|---|
 | The session's row | Glyph gone (back in the main checkout) |
 
-## 3. Pick the worktree
+## 3. Right-click
 
 Right-click the glyph on the `--worktree` session from check 1.
 
 | | After |
 |---|---|
-| Menu | `Session worktree` caption, `Automatic`, then one radio item per worktree (`folder · branch`) |
-| Pick `<repo> · <branch>` (the main checkout) | Glyph disappears |
-| Right-click the row, **Session worktree** ▸ `Automatic` | Glyph returns, hover says `The session's own folder` |
-
-On the plain session (glyph currently gone), right-click the row → **Session worktree** ▸ `<repo>--wt`.
-
-| | After |
-|---|---|
-| The session's row | Glyph appears, hover says `Pinned from the menu` |
+| Menu | The ordinary row menu (no worktree picker while PR and Jira are off) |
 
 ## 4. The setting
 
@@ -82,7 +74,7 @@ Settings → search `worktree`.
 | | After |
 |---|---|
 | Search result | **Worktree glyph** toggle, on |
-| Turn it off | Every tree glyph disappears; with PR and Jira off, the row menu loses **Session worktree** |
+| Turn it off | Every tree glyph disappears |
 | Turn it back on | Glyphs return within a second or two |
 
 ## 5. Alongside the PR glyph
@@ -92,7 +84,8 @@ Turn on **GitHub pull requests** and repeat check 2 with a branch that has an op
 | | After |
 |---|---|
 | Row | Tree glyph, then the PR glyph |
-| Row menu | The picker is labelled **Pull request worktree**, as before |
+| Row menu → **Pull request worktree** ▸ `<repo>--wt` on the plain session (after its edits moved back) | Tree glyph appears beside the worktree's PR; hover says `PR pinned to this worktree` |
+| Same menu ▸ `<repo> · <branch>` on the `--worktree` session | Both the PR and the tree follow the main checkout, so the tree disappears |
 
 ## Clean up
 

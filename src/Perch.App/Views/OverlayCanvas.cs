@@ -5094,15 +5094,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
 
-        // Right-clicking the worktree glyph picks which worktree the session counts as in, the same picker the row
-        // menu nests. With nothing to choose it falls through to the row menu.
-        int wtGlyphRow = HitRect(_worktreeRects, p);
-        if (wtGlyphRow >= 0 && _rows[wtGlyphRow].Session is { } wtSession && WorktreeMenuItems(wtSession) is { } wtItems)
-        {
-            ShowFlyout([new MenuItem { Header = "Session worktree", IsEnabled = false }, .. wtItems]);
-            return;
-        }
-
         var items = new List<Control>();
 
         int row = HitTestRow(p);
@@ -5148,7 +5139,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             bool isRepo = !subRow && GitRepoService.IsRepo(s.Cwd);
             if (isRepo && _gitKrakenAvailable)
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
-            if (isRepo && (_showPullRequests || _showJiraTickets || _showWorktreeGlyph) && WorktreeSubmenu(s) is { } worktreeMenu)
+            if (isRepo && (_showPullRequests || _showJiraTickets) && WorktreeSubmenu(s) is { } worktreeMenu)
                 actions.Add(worktreeMenu);
             if (!subRow && _showNoteLine)
             {
@@ -5253,11 +5244,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The row menu's worktree picker, as a submenu. Null when there's nothing to choose (see WorktreeMenuItems).
     private MenuItem? WorktreeSubmenu(ClaudeSession s) =>
         WorktreeMenuItems(s) is { } entries
-            ? new MenuItem
-            {
-                Header = _showPullRequests ? "Pull request worktree" : _showJiraTickets ? "Jira ticket worktree" : "Session worktree",
-                ItemsSource = entries,
-            }
+            ? new MenuItem { Header = _showPullRequests ? "Pull request worktree" : "Jira ticket worktree", ItemsSource = entries }
             : null;
 
     // Which of the repo's worktrees the PR/Jira glyphs follow: "Automatic" (Claude Code's cwd never moves into a
@@ -5495,7 +5482,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Hover tooltip for the worktree glyph: the worktree's folder and branch, and how Perch knows the session is
-    // there, since a worktree followed from edits is a guess the user may want to correct by pinning.
+    // there. A pin is Perch's own choice of which PR to show and never moves Claude, so it's worded as the PR's.
     private void ShowWorktreeTooltip(int row)
     {
         if (row < 0 || row >= _rows.Count || _rows[row].Session?.LinkedWorktree is not { } wt) return;
@@ -5503,7 +5490,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         string how = wt.Source switch
         {
-            WorktreeSource.Pinned        => "Pinned from the menu",
+            WorktreeSource.Pinned        => "PR pinned to this worktree",
             WorktreeSource.FollowedEdits => "Followed from the session's latest edits",
             _                            => "The session's own folder",
         };
@@ -5512,7 +5499,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             new($"Worktree {wt.Name}", OverlayTooltip.FgColor, true),
             new(wt.Branch is { } b ? $"Branch {b}" : "Detached HEAD", OverlayTooltip.FgColor, false),
             new(how, OverlayTooltip.MutedColor, false),
-            new("Click: git graph · Right-click: pick worktree", OverlayTooltip.MutedColor, false),
+            new("Click to open the git graph", OverlayTooltip.MutedColor, false),
         };
         Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
     }
