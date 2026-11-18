@@ -7,7 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- A little tree marks any session working in a git worktree, whether it started there or wandered in to edit
+---
+
+## [v0.6.12] - 2026-11-18
+
+- A little tree marks sessions working in a git worktree (started there or wandered in)
+- Click the tree for the git graph
 
 ---
 
