@@ -333,7 +333,8 @@ internal static class SampleData
         [
             Ws("1", "feat-cart", SprigWorkspaceState.Running, false, @"C:\src\api",
                 App("api", "ready", 5123), App("web", "ready", 5124), App("worker", "ready"), App("migrate", "completed")),
-            Ws("2", "fix-login-redirect", SprigWorkspaceState.Starting, false, @"C:\src\shop--2",
+            // Reported "running" by sprig, as it is once any app is alive; Perch shows it starting while apps boot.
+            Ws("2", "fix-login-redirect", SprigWorkspaceState.Running, false, @"C:\src\shop--2",
                 App("api", "ready", 5223), App("web", "building", doing: "installing packages"), App("worker", "waiting")),
             Ws("3", "spike-search", SprigWorkspaceState.Running, false, @"C:\src\web",
                 App("api", "exited", exit: 134), App("web", "ready", 5324)),

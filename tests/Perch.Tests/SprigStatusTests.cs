@@ -52,6 +52,23 @@ public class SprigStatusTests
     }
 
     [Fact]
+    public void Shown_RunningWithAppsStillComingUp_ReadsAsStarting()
+    {
+        var fold = Folded();
+        var one = fold.Current.Find("shop/1")!;   // sprig says running; web is still building
+        Assert.Equal(SprigWorkspaceState.Running, one.State);
+        Assert.Equal(SprigWorkspaceState.Starting, one.Shown);
+
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"ready","port":5124}""");
+        Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);   // worker is off by choice
+
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"stopping"}""");
+        Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);   // going down isn't starting
+
+        Assert.Equal(SprigWorkspaceState.Paused, fold.Current.Find("shop/2")!.Shown);
+    }
+
+    [Fact]
     public void AppLine_ReplacesThatAppOnly()
     {
         var fold = Folded();
