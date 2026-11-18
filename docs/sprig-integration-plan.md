@@ -33,12 +33,15 @@ The status feed was designed with sprig for this: the ask is `../sprig/docs/live
   - **Dwell tooltip on a line:** the orchestration, slot and branch, then every app with its state and port, and the workspace's error if it has one.
 - **Docker isn't counted (`"infra":"not-counted"`),** so a workspace with only its containers up reads stopped or paused. Perch shows sprig's state as given and doesn't call it "down".
 - **Linking sessions to slots:** a session belongs to a workspace when its cwd is inside one of the workspace's `dirs`, or its session id is the workspace's `madeForAgent`. A linked session row gets a small sprig glyph coloured by the workspace's state. Hovering it explains it, and a click opens sprig on the workspace.
-- **Notifications are opt-in** (`NotifySprig`, `playful: false`): an app exited or failed, or a workspace failed to start. A workspace you started from Perch also gets "ready" when every app is. They're held by quiet mode like other alerts.
+- **Notifications are opt-in** (`NotifySprig`, `playful: false`): an app exited or failed, or a workspace failed to start. A workspace you started from Perch also gets "ready" when every app is.
+  - Only changes count, so starting Perch never replays old failures.
+  - They're held by the notifications master switch and Do Not Disturb. Quiet mode doesn't hold them: they're work alerts, not playful ones.
+  - Clicking one opens sprig on the workspace.
 - **macOS:** the code is platform-neutral (`Process` + `PATH`). Sprig's mac story is sprig's to land; the section simply reads "not installed" until a `sprig` is on `PATH`.
 
 ## Phases
 
-**Status:** S1–S3 are built on branch `sprig-integration`, with unit tests and renders. Live checks are in [sprig-integration-testing.md](sprig-integration-testing.md). S4–S6 are next.
+**Status:** S1–S5 are built on branch `sprig-integration`, with unit tests and renders. Live checks are in [sprig-integration-testing.md](sprig-integration-testing.md).
 
 1. **S1 Core:** `SprigStatus` models, `SprigStatusFold` (snapshot, workspace, app, removals, host), `SprigLocator`, `SprigCli` (actions with `--json` result parsing), and tests over fixture lines.
 2. **S2 Monitor:** `SprigMonitorHost` (the child process, the reader thread, coalesced UI posts, backoff, Start/Stop), `AppSettings.ShowSprig` plus its registry toggle, `PreviewTarget.Sprig`, and the live-apply wiring.

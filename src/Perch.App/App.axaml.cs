@@ -37,6 +37,8 @@ public partial class App : Application
     private SocialFeedMonitorHost? _feedHost;
     private HypertreeMonitorHost? _hypertreeHost;
     private SprigMonitorHost? _sprigHost;
+    private SprigStatus _sprigPrevious = SprigStatus.Empty;                        // for SprigNotices.Diff
+    private readonly HashSet<string> _sprigAwaitingReady = new(StringComparer.Ordinal);   // started from Perch
     private DaemonMonitorHost? _daemonHost;
     // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
     // reused list window itself follows the WindowHost idiom below.
@@ -351,7 +353,7 @@ public partial class App : Application
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
             // Sprig's `watch --json` stream → the overlay's Sprig section (opt-in; started in ApplyDisplaySettings).
             _sprigHost = new SprigMonitorHost();
-            _sprigHost.Changed += () => _overlay?.Canvas.SetSprig(_sprigHost.Status, _sprigHost.Feed);
+            _sprigHost.Changed += OnSprigChanged;
             _overlay.Canvas.SetSprigExpanded(settings.SprigSectionExpanded);
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
             // headless sessions have no window to focus, so they get their own rows with an options menu.
@@ -2281,6 +2283,10 @@ public partial class App : Application
             var id = action[FeedToastPrefix.Length..];
             OpenFeedStory(id.Length > 0 ? id : null);
         }
+        else if (action.StartsWith(SprigToastPrefix, StringComparison.Ordinal))
+        {
+            OnSprigOpenRequested(_sprigHost?.Status.Find(action[SprigToastPrefix.Length..]));
+        }
         else if (action.StartsWith(LoginToastPrefix, StringComparison.Ordinal)
                  && ClaudeConfigSet.Instance.ForRoot(action[LoginToastPrefix.Length..]) is { } dir)
         {
@@ -3409,6 +3415,10 @@ public partial class App : Application
     /// </summary>
     private void OnSprigActionRequested(SprigWorkspace workspace, SprigAction action, string? app)
     {
+        // Asked for from here, so say when it's up (SprigNotices); a stop or pause cancels the wait.
+        if (action is SprigAction.Start or SprigAction.Restart or SprigAction.Resume) _sprigAwaitingReady.Add(workspace.Key);
+        else _sprigAwaitingReady.Remove(workspace.Key);
+
         Task.Run(() =>
         {
             var result = SprigCli.Run(action, workspace, app);
@@ -3418,6 +3428,27 @@ public partial class App : Application
             Dispatcher.UIThread.Post(() => ShowSprigFailure($"Couldn't {action.ToString().ToLowerInvariant()} {what}", result, workspace));
         });
     }
+
+    // Each change from sprig: repaint, then any toasts it's worth (SprigNotices.Diff only ever compares two states,
+    // so a status pushed while notifications are off simply isn't announced later). Held by the notifications master
+    // switch and Do Not Disturb; not by Quiet mode, since these are work alerts. A click opens sprig on the workspace.
+    private void OnSprigChanged()
+    {
+        if (_sprigHost is not { } host) return;
+        var status = host.Status;
+        _overlay?.Canvas.SetSprig(status, host.Feed);
+
+        var notices = SprigNotices.Diff(_sprigPrevious, status, _sprigAwaitingReady);
+        _sprigPrevious = status;
+        if (notices.Count == 0 || Effective is not { NotificationsEnabled: true, NotifySprig: true } || _notifier is null) return;
+        bool dnd;
+        try { dnd = PlatformServices.DoNotDisturb.IsActive; } catch { dnd = false; }
+        if (dnd) return;
+        foreach (var n in notices)
+            _notifier.ShowAction(n.Title, n.Body, n.Problem ? ToastLevel.Warning : ToastLevel.Info, SprigToastPrefix + n.WorkspaceKey);
+    }
+
+    private const string SprigToastPrefix = "sprig:";
 
     private void ShowSprigFailure(string title, SprigActionResult result, SprigWorkspace? workspace)
     {

@@ -229,6 +229,127 @@ public class SprigStatusTests
         Assert.Equal("shop/1", SprigSessionLink.Find(Linked(), "s", P("shop--1").Replace('\\', '/'), null)?.Key);
     }
 
+    // ── notices ──────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static SprigStatus After(SprigStatusFold fold, params string[] lines)
+    {
+        foreach (var l in lines) fold.Apply(l);
+        return fold.Current;
+    }
+
+    [Fact]
+    public void Notices_NothingOnTheFirstSnapshot()
+    {
+        var awaiting = new HashSet<string> { "shop/1" };
+        Assert.Empty(SprigNotices.Diff(SprigStatus.Empty, Folded().Current, awaiting));
+    }
+
+    [Fact]
+    public void Notices_AnAppThatExits_IsOneProblem()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        var after = After(fold, """{"type":"app","workspace":"shop/1","name":"shop/api","state":"exited","exit":134,"restarts":0}""");
+
+        var n = Assert.Single(SprigNotices.Diff(before, after, new HashSet<string>()));
+        Assert.Equal("api exited · feat-cart", n.Title);
+        Assert.Equal("exit code 134", n.Body);
+        Assert.True(n.Problem);
+        Assert.Equal("shop/1", n.WorkspaceKey);
+
+        Assert.Empty(SprigNotices.Diff(after, after, new HashSet<string>()));   // only the change counts
+    }
+
+    [Fact]
+    public void Notices_SeveralAppsAtOnce_AreOneNotice()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        var after = After(fold,
+            """{"type":"app","workspace":"shop/1","name":"shop/api","state":"failed","error":"port 5123 in use"}""",
+            """{"type":"app","workspace":"shop/1","name":"shop/web","state":"exited","exit":1}""");
+
+        var n = Assert.Single(SprigNotices.Diff(before, after, new HashSet<string>()));
+        Assert.Equal("2 apps stopped working · feat-cart", n.Title);
+        Assert.Contains("api (port 5123 in use)", n.Body);
+    }
+
+    [Fact]
+    public void Notices_StoppingOrTheHostGoing_IsNotAFailure()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        var after = After(fold,
+            """{"type":"app","workspace":"shop/1","name":"shop/api","state":"stopped"}""",
+            """{"type":"host","running":false}""",
+            """{"type":"app","workspace":"shop/1","name":"shop/web","state":"off"}""");
+
+        Assert.Empty(SprigNotices.Diff(before, after, new HashSet<string>()));
+    }
+
+    [Fact]
+    public void Notices_AWorkspaceThatFails_SaysSoOnce()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        var after = After(fold, """{"type":"workspace","key":"shop/2","orchestration":"shop","name":"2","label":"fix-login","state":"failed","error":"docker didn't answer","dirs":[]}""");
+        var awaiting = new HashSet<string> { "shop/2" };
+
+        var n = Assert.Single(SprigNotices.Diff(before, after, awaiting));
+        Assert.Equal("fix-login failed to start", n.Title);
+        Assert.Equal("docker didn't answer", n.Body);
+        Assert.Empty(awaiting);
+    }
+
+    [Fact]
+    public void Notices_Ready_OnlyForWorkspacesStartedFromPerch()
+    {
+        var fold = Folded();
+        var before = fold.Current;
+        // shop/1 had api ready and web building; web becomes ready (worker is off, so 2 of 2 active).
+        var after = After(fold, """{"type":"app","workspace":"shop/1","name":"shop/web","state":"ready","port":5124}""");
+
+        Assert.Empty(SprigNotices.Diff(before, after, new HashSet<string>()));
+
+        var awaiting = new HashSet<string> { "shop/1" };
+        var n = Assert.Single(SprigNotices.Diff(before, after, awaiting));
+        Assert.Equal("feat-cart is ready", n.Title);
+        Assert.Equal("api :5123 · web :5124", n.Body);
+        Assert.False(n.Problem);
+        Assert.Empty(awaiting);
+    }
+
+    [Fact]
+    public void Notices_StillStoppedRightAfterAStart_KeepsWaiting()
+    {
+        // Perch adds the key when it asks sprig to start; the next status can still read stopped/paused.
+        var fold = Folded();
+        var before = fold.Current;
+        var awaiting = new HashSet<string> { "shop/2" };   // shop/2 is paused in the snapshot
+
+        Assert.Empty(SprigNotices.Diff(before, before, awaiting));
+        Assert.Contains("shop/2", awaiting);
+
+        // Once it had got going and is stopped again, there's nothing to wait for.
+        var going = After(fold, """{"type":"workspace","key":"shop/2","orchestration":"shop","name":"2","label":"fix-login","state":"starting","dirs":[]}""");
+        SprigNotices.Diff(before, going, awaiting);
+        var stopped = After(fold, """{"type":"workspace","key":"shop/2","orchestration":"shop","name":"2","label":"fix-login","state":"stopped","dirs":[]}""");
+        SprigNotices.Diff(going, stopped, awaiting);
+        Assert.Empty(awaiting);
+    }
+
+    [Fact]
+    public void Notices_ARemovedWorkspace_LeavesTheWaitingSet()
+    {
+        var fold = Folded();
+        var awaiting = new HashSet<string> { "shop/3" };
+        var before = fold.Current;
+        var after = After(fold, """{"type":"workspace-removed","key":"shop/3"}""");
+
+        Assert.Empty(SprigNotices.Diff(before, after, awaiting));
+        Assert.Empty(awaiting);
+    }
+
     // ── actions ──────────────────────────────────────────────────────────────────────────────────────────────
 
     private static SprigWorkspace Workspace() => Folded().Current.Find("shop/1")!;

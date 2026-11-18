@@ -1,6 +1,6 @@
 # Sprig integration: testing
 
-The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app failed", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S4 (S4 is the session-row glyph, check 10).
+The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app failed", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S5: the session-row glyph is check 10 and notifications are check 11.
 
 - **Header:** a chevron, a green sprout, `SPRIG`, and on the right "2 running · 1 starting" (or `connecting…`, `reconnecting…`, `not installed`, `nothing running`, `N paused`). Clicking it collapses or expands the section, and that's remembered.
 - **Line click:** opens sprig on that workspace (`sprig open <orch> <slot>`).
@@ -143,6 +143,21 @@ In a terminal in `C:\Users\JonHowell\Documents\git\Safety-Virtual--1` (a slot), 
 | `sprig resume Safety-Virtual 1` | — | The sprout turns blue, then green |
 
 Also start `claude` in a folder sprig doesn't know: no sprout. Turn **Sprig** off: every sprout disappears.
+
+## 11. Notifications (S5)
+
+Settings → search `sprig` → turn **Notify on sprig changes** on (with **Sprig** on and notifications on).
+
+| Do this | After |
+|---|---|
+| Restart Perch with a slot that already has a failed app | No toast (only changes are announced) |
+| Right-click a stopped slot → **Start**, and wait | One toast when every app is ready: `<branch> is ready`, `api :5123 · web :5124`. Click it: sprig opens on the slot |
+| `sprig start Safety-Virtual 1` in a terminal instead | No "ready" toast (only workspaces started from Perch get one) |
+| Kill one running app's process (Task Manager, by the pid in the line's hover or `sprig ps`) | `<app> exited · <branch>`, `exit code …` (a warning toast). If the app has a restart policy and comes straight back, there may be no toast |
+| **Stop** a running slot from the menu | No toast (a stop isn't a failure) |
+| `sprig host stop` | No toast |
+| Start a slot with Docker off | The action's own "Docker isn't running" toast; you may also get `<branch> failed to start` from the stream |
+| Turn on Windows Do Not Disturb, then kill an app | No toast |
 
 ## Not covered live
 

@@ -649,6 +649,11 @@ internal sealed class AppSettings
     // SettingsRegistryTests.NotSettings). On by default.
     public bool SprigSectionExpanded { get; set; } = true;
 
+    // A toast when a sprig app exits or fails, a workspace fails to start, or a workspace started from Perch becomes
+    // ready. Only while ShowSprig is on (that's what reads sprig). Off by default; a work alert, so Quiet mode
+    // doesn't hold it. See Perch.Data.Sprig.SprigNotices.
+    public bool NotifySprig { get; set; }
+
     // GitHub pull requests. When on, each session whose working directory is a GitHub repo grows a merge
     // glyph on its overlay row once its current branch has a PR — clicking it opens a small flyout (title,
     // state, number) that links out to the PR in a browser. Off by default and load-bearing while off:

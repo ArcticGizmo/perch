@@ -432,6 +432,14 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.NotifyOnFeedEntry),
             s => s.NotifyOnFeedEntry, (s, v) => s.NotifyOnFeedEntry = v, playful: true),   // Quiet mode holds feed toasts
 
+        Toggle("sprig-notify", "Notify on sprig changes",
+            "A notification when a sprig app exits or fails, when a workspace fails to start, and when a workspace " +
+            "you started from Perch is ready. Needs the Sprig section on.",
+            SettingSurface.Notifications,
+            ["sprig", "notify", "notification", "toast", "workspace", "app", "crash", "exited", "failed", "ready"],
+            PreviewTarget.None, nameof(AppSettings.NotifySprig),
+            s => s.NotifySprig, (s, v) => s.NotifySprig = v),
+
         Info("config-dirs", "Config directories",
             "Extra Claude Code config directories (CLAUDE_CONFIG_DIR roots) Perch watches alongside " +
             "~/.claude, so sessions and transcripts in each are found and attributed. Add them yourself, or " +
