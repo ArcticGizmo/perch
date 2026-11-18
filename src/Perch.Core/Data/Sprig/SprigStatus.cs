@@ -53,10 +53,11 @@ internal sealed record SprigWorkspace(
     public bool IsFree => State == SprigWorkspaceState.Free;
 
     /// <summary>
-    /// The state Perch shows. Sprig says <c>starting</c> only while it prepares the workspace (worktrees, files,
-    /// infra) and <c>running</c> as soon as any app is alive, which includes apps still building or booting. Read
-    /// as "up" that's green for the whole start-up, so a running workspace with apps still on their way up shows as
-    /// <see cref="SprigWorkspaceState.Starting"/> until they've settled.
+    /// The state Perch shows. Sprig up to 0.9.10 says <c>starting</c> only while it prepares the workspace
+    /// (worktrees, files, infra) and <c>running</c> as soon as any app is alive, which includes apps still building
+    /// or booting. Read as "up" that's green for the whole start-up, so a running workspace with apps still on
+    /// their way up shows as <see cref="SprigWorkspaceState.Starting"/> until they've settled. Sprig's
+    /// <c>starting-state</c> change reports this itself, after which this is a no-op.
     /// </summary>
     public SprigWorkspaceState Shown
         => State == SprigWorkspaceState.Running && Apps.Any(a => a.IsComingUp) ? SprigWorkspaceState.Starting : State;
@@ -83,9 +84,10 @@ internal sealed record SprigApp(
     public bool IsReady => State is "ready" or "completed";
     public bool IsFailed => State is "exited" or "failed";
 
-    /// <summary>On its way up: building, waiting on what it depends on, starting, restarting, or a job (a
-    /// migration, say) still running.</summary>
-    public bool IsComingUp => State is "building" or "waiting" or "starting" or "restarting" or "running";
+    /// <summary>On its way up: building, waiting on what it depends on, starting, or a job (a migration, say) still
+    /// running. Not restarting: an app in a crash loop would otherwise hold its workspace at "starting" for good.
+    /// The same rule sprig's own state uses from its <c>starting-state</c> change on.</summary>
+    public bool IsComingUp => State is "building" or "waiting" or "starting" or "running";
 
     /// <summary>On its way somewhere: building, waiting on what it depends on, starting, restarting, or stopping.</summary>
     public bool IsBusy => State is "building" or "waiting" or "starting" or "restarting" or "stopping" or "running";

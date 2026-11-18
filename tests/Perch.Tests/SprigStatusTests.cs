@@ -65,6 +65,10 @@ public class SprigStatusTests
         fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"stopping"}""");
         Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);   // going down isn't starting
 
+        // A crash loop mustn't hold the workspace at starting for good (sprig's own rule leaves it out too).
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"restarting","restarts":4}""");
+        Assert.Equal(SprigWorkspaceState.Running, fold.Current.Find("shop/1")!.Shown);
+
         Assert.Equal(SprigWorkspaceState.Paused, fold.Current.Find("shop/2")!.Shown);
     }
 
