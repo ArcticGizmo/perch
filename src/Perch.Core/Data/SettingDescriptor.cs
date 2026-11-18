@@ -69,6 +69,7 @@ internal enum PreviewTarget
     GitHubAlerts,
     BackgroundTasks,
     Feeds,
+    Worktree,
 }
 
 /// <summary>

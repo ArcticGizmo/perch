@@ -125,6 +125,9 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Turns the per-session Jira ticket glyph on/off in the data layer (off ⇒ no branch is read).</summary>
     public bool JiraEnabled { set => _monitor.JiraEnabled = value; }
 
+    /// <summary>Turns the per-session worktree glyph on/off in the data layer (off ⇒ no worktree list is read for it).</summary>
+    public bool WorktreeGlyphEnabled { set => _monitor.WorktreeGlyphEnabled = value; }
+
     /// <summary>The Jira site branch tickets deep-link into (bare sub-domain or full host).</summary>
     public string? JiraSubdomain { set => _monitor.JiraSubdomain = value; }
 

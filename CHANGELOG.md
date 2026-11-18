@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.12] - 2026-11-18
+
+- A little tree marks sessions working in a git worktree (started there or wandered in)
+- Click the tree for the git graph
+
+---
+
 ## [v0.6.11] - 2026-11-13
 
 - Resuming a long session no longer freezes the window

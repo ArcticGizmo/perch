@@ -107,6 +107,24 @@ internal sealed class SessionMonitor : IDisposable
 
     private bool _jiraEnabled;
 
+    /// <summary>Master switch for the per-session worktree glyph. Off by construction; the owning context sets it
+    /// from settings. Offline like the Jira glyph: a few small reads under the repo's git dir, cached per repo.
+    /// Turning it on scans straight away so the glyph appears without waiting out the reconcile tick.</summary>
+    public bool WorktreeGlyphEnabled
+    {
+        get => _worktreeGlyphEnabled;
+        set
+        {
+            if (_worktreeGlyphEnabled == value)
+                return;
+            _worktreeGlyphEnabled = value;
+            if (value)
+                RequestScanDebounced();
+        }
+    }
+
+    private bool _worktreeGlyphEnabled;
+
     // Rebuilt every Scan: sessionId -> the config dir its sidecars were found in. That dir is the write
     // target for the session's per-session sidecars (lock, notify, mode) — see SessionsDirFor. Under a
     // pinned CLAUDE_CONFIG_DIR (tests, replay) every session maps to the single primary dir.
@@ -966,10 +984,11 @@ internal sealed class SessionMonitor : IDisposable
             var gitStats = _gitStats.Get(cwd, active: status == SessionStatus.Running);
 
             // The worktree the session is really working in, when that isn't cwd's: Claude Code never moves cwd
-            // into a worktree the session made itself and edits by absolute path. Only the branch-scoped lookups
-            // (PR, Jira) follow it. Skipped entirely while neither integration is on.
-            var worktree = _pr.Enabled || _jiraEnabled ? _worktree.Resolve(sessionId, cwd) : null;
+            // into a worktree the session made itself and edits by absolute path. The branch-scoped lookups (PR,
+            // Jira) and the worktree glyph follow it. Skipped entirely while all three are off.
+            var worktree = _pr.Enabled || _jiraEnabled || _worktreeGlyphEnabled ? _worktree.Resolve(sessionId, cwd) : null;
             var branchCwd = worktree?.Dir ?? cwd;
+            var linkedWorktree = _worktreeGlyphEnabled ? _worktree.Locate(cwd, worktree) : null;
 
             // The GitHub PR for this working directory's branch. Same gating as git stats: while the
             // integration is off this returns null without ever launching gh, and a known value is served
@@ -1036,6 +1055,7 @@ internal sealed class SessionMonitor : IDisposable
                 ReportedSlug = reportedSlug,
                 BackgroundTasks = RunningBackgroundTasks(sessionId, cwd, startedAtMs),
                 Worktree = worktree,
+                LinkedWorktree = linkedWorktree,
             };
 
             // Write down which account this session runs under while it's live: once it ends, the hook deletes its

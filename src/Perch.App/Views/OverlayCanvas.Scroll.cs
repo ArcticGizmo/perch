@@ -293,7 +293,7 @@ public sealed partial class OverlayCanvas
     {
         Prune(_artifactRects); Prune(_mdRects); Prune(_thermoRects); Prune(_warnRects); Prune(_taskRects);
         Prune(_bgTaskRects); Prune(_metricsRects); Prune(_noteRects); Prune(_originRects); Prune(_prRects);
-        Prune(_jiraRects); Prune(_dirRects); Prune(_subChevronRects);
+        Prune(_jiraRects); Prune(_worktreeRects); Prune(_dirRects); Prune(_subChevronRects);
         if (_autonomousHeaderRect.Width > 0)
         {
             var clipped = _autonomousHeaderRect.Intersect(new Rect(0, top, _autonomousHeaderRect.Right, bottom - top));

@@ -7,6 +7,28 @@ namespace Perch.Data;
 /// the row menu rather than it being inferred from the session's edits. See <see cref="SessionWorktree"/>.</summary>
 public readonly record struct SessionWorktreeChoice(string Dir, bool Pinned);
 
+/// <summary>How Perch knows a session is in its <see cref="SessionWorktreeInfo"/>.</summary>
+public enum WorktreeSource
+{
+    /// <summary>The session's own folder is the linked worktree (<c>claude --worktree</c>, or started there).</summary>
+    StartedThere,
+
+    /// <summary>The session's newest file write landed there, though its folder is elsewhere in the repo.</summary>
+    FollowedEdits,
+
+    /// <summary>The user pinned the session's PR/Jira lookups to it from the row menu. Perch's choice only: Claude
+    /// never sees the pin, so it says which PR to show, not where Claude is working.</summary>
+    Pinned,
+}
+
+/// <summary>The linked worktree a session is working in: its root <see cref="Dir"/>, the <see cref="Branch"/>
+/// checked out there (null when detached) and how that was found. Never the repo's main checkout.</summary>
+public sealed record SessionWorktreeInfo(string Dir, string? Branch, WorktreeSource Source)
+{
+    /// <summary>The worktree's folder name, which is how people tell their worktrees apart.</summary>
+    public string Name => Path.GetFileName(Dir.TrimEnd('\\', '/'));
+}
+
 /// <summary>
 /// Which working tree a session is really working in. Claude Code's recorded cwd never leaves the folder the session
 /// started in: a session that runs <c>git worktree add ..\repo--feature</c> and then edits there by absolute path
@@ -91,6 +113,40 @@ internal sealed class SessionWorktree
                 return SamePath(owner, root) ? null : new SessionWorktreeChoice(owner, Pinned: false);
         }
         return null;
+    }
+
+    /// <summary>The linked worktree the session is working in, given what <see cref="Resolve"/> chose for it: that
+    /// choice when there is one, else the worktree holding <paramref name="cwd"/>. Null when that is the repo's main
+    /// checkout, or <paramref name="cwd"/> isn't in a repo. Best-effort; never throws.</summary>
+    public SessionWorktreeInfo? Locate(string cwd, SessionWorktreeChoice? choice)
+    {
+        try
+        {
+            return GitCheckoutScanner.FindRoot(cwd) is { } root && WorktreesOf(root) is { } set
+                ? Classify(root, choice, set)
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The rule behind <see cref="Locate"/>, over already-read inputs. Only <see cref="GitWorktreeSet.Linked"/>
+    /// trees count, so the main checkout never does, while every tree of a bare layout does. A submodule's
+    /// <c>.git</c> file never lists it as linked. Internal for unit testing.</summary>
+    internal static SessionWorktreeInfo? Classify(string root, SessionWorktreeChoice? choice, GitWorktreeSet set)
+    {
+        var dir = choice?.Dir ?? root;
+        if (set.Linked.FirstOrDefault(t => SamePath(t.Path, dir)) is not { } tree)
+            return null;
+        var source = choice switch
+        {
+            null                  => WorktreeSource.StartedThere,
+            { Pinned: true }      => WorktreeSource.Pinned,
+            _                     => WorktreeSource.FollowedEdits,
+        };
+        return new SessionWorktreeInfo(tree.Path, tree.Branch, source);
     }
 
     /// <summary>Every working tree of the repo holding <paramref name="cwd"/> (the main checkout first, unless the

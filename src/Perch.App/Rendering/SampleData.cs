@@ -75,7 +75,12 @@ internal static class SampleData
                     ],
                     ReviewDecision = "APPROVED",
                 },
-                Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
+                Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") })
+            {
+                // Edits landed in a sibling worktree the session made, so the tree glyph leads its PR glyph.
+                Worktree = new SessionWorktreeChoice(@"C:\src\api--surface-prs", Pinned: false),
+                LinkedWorktree = new SessionWorktreeInfo(@"C:\src\api--surface-prs", "surface-prs", WorktreeSource.FollowedEdits),
+            },
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
                 HasProducedMarkdown: true,
@@ -100,7 +105,11 @@ internal static class SampleData
             },
             // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
             new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
-                ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
+                ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded."))
+            {
+                // Started inside a worktree (claude --worktree), with no PR: the tree glyph on its own.
+                LinkedWorktree = new SessionWorktreeInfo(@"C:\src\web\.claude\worktrees\retry", "worktree-retry", WorktreeSource.StartedThere),
+            },
             // A Claude Desktop session (Entrypoint == "claude-desktop") -> interactive, listed with the
             // rest but marked with the monitor glyph.
             new ClaudeSession("5566", "s7", SessionStatus.Running, @"C:\src\thoughts", "claude-thoughts", now,

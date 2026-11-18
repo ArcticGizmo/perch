@@ -135,6 +135,61 @@ public sealed class SessionWorktreeTests : IDisposable
             SessionWorktree.WorktreesFor(Path.Combine(Root, "backend")));
     }
 
+    [Fact]
+    public void ASessionStartedInALinkedWorktreeIsInIt()
+    {
+        var info = SessionWorktree.Classify(Nested, null, Set(Nested, Sibling));
+        Assert.Equal(new SessionWorktreeInfo(Nested, "feature", WorktreeSource.StartedThere), info);
+        Assert.Equal("pr-12", info!.Name);
+    }
+
+    [Fact]
+    public void TheMainCheckoutIsNeverAWorktree()
+    {
+        Assert.Null(SessionWorktree.Classify(Root, null, Set(Sibling)));
+        // A pin back to the main checkout, from a session started in a sibling, takes the glyph away too.
+        Assert.Null(SessionWorktree.Classify(Sibling, new SessionWorktreeChoice(Root, Pinned: true), Set(Sibling)));
+    }
+
+    [Fact]
+    public void TheChoiceSaysHowTheWorktreeWasFound()
+    {
+        Assert.Equal(WorktreeSource.FollowedEdits,
+            SessionWorktree.Classify(Root, new SessionWorktreeChoice(Sibling, Pinned: false), Set(Sibling))?.Source);
+        Assert.Equal(WorktreeSource.Pinned,
+            SessionWorktree.Classify(Root, new SessionWorktreeChoice(Sibling, Pinned: true), Set(Sibling))?.Source);
+    }
+
+    [Fact]
+    public void EveryTreeOfABareLayoutIsAWorktree()
+    {
+        var bare = new GitWorktreeSet(Root, Bare: true, MainBranch: null, [new GitWorktree(Sibling, "main")]);
+        Assert.Equal(WorktreeSource.StartedThere, SessionWorktree.Classify(Sibling, null, bare)?.Source);
+        Assert.Null(SessionWorktree.Classify(Root, null, bare));      // the layout's root holds no checkout
+    }
+
+    [Fact]
+    public void LocateReadsTheRepoFromDisk()
+    {
+        var git = Path.Combine(Root, ".git");
+        Directory.CreateDirectory(git);
+        File.WriteAllText(Path.Combine(git, "HEAD"), "ref: refs/heads/main\n");
+        File.WriteAllText(Path.Combine(git, "config"), "[core]\n\tbare = false\n");
+        var meta = Path.Combine(git, "worktrees", "Safety--merge-queue-docs");
+        Directory.CreateDirectory(meta);
+        Directory.CreateDirectory(Path.Combine(Sibling, "docs"));
+        File.WriteAllText(Path.Combine(meta, "gitdir"), Path.Combine(Sibling, ".git") + "\n");
+        File.WriteAllText(Path.Combine(meta, "HEAD"), "ref: refs/heads/merge-queue-docs\n");
+        File.WriteAllText(Path.Combine(meta, "commondir"), "../..\n");
+        File.WriteAllText(Path.Combine(Sibling, ".git"), $"gitdir: {meta}\n");
+
+        var tracker = new SessionWorktree();
+        Assert.Equal(new SessionWorktreeInfo(Sibling, "merge-queue-docs", WorktreeSource.StartedThere),
+            tracker.Locate(Path.Combine(Sibling, "docs"), null));
+        Assert.Null(tracker.Locate(Root, null));
+        Assert.Null(tracker.Locate(Path.Combine(_tmp, "not-a-repo"), null));
+    }
+
     private static string ToolUse(string id, string name, string key, string path) =>
         new JsonObject
         {
