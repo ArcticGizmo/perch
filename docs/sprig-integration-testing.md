@@ -1,6 +1,6 @@
 # Sprig integration: testing
 
-The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app failed", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S3; session-row badges (S4) and notifications (S5) aren't built yet.
+The overlay gains a collapsible **Sprig** section. Under it is one line per workspace sprig has checked out (free slots are hidden), each with a state dot, its branch, and a right-hand detail ("3/4 ready", "starting 1/3", "1 app failed", "paused", "stopped"). The design is in [sprig-integration-plan.md](sprig-integration-plan.md). This covers phases S1–S4 (S4 is the session-row glyph, check 10).
 
 - **Header:** a chevron, a green sprout, `SPRIG`, and on the right "2 running · 1 starting" (or `connecting…`, `reconnecting…`, `not installed`, `nothing running`, `N paused`). Clicking it collapses or expands the section, and that's remembered.
 - **Line click:** opens sprig on that workspace (`sprig open <orch> <slot>`).
@@ -125,6 +125,24 @@ Also try ending the dev `perch.exe` from Task Manager: the watch should still en
 
 - Click the `SPRIG` header to collapse it, then restart the branch build. It comes back collapsed.
 - Settings → Appearance live preview → **Rearrange**: the Sprig section can be dragged like the others, and is dimmed when the setting is off.
+
+## 10. Session rows (S4)
+
+A session working in a sprig slot gets a small sprout between its worktree and PR glyphs, coloured by the workspace's state: green running, blue starting, red failed (or an app of it failed), amber paused, grey stopped. A session is in a workspace when sprig's hook made the slot for it (`madeForAgent`), or when the worktree it's editing in, or else its folder, is inside one of the workspace's repo folders. Free slots never match.
+
+In a terminal in `C:\Users\JonHowell\Documents\git\Safety-Virtual--1` (a slot), start `claude` and paste:
+
+> Say hi and stop.
+
+| | Before | After |
+|---|---|---|
+| The session's row | No sprout | Sprout, coloured by slot 1's state |
+| Hover it | — | `Sprig · <branch>`, `Safety-Virtual · slot 1`, the state detail, each running app |
+| Click it | — | Sprig opens on slot 1 |
+| Right-click it | — | Slot 1's menu, the same one as its line in the Sprig section |
+| `sprig resume Safety-Virtual 1` | — | The sprout turns blue, then green |
+
+Also start `claude` in a folder sprig doesn't know: no sprout. Turn **Sprig** off: every sprout disappears.
 
 ## Not covered live
 

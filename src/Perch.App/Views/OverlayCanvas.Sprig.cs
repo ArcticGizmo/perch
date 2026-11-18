@@ -58,6 +58,7 @@ public sealed partial class OverlayCanvas
     {
         if (_sprigEnabled == enabled) return;
         _sprigEnabled = enabled;
+        RelinkSprigSessions();
         RemeasurePanel();
     }
 
@@ -81,6 +82,7 @@ public sealed partial class OverlayCanvas
             .ThenBy(w => w.Orchestration, StringComparer.OrdinalIgnoreCase)
             .ThenBy(w => w.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        RelinkSprigSessions();
         if (!SprigSectionVisible) return;
         if (SprigSectionHeight != before) RemeasurePanel();
         else InvalidateVisual();
@@ -424,6 +426,56 @@ public sealed partial class OverlayCanvas
         "exited" => a.Exit is { } code ? $"exited ({code})" : "exited",
         _ => a.State,
     };
+
+    // ── session rows ────────────────────────────────────────────────────────────────────────────────────────
+
+    // A session row working in a sprig workspace gets a small sprout before its PR glyph, coloured by the
+    // workspace's state. Which workspace each session is in is worked out when the sessions or sprig's status
+    // change (path matching), never while painting.
+    private const double SprigRowIconWidth = 14;
+    private Dictionary<string, SprigWorkspace> _sprigBySession = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, Rect> _sprigRowRects = new();
+    private int _hoveredSprigRow = -1;
+
+    private void RelinkSprigSessions()
+    {
+        var map = new Dictionary<string, SprigWorkspace>(StringComparer.Ordinal);
+        if (_sprigEnabled && _sprig.Seen)
+            foreach (var s in _sessions)
+                if (SprigSessionLink.Find(_sprig, s.SessionId, s.Cwd, s.LinkedWorktree?.Dir) is { } w)
+                    map[s.SessionId] = w;
+        _sprigBySession = map;
+    }
+
+    private SprigWorkspace? SprigFor(ClaudeSession s) => _sprigBySession.GetValueOrDefault(s.SessionId);
+
+    private void DrawSprigRowIcon(DrawingContext ctx, double x, double midY, SprigWorkspace w, int rowIndex)
+    {
+        if (_hoveredSprigRow == rowIndex)
+            OverlayDraw.Panel(ctx, new Rect(x - 2, midY - 8, SprigRowIconWidth, 16), FeedHoverBrush, null, 4);
+        var color = w.State == SprigWorkspaceState.Running && w.AnyFailed ? Palette.Red : SprigStateColor(w.State);
+        DrawSprigMark(ctx, x + 5, midY, color);
+        _sprigRowRects[rowIndex] = new Rect(x - 2, midY - 9, SprigRowIconWidth + 2, 18);
+    }
+
+    private SprigWorkspace? SprigAtRow(int row)
+        => row >= 0 && row < _rows.Count && _rows[row].Session is { } s ? SprigFor(s) : null;
+
+    private void ShowSprigRowTooltip(int row)
+    {
+        if (SprigAtRow(row) is not { } w || !_sprigRowRects.TryGetValue(row, out var r)) return;
+        var (detail, color) = SprigLineDetail(w);
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new($"Sprig · {OverlayDraw.Truncate(w.Label, 11, 260)}", OverlayTooltip.FgColor, true),
+            new(w.Name == "main" ? $"{w.Orchestration} · main checkout" : $"{w.Orchestration} · slot {w.Name}", OverlayTooltip.MutedColor, false),
+            new(detail, color, false),
+        };
+        foreach (var app in w.Apps.Where(a => !a.IsOff).Take(8))
+            lines.Add(new($"{app.ShortName}  {SprigAppStateText(app)}", SprigAppColor(app), false));
+        lines.Add(new("Click to open in sprig · right-click for actions", OverlayTooltip.MutedColor, false));
+        Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
+    }
 
     // ── tooltip ─────────────────────────────────────────────────────────────────────────────────────────────
 

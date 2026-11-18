@@ -318,26 +318,27 @@ internal static class SampleData
     }
 
     /// <summary>Sprig workspaces in each state the section draws: one running with every app ready, one starting
-    /// partway, one with an app that exited, one paused, one stopped, and a free slot (which isn't drawn).</summary>
+    /// partway, one with an app that exited, one paused, one stopped, and a free slot (which isn't drawn). Three
+    /// sit in sample sessions' folders (api, web, docs), so those rows show the sprig glyph.</summary>
     public static SprigStatus Sprig()
     {
         static SprigApp App(string name, string state, int? port = null, string? doing = null, int? exit = null)
             => new($"shop/{name}", state, port, Doing: doing, Exit: exit);
 
-        static SprigWorkspace Ws(string slot, string branch, SprigWorkspaceState state, bool paused, params SprigApp[] apps)
+        static SprigWorkspace Ws(string slot, string branch, SprigWorkspaceState state, bool paused, string dir, params SprigApp[] apps)
             => new($"shop/{slot}", "shop", slot, branch, branch, state, state.ToString().ToLowerInvariant(), paused, null,
-                $@"C:\src\shop--{slot}", [$@"C:\src\shop--{slot}"], null, apps);
+                dir, [dir], null, apps);
 
         return new SprigStatus(true, true, "0.9.10",
         [
-            Ws("1", "feat-cart", SprigWorkspaceState.Running, false,
+            Ws("1", "feat-cart", SprigWorkspaceState.Running, false, @"C:\src\api",
                 App("api", "ready", 5123), App("web", "ready", 5124), App("worker", "ready"), App("migrate", "completed")),
-            Ws("2", "fix-login-redirect", SprigWorkspaceState.Starting, false,
+            Ws("2", "fix-login-redirect", SprigWorkspaceState.Starting, false, @"C:\src\shop--2",
                 App("api", "ready", 5223), App("web", "building", doing: "installing packages"), App("worker", "waiting")),
-            Ws("3", "spike-search", SprigWorkspaceState.Running, false,
+            Ws("3", "spike-search", SprigWorkspaceState.Running, false, @"C:\src\web",
                 App("api", "exited", exit: 134), App("web", "ready", 5324)),
-            Ws("4", "chore-deps", SprigWorkspaceState.Paused, true, App("api", "off"), App("web", "off")),
-            Ws("5", "release-0.9", SprigWorkspaceState.Stopped, false, App("api", "off"), App("web", "off")),
+            Ws("4", "chore-deps", SprigWorkspaceState.Paused, true, @"C:\src\docs", App("api", "off"), App("web", "off")),
+            Ws("5", "release-0.9", SprigWorkspaceState.Stopped, false, @"C:\src\shop--5", App("api", "off"), App("web", "off")),
             new("shop/6", "shop", "6", "free", null, SprigWorkspaceState.Free, "free", false, null, null, [], null, []),
         ]);
     }

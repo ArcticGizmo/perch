@@ -168,6 +168,67 @@ public class SprigStatusTests
         Assert.Same(SprigStatus.Empty, fold.Current);
     }
 
+    // ── sessions ─────────────────────────────────────────────────────────────────────────────────────────────
+
+    // Rooted for whichever OS runs the suite, since the matcher normalizes through Path.GetFullPath.
+    private static readonly string Root = OperatingSystem.IsWindows() ? @"C:\src" : "/src";
+    private static string P(params string[] parts) => Path.Combine([Root, .. parts]);
+
+    private static SprigStatus Linked()
+    {
+        static SprigWorkspace Ws(string slot, SprigWorkspaceState state, string? agent, params string[] dirs)
+            => new($"shop/{slot}", "shop", slot, $"b{slot}", $"b{slot}", state, "", false, null, null, dirs, agent, []);
+
+        return new SprigStatus(true, true, null,
+        [
+            Ws("main", SprigWorkspaceState.Running, null, P("shop")),
+            Ws("1", SprigWorkspaceState.Running, "agent-1", P("shop--1")),
+            Ws("10", SprigWorkspaceState.Stopped, null, P("shop--10")),
+            Ws("2", SprigWorkspaceState.Free, null, P("shop--2")),
+            Ws("3", SprigWorkspaceState.Paused, null, P("shop--3", "api"), P("shop--3", "web")),
+        ]);
+    }
+
+    [Fact]
+    public void Link_MadeForAgent_WinsOverTheFolder()
+    {
+        var w = SprigSessionLink.Find(Linked(), "AGENT-1", P("shop--3", "api"), null);
+        Assert.Equal("shop/1", w?.Key);
+    }
+
+    [Fact]
+    public void Link_FolderInsideADir_OnASeparatorBoundary()
+    {
+        Assert.Equal("shop/1", SprigSessionLink.Find(Linked(), "s", P("shop--1", "src", "Api"), null)?.Key);
+        Assert.Equal("shop/10", SprigSessionLink.Find(Linked(), "s", P("shop--10"), null)?.Key);   // not shop--1
+        Assert.Equal("shop/main", SprigSessionLink.Find(Linked(), "s", P("shop", "docs"), null)?.Key);
+        Assert.Equal("shop/3", SprigSessionLink.Find(Linked(), "s", P("shop--3", "web", "src"), null)?.Key);
+    }
+
+    [Fact]
+    public void Link_TheWorktreeTheSessionMovedInto_WinsOverItsFolder()
+    {
+        var w = SprigSessionLink.Find(Linked(), "s", P("shop"), P("shop--10"));
+        Assert.Equal("shop/10", w?.Key);
+    }
+
+    [Fact]
+    public void Link_FreeSlotsAndElsewhere_DontMatch()
+    {
+        Assert.Null(SprigSessionLink.Find(Linked(), "s", P("shop--2", "api"), null));
+        Assert.Null(SprigSessionLink.Find(Linked(), "s", P("elsewhere"), null));
+        Assert.Null(SprigSessionLink.Find(Linked(), "s", null, null));
+        Assert.Null(SprigSessionLink.Find(SprigStatus.Empty, "agent-1", P("shop--1"), null));
+    }
+
+    [Fact]
+    public void Link_TrailingSeparatorsAndSlashes_AreIgnored()
+    {
+        var withSlash = P("shop--1") + Path.DirectorySeparatorChar;
+        Assert.Equal("shop/1", SprigSessionLink.Find(Linked(), "s", withSlash, null)?.Key);
+        Assert.Equal("shop/1", SprigSessionLink.Find(Linked(), "s", P("shop--1").Replace('\\', '/'), null)?.Key);
+    }
+
     // ── actions ──────────────────────────────────────────────────────────────────────────────────────────────
 
     private static SprigWorkspace Workspace() => Folded().Current.Find("shop/1")!;
