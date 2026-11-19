@@ -822,6 +822,9 @@ internal static class HeadlessRenderer
         RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1x.png"), 96);
         RenderControl(BuildGraphCanvas(light: false), Path.Combine(outDir, "git_graph_1.5x.png"), 144);
         RenderControl(BuildGraphCanvas(light: true), Path.Combine(outDir, "git_graph_light_1x.png"), 96);
+        // The same with the three-ref row's pills stacked open over the other columns, as a hover does.
+        RenderControl(BuildGraphCanvas(light: false, stack: true), Path.Combine(outDir, "git_graph_stack_1x.png"), 96);
+        RenderControl(BuildGraphCanvas(light: true, stack: true), Path.Combine(outDir, "git_graph_stack_light_1x.png"), 96);
 
         // The real Tree window on the repo the render runs in (when it runs in one): the whole load path (graph,
         // rail, files, diff) with its background work let finish. Live data, so it changes run to run.
@@ -1064,6 +1067,11 @@ internal static class HeadlessRenderer
             Frame11("git_tree_rail_remote_folded_1x.png");
             tw.PreviewFoldRemote("origin", false);
             tw.PreviewRailOpen(true);
+            // Every row's first pill at the column's left edge with "+N" beside it, then one row's refs stacked open
+            // in full over the other columns, as a hover does.
+            Frame11("git_tree_pills_left_1x.png");
+            Console.WriteLine($"git graph pill stack: {tw.PreviewOpenStack()}");
+            Frame11("git_tree_pills_stack_1x.png");
             Console.WriteLine("git graph Tags ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.Tag).Replace("\n", "\n  "));
             tw.PreviewTags();
             tw.PreviewSpinner(true);
@@ -4180,7 +4188,7 @@ internal static class HeadlessRenderer
 
     // A sample history shaped like docs/git-graph-design.html: main with tags, three feature branches (one merged
     // from main, one left behind), worktrees on two of them (both dirty) and a clean one on a third.
-    private static Control BuildGraphCanvas(bool light, double width = 1180, double? height = null)
+    private static Control BuildGraphCanvas(bool light, double width = 1180, double? height = null, bool stack = false)
     {
         var snap = SampleGraph();
         var canvas = new Views.GraphCanvas { Width = width };
@@ -4191,6 +4199,7 @@ internal static class HeadlessRenderer
         canvas.Measure(new Size(canvas.Width, canvas.Height));
         canvas.Arrange(new Rect(0, 0, canvas.Width, canvas.Height));
         canvas.Select(snap.RowOf("9083893".PadRight(40, '0')), scrollIntoView: false);
+        if (stack) Console.WriteLine($"git graph sample pill stack: {canvas.PreviewOpenStack()}");
         return canvas;
     }
 
@@ -4249,6 +4258,9 @@ internal static class HeadlessRenderer
             R("feeds", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "4c19a07"),
             R("git-graph", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "7be0d42"),
             R("github-dashboard", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "3c51d94"),
+            // Three on one commit, one of them long: the row folds to its first pill and "+2", and stacks open on hover.
+            R("NO-TICKET-feeds-opml-import-per-feed-images", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "4c19a07"),
+            R("origin/feeds-spike", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "4c19a07"),
             R("origin/main", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "9083893"),
             R("origin/roost-tabs", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "31ac6f8"),
             R("origin/github-dashboard", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "3c51d94"),

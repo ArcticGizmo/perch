@@ -141,6 +141,16 @@ Use a throwaway clone with a few local branches (one checked out in an extra wor
 4. **Show all, per section.** With branches hidden in both sections, Remotes' **⋯** offers **Show all N hidden remote branches** and Local's the local ones; each brings back only its own section. *Before:* one "Show all hidden branches" for both.
 5. **The setting reads as a setting.** In Remotes' **⋯**, a divider separates the actions above from **Hide new remote branches that aren't mine**, which has a real checkbox (ticked when on). Clicking it flips the setting with a toast, as before. Local's **⋯** has no such checkbox (it's about remote branches). *Before:* the setting sat at the top of the menu with a ✓ text prefix, looking like one more action.
 
+## Feedback round 15: pills read down the page, hover stacks them
+
+Use a clone where some commit carries several refs (e.g. `git branch extra-1 <hash>`, `git branch NO-TICKET-a-long-descriptive-name <hash>`, and a remote branch on the same commit). Compare `captures/20261119-git-graph-pill-stack-2/git_graph_1x.png` (folded) and `git_graph_stack_1x.png` (open).
+
+1. **Left-aligned.** Every row's pill starts at the left edge of the Branch / tag column, so branch names line up and read straight down. The line to the node runs from the pill's right end. *Before:* pills were pushed against the graph edge, so each started wherever its length put it.
+2. **One pill and "+N".** A commit with several refs shows its first (this worktree's branch, then other local branches, then remotes and stashes) and a small **+N** chip after it. A long name is cut in the middle to leave room for the chip. *Before:* as many pills as fit, right to left, then a bare "+N" text.
+3. **Hover stacks them.** Hover the pill or the "+N": every ref on that commit opens in a stack, one under another, each name in full, on a panel that lies over the Graph and Commit message columns. It starts on the row and shifts up only near the bottom of the window. Moving onto the stack keeps it open; moving off it, off the canvas, or scrolling closes it. A row whose only pill is already shown in full doesn't stack.
+4. **The stack's pills work.** Double-click one (checkout, or fast-forward for a remote that's ahead), right-click one (its menu), drag one (merge/rebase menu), hover one (its tooltip). Clicking the panel between pills selects the stacked row, not the row underneath.
+5. **Dropping onto a folded branch.** Drag a branch over another commit's pills: the stack opens there, and dropping on one of its pills targets that branch.
+
 ## Feedback round 14: hide main, remote groups and filter, fast-forward from a remote, force push
 
 Use a throwaway clone with two remotes (e.g. `origin` and `upstream`, a dozen-plus branches between them), a local `main` tracking `origin/main`, and a second clone you can push from to move the remote ahead. Compare `captures/20261119-git-graph-feedback-13/git_tree_rail_remote_filter_1x.png` and `git_tree_rail_remote_folded_1x.png`.

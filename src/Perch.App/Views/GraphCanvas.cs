@@ -45,7 +45,7 @@ internal sealed class GraphCanvas : Control
     private const double FontSize = 12.5, SmallSize = 11.5, PillSize = 11.5;
     private const double LaneW = 16, GraphPad = 12, MinGraphW = 44, MaxGraphW = 280;
     private const double DefaultRefsW = 188, MinRefsW = 70, MaxRefsW = 480, MaxLanesW = 900;
-    private const double AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760, MaxPillText = 160;
+    private const double AuthorW = 136, WhenW = 62, Gap = 10, NarrowW = 760;
 
     // The pill column's width and, once the user has dragged it, the lane column's (null = sized to the graph).
     private double _refsW = DefaultRefsW;
@@ -288,8 +288,10 @@ internal sealed class GraphCanvas : Control
     public DropTarget? DropTargetAt(Point p)
     {
         if (_snap is null) return null;
+        // A drag over a row's pills opens its stack too, so a branch folded into "+N" can still be dropped on.
+        UpdateStack(p);
         if (RefAt(p) is { Kind: GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch } r) return DropTarget.Of(r);
-        int row = RowAt(p.Y);
+        int row = RowUnder(p);
         if (row < 0) return null;
         if (_snap.WipAt(row) is { } wt) return DropTarget.Of(wt);
         var hash = _snap.Commits[row].Hash;
@@ -330,6 +332,10 @@ internal sealed class GraphCanvas : Control
     /// <summary>The ref pill under <paramref name="p"/>, if any.</summary>
     public GraphRef? RefAt(Point p)
     {
+        // The open stack lies over the rows, so it answers first, and the rows' pills it covers don't answer at all.
+        foreach (var h in _stackHits)
+            if (h.Rect.Contains(p)) return h.Ref;
+        if (_stackPanel?.Contains(p) == true) return null;
         foreach (var h in _pillHits)
             if (h.Rect.Contains(p)) return h.Ref;
         return null;
@@ -373,6 +379,9 @@ internal sealed class GraphCanvas : Control
         var size = Bounds.Size;
         ctx.FillRectangle(_bg, new Rect(size));
         _pillHits.Clear();
+        _pillRows.Clear();
+        _stackHits.Clear();
+        _stackPanel = null;
         if (_snap is null || _snap.Rows.Length == 0)
         {
             var empty = OverlayDraw.Text(_snap is null ? "Loading…" : "No commits", FontSize, _muted);
@@ -425,6 +434,8 @@ internal sealed class GraphCanvas : Control
             for (int r = first; r <= last; r++)
                 if (IsDropRow(s, r))
                     ctx.DrawRectangle(null, _dropPen, new RoundedRect(new Rect(2, RowTop(r) + 1.5, size.Width - 4, _rowH - 3), 6));
+
+        PaintStack(ctx, s, size);
 
         if (s.HasMore && last == s.Rows.Length - 1)
         {
@@ -507,7 +518,7 @@ internal sealed class GraphCanvas : Control
             }
             var pills = s.RefsAt(c.Hash);
             if (pills.Count > 0)
-                Pills(ctx, s, r, pills, [], lane, x, y);
+                Pills(ctx, s, r, pills, lane, x, y);
             var message = OverlayDraw.Text(Fit(c.Subject, FontSize, subjW), FontSize, _muted);
             OverlayDraw.TextLeftMid(ctx, message, subjX, y);
             var age = OverlayDraw.Text(Age(c), SmallSize, _muted);
@@ -538,7 +549,7 @@ internal sealed class GraphCanvas : Control
         var refs = s.RefsAt(c.Hash);
         if (refs.Count > 0)
         {
-            Pills(ctx, s, r, refs, worktrees, lane, x, y);
+            Pills(ctx, s, r, refs, lane, x, y);
             tagsW = Tags(ctx, refs, subjX + subjW, y);
         }
 
@@ -578,17 +589,12 @@ internal sealed class GraphCanvas : Control
         ctx.DrawEllipse(null, _avatarRing[lane], at, AvatarR, AvatarR);
     }
 
-    // Local branches (the window's own worktree's first), then remote branches that aren't just a local's upstream at
-    // the same commit, laid out right to left from the graph edge; what doesn't fit collapses to "+N".
-    private void Pills(DrawingContext ctx, GraphSnapshot s, int r, IReadOnlyList<GraphRef> refs,
-        IReadOnlyList<GraphWorktree> worktrees, int lane, double nodeX, double y)
+    // The pills a row has, in the order they're shown: this worktree's branch, other local branches, then remote
+    // branches that aren't just a local's upstream at the same commit, and stashes.
+    private static List<GraphRef> RowRefs(GraphSnapshot s, IReadOnlyList<GraphRef> refs)
     {
-        double right = _refsW - 6;
-        double left = 8;
-        int shown = 0, total = 0;
-        string? current = null;
-        foreach (var w in s.Worktrees)
-            if (w.IsCurrent) current = w.Branch;
+        var list = new List<GraphRef>(refs.Count);
+        string? current = s.Current?.Branch;
         for (int pass = 0; pass < 3; pass++)
             foreach (var rf in refs)
             {
@@ -596,59 +602,175 @@ internal sealed class GraphCanvas : Control
                 if (pass == 0 && !(local && rf.Name == current)) continue;
                 if (pass == 1 && !(local && rf.Name != current)) continue;
                 if (pass == 2 && !(rf.Kind is GraphRefKind.RemoteBranch or GraphRefKind.Stash)) continue;
-                if (rf.Kind == GraphRefKind.RemoteBranch && UpstreamOfLocal(refs, rf))
-                    continue;
-                total++;
-                bool here = local && rf.Name == current;
-                bool checkedOut = local && IsCheckedOut(s, rf.Name);
-                var ink = here ? _bg : local ? _laneFill[lane] : _muted;
-                // The remote mark: nothing for a local-only branch, a dot when it matches its upstream, ↑/↓ counts
-                // when they've moved apart, a struck circle when the upstream is gone.
-                var track = local && rf.Upstream is not null && !rf.UpstreamGone && !rf.InSync
-                    ? OverlayDraw.Text(TrackText(rf), SmallSize - 1, ink, FontWeight.SemiBold) : null;
-                double lead = checkedOut ? 13 : 0;
-                double trail = !local || rf.Upstream is null ? 0 : track is not null ? track.Width + 9 : 11;
-                // The first pill (this worktree's branch when it's here) always gets one, cut to the room there is;
-                // later ones are capped and leave space for the "+N".
-                double room = right - left - 14 - lead - trail;
-                double cap = shown == 0 ? room : Math.Min(MaxPillText, room - 24);
-                if (cap < 28)
-                    continue;
-                var ft = OverlayDraw.Text(OverlayDraw.ElideMiddle(rf.Name, PillSize, cap, FontWeight.SemiBold), PillSize, ink, FontWeight.SemiBold);
-                double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
-                var rect = new Rect(right - w, y - h / 2, w, h);
-                if (here)
-                    OverlayDraw.Panel(ctx, rect, _laneFill[lane], null, 5);
-                else if (local)
-                    OverlayDraw.Panel(ctx, rect, _laneWash[lane], _pillBorder[lane], 5);
-                else
-                    OverlayDraw.Panel(ctx, rect, null, _pillDash[lane], 5);
-                if (checkedOut)
-                    FolderGlyph(ctx, ink, rect.X + 7, y);
-                ctx.DrawText(ft, new Point(rect.X + 7 + lead, y - ft.Height / 2));
-                if (track is not null)
-                    ctx.DrawText(track, new Point(rect.Right - 6 - track.Width, y - track.Height / 2));
-                else if (local && rf.InSync)
-                    ctx.DrawEllipse(ink, null, new Point(rect.Right - 9, y), 2.6, 2.6);
-                else if (local && rf.UpstreamGone)
-                {
-                    var pen = OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.1);
-                    ctx.DrawEllipse(null, pen, new Point(rect.Right - 9, y), 3, 3);
-                    ctx.DrawLine(pen, new Point(rect.Right - 11.2, y + 2.2), new Point(rect.Right - 6.8, y - 2.2));
-                }
-                _pillHits.Add((rect, r, rf));
-                if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
-                    ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
-                if (shown == 0)
-                    ctx.DrawLine(_pillBorder[lane], new Point(_refsW - 6, y), new Point(nodeX - HeadRingR - 1, y));
-                right = rect.X - 4;
-                shown++;
+                if (rf.Kind == GraphRefKind.RemoteBranch && UpstreamOfLocal(refs, rf)) continue;
+                list.Add(rf);
             }
-        if (total > shown)
+        return list;
+    }
+
+    // Every row's first pill starts at the column's left edge, so names read straight down the page; the rest of the
+    // row's refs fold into a "+N" chip beside it. Hovering either opens the row's stack (PaintStack) with every name in
+    // full, unless there's nothing more to show.
+    private void Pills(DrawingContext ctx, GraphSnapshot s, int r, IReadOnlyList<GraphRef> refs, int lane, double nodeX, double y)
+    {
+        var list = RowRefs(s, refs);
+        if (list.Count == 0) return;
+        const double left = 8;
+        double right = _refsW - 6;
+        var more = list.Count > 1 ? OverlayDraw.Text($"+{list.Count - 1}", SmallSize - 0.5, _muted, FontWeight.SemiBold) : null;
+        double moreW = more is null ? 0 : more.Width + 12;
+        var rect = PaintPill(ctx, s, list[0], r, lane, left, y, right - left - (more is null ? 0 : moreW + 4), out bool cut);
+        double end = rect?.Right ?? left;
+        if (more is not null)
         {
-            var more = OverlayDraw.Text($"+{total - shown}", SmallSize, _muted);
-            OverlayDraw.TextLeftMid(ctx, more, Math.Max(2, right - more.Width), y);
+            if (rect is null)
+                more = OverlayDraw.Text($"+{list.Count}", SmallSize - 0.5, _muted, FontWeight.SemiBold);
+            var chip = new Rect(rect is null ? left : end + 4, y - (more.Height + 4) / 2, more.Width + 12, more.Height + 4);
+            if (chip.Right <= right + 6)
+            {
+                OverlayDraw.Panel(ctx, chip, _laneWash[lane], _pillBorder[lane], 5);
+                ctx.DrawText(more, new Point(chip.X + 6, y - more.Height / 2));
+                end = chip.Right;
+            }
         }
+        if (rect is not null)
+            ctx.DrawLine(_pillBorder[lane], new Point(end, y), new Point(nodeX - HeadRingR - 1, y));
+        _pillRows.Add((new Rect(left, RowTop(r), Math.Max(0, end - left), _rowH), r, list.Count > 1 || cut));
+    }
+
+    // One pill with its left edge at x, at most maxW wide (the name is cut in the middle to fit); null when there isn't
+    // room for a readable one. With no context it only measures. A painted pill is hit-testable (in the stack's list
+    // when it's part of the stack).
+    private Rect? PaintPill(DrawingContext? ctx, GraphSnapshot s, GraphRef rf, int row, int lane, double x, double y, double maxW,
+        out bool cut, bool stacked = false)
+    {
+        cut = false;
+        bool local = rf.Kind == GraphRefKind.LocalBranch;
+        bool here = local && rf.Name == s.Current?.Branch;
+        bool checkedOut = local && IsCheckedOut(s, rf.Name);
+        var ink = here ? _bg : local ? _laneFill[lane] : _muted;
+        // The remote mark: nothing for a local-only branch, a dot when it matches its upstream, ↑/↓ counts when
+        // they've moved apart, a struck circle when the upstream is gone.
+        var track = local && rf.Upstream is not null && !rf.UpstreamGone && !rf.InSync
+            ? OverlayDraw.Text(TrackText(rf), SmallSize - 1, ink, FontWeight.SemiBold) : null;
+        double lead = checkedOut ? 13 : 0;
+        double trail = !local || rf.Upstream is null ? 0 : track is not null ? track.Width + 9 : 11;
+        double cap = maxW - 14 - lead - trail;
+        if (cap < 28) return null;
+        var name = OverlayDraw.ElideMiddle(rf.Name, PillSize, cap, FontWeight.SemiBold);
+        cut = name != rf.Name;
+        var ft = OverlayDraw.Text(name, PillSize, ink, FontWeight.SemiBold);
+        double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
+        var rect = new Rect(x, y - h / 2, w, h);
+        if (ctx is null) return rect;
+
+        if (here)
+            OverlayDraw.Panel(ctx, rect, _laneFill[lane], null, 5);
+        else if (local)
+            OverlayDraw.Panel(ctx, rect, _laneWash[lane], _pillBorder[lane], 5);
+        else
+            OverlayDraw.Panel(ctx, rect, stacked ? _bg : null, _pillDash[lane], 5);
+        if (checkedOut)
+            FolderGlyph(ctx, ink, rect.X + 7, y);
+        ctx.DrawText(ft, new Point(rect.X + 7 + lead, y - ft.Height / 2));
+        if (track is not null)
+            ctx.DrawText(track, new Point(rect.Right - 6 - track.Width, y - track.Height / 2));
+        else if (local && rf.InSync)
+            ctx.DrawEllipse(ink, null, new Point(rect.Right - 9, y), 2.6, 2.6);
+        else if (local && rf.UpstreamGone)
+        {
+            var pen = OverlayDraw.SolidPen(((ISolidColorBrush)ink).Color, 1.1);
+            ctx.DrawEllipse(null, pen, new Point(rect.Right - 9, y), 3, 3);
+            ctx.DrawLine(pen, new Point(rect.Right - 11.2, y + 2.2), new Point(rect.Right - 6.8, y - 2.2));
+        }
+        (stacked ? _stackHits : _pillHits).Add((rect, row, rf));
+        if (_drop?.Ref is { } dr && dr.FullName == rf.FullName)
+            ctx.DrawRectangle(null, _dropPen, new RoundedRect(rect.Inflate(2.5), 7));
+        return rect;
+    }
+
+    // ---- the hover stack ----
+
+    // The row whose refs are stacked open, the stack's panel as last painted, and its pills (hit-tested before the
+    // rows' own, since the stack lies over them).
+    private int _stackRow = -1;
+    private Rect? _stackPanel;
+    private readonly List<(Rect Rect, int Row, GraphRef Ref)> _stackHits = new();
+    private readonly List<(Rect Area, int Row, bool Expandable)> _pillRows = new();
+
+    // Every ref of the hovered row, one under another in full, over whatever columns they reach, on a panel of the
+    // background so they read cleanly over the rows beneath. It starts on the row itself and shifts up only when it
+    // would run off the bottom.
+    private void PaintStack(DrawingContext ctx, GraphSnapshot s, Size size)
+    {
+        _stackHits.Clear();
+        _stackPanel = null;
+        if (_stackRow < 0 || _stackRow >= s.Rows.Length) return;
+        int r = _stackRow;
+        if (RowTop(r) + _rowH <= _headerH || RowTop(r) >= size.Height) return;
+        var list = RowRefs(s, s.RefsAt(s.Commits[r].Hash));
+        if (list.Count == 0) return;
+        int lane = s.Rows[r].Lane % _lane.Length;
+        const double left = 8, gap = 3;
+        double maxW = Math.Max(60, size.Width - left - 12);
+
+        double pillH = 0, widest = 0;
+        foreach (var rf in list)
+            if (PaintPill(null, s, rf, r, lane, left, 0, maxW, out _) is { } m)
+                (pillH, widest) = (Math.Max(pillH, m.Height), Math.Max(widest, m.Width));
+        if (pillH == 0) return;
+        double step = pillH + gap;
+        double y0 = RowMid(r);
+        double overflow = y0 + (list.Count - 1) * step + pillH / 2 + 6 - size.Height;
+        if (overflow > 0) y0 = Math.Max(_headerH + pillH / 2 + 6, y0 - overflow);
+
+        var panel = new Rect(left - 4, y0 - pillH / 2 - 4, widest + 8, (list.Count - 1) * step + pillH + 8);
+        OverlayDraw.Panel(ctx, panel, _bg, _sep, 7);
+        _stackPanel = panel;
+        for (int i = 0; i < list.Count; i++)
+            PaintPill(ctx, s, list[i], r, lane, left, y0 + i * step, maxW, out _, stacked: true);
+    }
+
+    // Opens the stack for the row whose pills are under the pointer, keeps it while the pointer is on the stack (or
+    // back on that row's pills), and closes it otherwise. Returns whether it changed.
+    private bool UpdateStack(Point? at)
+    {
+        int want = -1;
+        if (at is { } p)
+        {
+            if (_stackRow >= 0 && _stackPanel?.Contains(p) == true) want = _stackRow;
+            else
+                foreach (var pr in _pillRows)
+                    if (pr.Area.Contains(p))
+                    {
+                        if (pr.Expandable) want = pr.Row;
+                        break;
+                    }
+        }
+        if (want == _stackRow) return false;
+        _stackRow = want;
+        InvalidateVisual();
+        return true;
+    }
+
+    // The row a press or hover belongs to: the open stack's own row anywhere over the stack, else the row under it.
+    private int RowUnder(Point p) => _stackRow >= 0 && _stackPanel?.Contains(p) == true ? _stackRow : RowAt(p.Y);
+
+    /// <summary>For the headless render: scrolls to the first row with more than one pill, opens its stack, and says
+    /// which refs it holds.</summary>
+    internal string PreviewOpenStack()
+    {
+        if (_snap is not { } s) return "(no snapshot)";
+        for (int r = 0; r < s.Commits.Count; r++)
+        {
+            var list = RowRefs(s, s.RefsAt(s.Commits[r].Hash));
+            if (list.Count < 2) continue;
+            Offset = Math.Max(0, (r - 3) * _rowH);
+            _stackRow = r;
+            InvalidateVisual();
+            return string.Join(", ", list.Select(x => x.Name));
+        }
+        return "(no row with more than one pill)";
     }
 
     // The row a drop would land on: the target branch's commit, or the target worktree's WIP row (its HEAD when clean).
@@ -799,7 +921,7 @@ internal sealed class GraphCanvas : Control
             var at = e.GetPosition(this);
             if (RefAt(at) is { } menuRef)
                 RefMenuRequested?.Invoke(menuRef);
-            else if (RowAt(at.Y) is var menuRow and >= 0)
+            else if (RowUnder(at) is var menuRow and >= 0)
             {
                 Select(menuRow, scrollIntoView: false);
                 RowMenuRequested?.Invoke(menuRow);
@@ -827,7 +949,7 @@ internal sealed class GraphCanvas : Control
             e.Handled = true;
             return;
         }
-        int r = RowAt(pos.Y);
+        int r = RowUnder(pos);
         if (r < 0) return;
         Select(r, scrollIntoView: false);
         if (e.ClickCount == 2)
@@ -884,6 +1006,7 @@ internal sealed class GraphCanvas : Control
             _edgeHover = edge;
             InvalidateVisual();
         }
+        if (_press is null) UpdateStack(at);
         SetCursor(edge > 0 ? StandardCursorType.SizeWestEast
             : RowAt(at.Y) >= 0 || RefAt(at) is not null ? StandardCursorType.Hand
             : StandardCursorType.Arrow);
@@ -899,7 +1022,7 @@ internal sealed class GraphCanvas : Control
                 return;
             }
         }
-        int r = RowAt(e.GetPosition(this).Y);
+        int r = RowUnder(at);
         if (r == _hover) return;
         _hover = r;
         InvalidateVisual();
@@ -909,6 +1032,7 @@ internal sealed class GraphCanvas : Control
     {
         base.OnPointerExited(e);
         UpdateTip(null);
+        UpdateStack(null);
         if (_hover < 0 && _edgeHover == 0) return;
         _hover = -1;
         _edgeHover = 0;
@@ -937,6 +1061,8 @@ internal sealed class GraphCanvas : Control
         {
             if (RefAt(p) is { } r)
                 (key, tip) = ("ref:" + r.FullName, Describe(r, s));
+            else if (_stackPanel?.Contains(p) == true)
+                key = null;
             else if (NodeAt(p) is var row and >= 0)
                 (key, tip) = ("node:" + s.Commits[row].Hash, AuthorTip(s.Commits[row]));
             else if (p.X >= Bounds.Width - WhenW - Gap && RowAt(p.Y) is var whenRow and >= 0 && !s.Commits[whenRow].IsWorkInProgress)
@@ -999,6 +1125,8 @@ internal sealed class GraphCanvas : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
+        // The stack belongs to the row it opened on; scrolling moves the rows out from under the pointer.
+        _stackRow = -1;
         Offset -= e.Delta.Y * _rowH * 3;
         e.Handled = true;
     }
