@@ -552,6 +552,65 @@ public class GitGraphTests
         Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForRef(s, RefNamed(s, "origin/main")).Action);
     }
 
+    // main is m1, behind origin/main at m2; feat is f1, which origin/feat is level with.
+    private static GraphSnapshot BehindSnap(GraphRef main, params GraphWorktree[] wts) =>
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("m1")],
+        [
+            main,
+            new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "f1") { Upstream = "origin/feat" },
+            new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m2"),
+            new("origin/feat", "refs/remotes/origin/feat", GraphRefKind.RemoteBranch, "f1"),
+        ], wts, "main", 100);
+
+    private static readonly GraphRef MainBehind = new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m1") { Upstream = "origin/main", Behind = 1 };
+
+    [Fact]
+    public void FastForward_ARemoteItsTrackingBranchIsOnlyBehind()
+    {
+        var here = new GraphWorktree("C:/r", "main", "m1", 3, true);
+        var s = BehindSnap(MainBehind, here);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, here, SwitchFirst: false),
+            GraphCheckout.FastForwardFor(s, RefNamed(s, "origin/main")));
+
+        // Level, ahead (diverged), gone, or not tracked: a plain checkout.
+        Assert.Null(GraphCheckout.FastForwardFor(s, RefNamed(s, "origin/feat")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { Ahead = 2 }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { UpstreamGone = true }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { Upstream = null }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(s, RefNamed(s, "main")));
+    }
+
+    [Fact]
+    public void FastForward_MovesTheWorktreeHoldingIt_OrSwitchesHereFirst()
+    {
+        var here = new GraphWorktree("C:/r", "feat", "f1", 0, true);
+        var other = new GraphWorktree("C:/r--main", "main", "m1", 0, false);
+        var held = BehindSnap(MainBehind, here, other);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, other, SwitchFirst: false),
+            GraphCheckout.FastForwardFor(held, RefNamed(held, "origin/main")));
+
+        var free = BehindSnap(MainBehind, here);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, here, SwitchFirst: true),
+            GraphCheckout.FastForwardFor(free, RefNamed(free, "origin/main")));
+    }
+
+    [Theory]
+    [InlineData("To x\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs", PushRejection.Diverged)]
+    [InlineData("To x\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs", PushRejection.FetchFirst)]
+    [InlineData("To x\n ! [rejected]        main -> main (stale info)\nerror: failed to push some refs", PushRejection.FetchFirst)]
+    [InlineData("fatal: Authentication failed", PushRejection.None)]
+    [InlineData(" ! [remote rejected] main -> main (pre-receive hook declined)", PushRejection.None)]
+    public void Push_RejectionReasonIsRead(string stderr, PushRejection expected) =>
+        Assert.Equal(expected, GitOps.PushRejectionOf(stderr));
+
+    [Fact]
+    public void PrimaryTip_AHiddenTrunkOutsideTheWalkDoesNotHoldLaneZero()
+    {
+        GraphRef[] refs = [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2")];
+        Assert.Equal("m2", GraphSnapshot.PrimaryTip([], refs, "main", _ => true));
+        Assert.Null(GraphSnapshot.PrimaryTip([], refs, "main", _ => false));
+    }
+
     [Fact]
     public void Checkout_TagsAndBareCommitsDetach()
     {

@@ -264,8 +264,12 @@ internal sealed class GraphSnapshot
         }
         if (primaryBranch is null)
             return null;
-        return worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null)?.WipHash
-            ?? refs.FirstOrDefault(r => r.Name == primaryBranch && r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch)?.Target;
+        if (worktrees.FirstOrDefault(w => w.Branch == primaryBranch && w.Changes > 0 && w.Head is not null) is { } dirty)
+            return dirty.WipHash;
+        // A trunk hidden from the walk (with nothing else reaching its tip) can't hold lane 0 either.
+        return refs.FirstOrDefault(r => r.Name == primaryBranch && r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch) is { } trunk
+               && (loaded?.Invoke(trunk.Target) ?? true)
+            ? trunk.Target : null;
     }
 
     /// <summary>

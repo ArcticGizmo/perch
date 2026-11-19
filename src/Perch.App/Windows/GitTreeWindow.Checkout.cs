@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Data;
 using Perch.Data.GitGraph;
 
 namespace Perch.Avalonia.Windows;
@@ -311,6 +312,67 @@ internal sealed partial class GitTreeWindow
     }
 
     // ---- the gesture ----
+
+    // A double-click on a pill or rail row. A remote branch that its local branch is only behind brings that branch up to
+    // it; anything else checks out.
+    private void ActivateRef(GraphRef r, Control anchor)
+    {
+        if (_snap is not { } snap) return;
+        if (GraphCheckout.FastForwardFor(snap, r) is { } ff) BeginFastForward(ff);
+        else BeginCheckout(GraphCheckout.ForRef(snap, r), anchor);
+    }
+
+    // Runs at once: a fast-forward can't conflict or lose anything, and changes in the way go to the stash. Only a
+    // session working there asks first, as a checkout would.
+    private async void BeginFastForward(FastForwardPlan plan)
+    {
+        if (plan.In is not { } wt) return;
+        bool busy = wt.IsCurrent ? _isActive
+            : _sessionAt.TryGetValue(wt.Path, out var s) && s.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
+        if (busy)
+        {
+            bool go = await ConfirmAsync($"Fast-forward {plan.Branch}?",
+                $"A Claude session is working in {wt.Name}; moving {plan.Branch} up to {plan.Remote} changes files under it.",
+                "Fast-forward anyway", "Cancel");
+            if (!go || !IsVisible) return;
+        }
+        RunFastForward(plan, wt);
+    }
+
+    private void RunFastForward(FastForwardPlan plan, GraphWorktree wt)
+    {
+        if (_cwd is not { } origin) return;
+        int dirty = wt.IsCurrent ? _lastStatus?.Changes.Count ?? wt.Changes : wt.Changes;
+        string what = $"{plan.Branch} to {plan.Remote}";
+        ShowToast($"Fast-forwarding {what}…", "", null, busy: true);
+        SetGraphBusy($"Fast-forwarding {what}…");
+        System.Threading.Tasks.Task.Run(() => GitOps.FastForwardBranch(wt.Path, plan.Branch, plan.Remote, plan.SwitchFirst, stash: dirty > 0))
+            .ContinueWith(t =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!t.IsCompletedSuccessfully) { ClearGraphBusy(); HideToast(); return; }
+                    if (!IsVisible) return;
+                    ClearBusyOnNextLoad();
+                    var (r, undo, stash) = t.Result;
+                    if (!r.Ok)
+                        ShowToast(r.Message, r.Command, null, error: true);
+                    else
+                    {
+                        string where = wt.IsCurrent ? "" : $" in {wt.Name}";
+                        string moved = $"{(plan.SwitchFirst ? "Checked out and fast-forwarded" : "Fast-forwarded")} {what}{where} " +
+                                       $"(↓{plan.Behind} commit{(plan.Behind == 1 ? "" : "s")})";
+                        string changes = $"{dirty} change{(dirty == 1 ? "" : "s")}";
+                        ShowToast(stash is null ? moved : $"{moved}; your {changes} are in the stash", r.Command,
+                            undo is null ? null : () => RunDropUndo(undo),
+                            extra: stash is null ? null : ("Pop them back", () =>
+                                RunHereAction("Popping the stash…", cover: true, cwd => (GitOps.StashPop(cwd, stash), null),
+                                    _ => $"Popped your {changes} back", conflict: StashConflict, worktree: wt.Path)));
+                    }
+                    if (string.Equals(origin, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: true); else ClearGraphBusy();
+                });
+            });
+    }
 
     // A double-click resolved to a plan. Going to a branch nothing else holds runs at once; a branch another worktree
     // holds, or a place with no branch, asks what was meant first.

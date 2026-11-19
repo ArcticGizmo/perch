@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Perch.Data;
+using Perch.Avalonia.Views;
 using Perch.Data.GitGraph;
 
 namespace Perch.Avalonia.Windows;
@@ -48,14 +49,12 @@ internal sealed partial class GitTreeWindow
         RefreshStatus(preserveSelection: true);
     }
 
-    // The trunk and anything a worktree has checked out stay visible: hiding them would only make the graph lie.
+    // A branch a worktree has checked out stays visible: its HEAD is always walked, so hiding it would only drop the
+    // pill and make the graph lie. The trunk can go, one at a time; bulk hides still keep it.
     private string? WhyNotHide(GraphRef r)
     {
         if (_snap is null) return "";
-        if (r.Kind == GraphRefKind.Tag) return null;
         if (r.Kind == GraphRefKind.LocalBranch && _snap.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt) return $"{r.Name} is checked out in {wt.Name}.";
-        if (BranchVisibility.TrunkRefs(_snap.Refs, GraphLoader.PrimaryBranch(_snap.Refs)).Contains(r.FullName))
-            return $"{r.Name} is the main line of the graph.";
         return null;
     }
 
@@ -113,6 +112,17 @@ internal sealed partial class GitTreeWindow
         };
         if (hidden.Count > 0)
             items.Add(Item($"Show all {hidden.Count} hidden {what} branch{Es(hidden.Count)}", () => SetHidden(hidden, false)));
+        if (kind == GraphRefKind.RemoteBranch && _rail.RemoteFilter is { Length: > 0 } terms)
+        {
+            // What the rail's filter box is showing, so a search can be hidden (or brought back) in one go.
+            string q = string.Join(' ', terms);
+            var hideMatching = hideable.Where(r => GraphRail.MatchesFilter(r.Name, terms)).ToList();
+            var showMatching = hidden.Where(r => GraphRail.MatchesFilter(r.Name, terms)).ToList();
+            items.Add(new Separator());
+            items.Add(Enabled(Item($"Hide the {hideMatching.Count} matching \"{q}\"", () => HideAll(hideMatching)), hideMatching.Count > 0));
+            if (showMatching.Count > 0)
+                items.Add(Item($"Show the {showMatching.Count} hidden matching \"{q}\"", () => SetHidden(showMatching, false)));
+        }
         items.Add(new Separator());
         if (kind == GraphRefKind.RemoteBranch)
         {
@@ -125,7 +135,7 @@ internal sealed partial class GitTreeWindow
             items.Add(auto);
         }
         items.Add(Note($"Yours: it has a commit {trunk} doesn't, made with your git user.email or user.name. " +
-                       $"{trunk} and branches checked out in a worktree always stay."));
+                       $"These keep {trunk}, which you can hide with its own eye; a branch checked out in a worktree always stays."));
         return items;
     }
 

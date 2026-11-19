@@ -22,6 +22,10 @@ internal sealed partial class GitTreeWindow
         bool branch = r.Kind is GraphRefKind.LocalBranch or GraphRefKind.RemoteBranch;
         string name = ShortNames(r.Name);
         var items = new List<Control>();
+        if (GraphCheckout.FastForwardFor(snap, r) is { } ff)
+            items.Add(Item((ff.SwitchFirst ? $"Check out {ShortNames(ff.Branch)} and fast-forward it" : $"Fast-forward {ShortNames(ff.Branch)}")
+                           + $" to {name} (↓{ff.Behind})" + (ff.In is { IsCurrent: false } other ? $" in {ShortNames(other.Name)}" : ""),
+                () => BeginFastForward(ff)));
         if (branch || r.Kind == GraphRefKind.Tag)
         {
             items.Add(Item($"Check out {name}", () => BeginCheckout(GraphCheckout.ForRef(snap, r), anchor)));

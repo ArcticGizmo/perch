@@ -1053,6 +1053,17 @@ internal static class HeadlessRenderer
                 Dispatcher.UIThread.RunJobs();
                 if (tw.CaptureRenderedFrame() is { } f) { using var fs = File.Create(Path.Combine(outDir, name)); f.Save(fs); }
             }
+            // Remotes under the filter box: filtered to "site" (its ⋯ menu then offers to hide the matches), then
+            // unfiltered with origin folded to its header.
+            tw.PreviewRailOpen(false);
+            tw.PreviewRemoteFilter("site");
+            Frame11("git_tree_rail_remote_filter_1x.png");
+            Console.WriteLine("git graph Remotes ⋯ menu, filtered:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.RemoteBranch).Replace("\n", "\n  "));
+            tw.PreviewRemoteFilter("");
+            tw.PreviewFoldRemote("origin", true);
+            Frame11("git_tree_rail_remote_folded_1x.png");
+            tw.PreviewFoldRemote("origin", false);
+            tw.PreviewRailOpen(true);
             Console.WriteLine("git graph Tags ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.Tag).Replace("\n", "\n  "));
             tw.PreviewTags();
             tw.PreviewSpinner(true);

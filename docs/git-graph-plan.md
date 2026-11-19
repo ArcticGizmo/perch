@@ -90,7 +90,7 @@ Perch.App
 
 ### M6: Remotes & PRs
 
-- **CP15: fetch / pull / push.** On click and on open, off the UI thread; ahead/behind on pills and cards; create a tracking branch by double-clicking a remote branch; push never forces from a gesture.
+- **CP15: fetch / pull / push.** On click and on open, off the UI thread; ahead/behind on pills and cards; create a tracking branch by double-clicking a remote branch; push never forces from a gesture (a rejected push asks before force pushing with a lease; feedback round 14).
 - **CP16: PR badges.** `PrStatusService` state on branch pills (open/draft/approved/CI).
 - **CP17: right-click menus.** Rename, delete, reset (soft/mixed/hard with confirmation), revert, tag, copy hash/name.
 
@@ -189,6 +189,15 @@ The user tried CP11–CP14 and asked for four things; all four are built (427ff6
 - **Column edges are header-only** (`GraphCanvas.EdgeAt(Point)` returns 0 below `_headerH`), so they no longer cover pills and nodes on the rows.
 - **Branch here…** (`GitTreeWindow.Menus.cs`: `AskBranchHere`, `CreateBranchOnly`): first on a commit row (replacing "Create a branch at…"), second on a branch/tag pill and rail row, and on this worktree's WIP row (= the toolbar's Branch). The dialog's first choice is **Just create it** (`git branch <name> <hash>`, Undo = `branch -D`); the others check it out (stash / bring along when dirty), through the existing `RunCheckout`.
 - **Long names in menus** (`TextFit.ShortenNames`, tested; `GitTreeWindow.ShortNames`): the drop menu, its notes, the drag ghost and the ref menu cut each long branch/worktree name in the middle (`OverlayDraw.ElideMiddle`, 220 px at the menu's 14 px), matching whole names only, longest first, in one pass. Only names over 24 chars are candidates, so a big repo's refs don't all enter the scan. The command under a drop option now **wraps** instead of being cut from the left, and the item's tooltip has the full line. Render: `git_tree_drop_menu_long_1x.png` (`PreviewLongDropMenu`).
+
+## Feedback round 14 (2026-11-19)
+
+Branch `git-graph-feedback-13`. Checks in `docs/git-graph-testing.md` "Feedback round 14".
+
+- **The trunk can be hidden** (`GitTreeWindow.WhyNotHide`): only a branch a worktree has checked out still refuses. Bulk hides (`BranchVisibility.Hideable`) still keep the trunk. `GraphSnapshot.PrimaryTip`'s no-worktree fallback now skips a trunk that's out of the walk. Tested (`PrimaryTip_AHiddenTrunkOutsideTheWalkDoesNotHoldLaneZero`).
+- **Remote groups fold, and a filter box** (`GraphRail.BuildRemoteRows` / `RemoteHeader`, `_remotesClosed` in memory like the other folds). The rail is three panels (`_before`, `_remoteRows`, `_after`) around a persistent `TextBox`, so a live refresh never detaches the box mid-typing; typing rebuilds only `_remoteRows`. Every word must match (`MatchesFilter`); a filter opens every group with a match. The Remotes **⋯** adds Hide/Show the matching ones. Render: `git_tree_rail_remote_filter_1x.png`, `git_tree_rail_remote_folded_1x.png`.
+- **Double-click a remote to fast-forward** (`GraphCheckout.FastForwardFor`, tested; `GitTreeWindow.ActivateRef` / `BeginFastForward`; `GitOps.FastForwardBranch`, integration-tested): when a local branch tracks it with Ahead 0 and Behind > 0. It moves whichever worktree holds the branch, or switches this one to it first. Changes in the way go to a stash that's left for the user (the toast offers **Pop them back**); a failure puts the stash back. Undo = `reset --keep` + switch back + pop. Only a session working there asks first. `GraphCheckout.ForRef` is unchanged, so drag-onto-worktree is unaffected.
+- **Force push prompt** (`GitOpResult.Rejected` from `GitOps.PushRejectionOf`, tested; `GitOps.ForcePush`, integration-tested): a push rejected as **non-fast-forward** asks in the in-window modal, then runs `push --force-with-lease --force-if-includes`. **Fetch first** (remote has commits not fetched) never offers force: the toast offers Pull. A lease refused as stale info offers Fetch. `RunHereAction` gained a `failed` hook for follow-ups like this.
 
 ## Handover (2026-10-30, end of session 2)
 

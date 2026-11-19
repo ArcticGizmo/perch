@@ -314,7 +314,7 @@ internal sealed partial class GitTreeWindow : Window
         };
         _graph.Canvas.SelectionChanged += OnGraphSelected;
         _graph.Canvas.RowActivated += OnGraphActivated;
-        _graph.Canvas.RefActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _graph.Canvas); };
+        _graph.Canvas.RefActivated += r => ActivateRef(r, _graph.Canvas);
         _graph.Canvas.LoadMoreRequested += LoadMore;
         _graph.Canvas.DragRequested += BeginDrag;
         // The graph card's own title row: what it shows (and, for "This branch", since when), in a fixed place.
@@ -329,7 +329,7 @@ internal sealed partial class GitTreeWindow : Window
         _rail.JumpRequested += hash => { if (_snap?.RowOf(hash) is int r and >= 0) _graph.Canvas.Flash(r); };
         _rail.LaneHovered += lane => _graph.Canvas.HighlightLane(lane);
         _rail.WorktreeActivated += wt => { if (!wt.IsCurrent) Retarget(wt.Path, wt.Name, null, isActive: false); };
-        _rail.BranchActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _rail); };
+        _rail.BranchActivated += r => ActivateRef(r, _rail);
         _rail.DragRequested += BeginDrag;
         _rail.WorktreeMenuRequested += ShowWorktreeMenu;
         _rail.VisibilityToggled += ToggleHidden;
