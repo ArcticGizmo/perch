@@ -143,7 +143,7 @@ If you run your apps with [sprig](https://arcticgizmo.github.io/sprig/), turn on
 - **Hover a line** to see every app with its state and port.
 - **Session rows:** a session working in a sprig slot shows sprig's icon, coloured by the slot's state: blue while its apps are still coming up, green once they're ready, red if one is down. Click it to open sprig there.
 
-Perch keeps one `sprig watch` running while the section is on, so changes show within about a second without polling. It needs sprig 0.9.10 or later. **Notify on sprig changes** adds a notification when an app exits or fails, and when a workspace you started from Perch is ready.
+Perch keeps one `sprig watch` running while the section is on, so changes show within about a second without polling. It needs sprig 0.9.10 or later. Sprig 0.9.11 also says whether each workspace's apps are up yet, which Perch shows as blue "starting" until they are. **Notify on sprig changes** adds a notification when an app exits or fails, and when a workspace you started from Perch is ready.
 
 ## Jira tickets
 

@@ -121,6 +121,32 @@ public class SprigStatusTests
         Assert.False(w.InTrouble);
     }
 
+    // A snapshot as sprig 0.9.11 sends it (captured live, trimmed): readiness on every workspace, "none" while
+    // nothing runs; and a stopped workspace whose apps all exited, which reports trouble but is shown stopped.
+    private const string Sprig0911 = """
+        {"type":"snapshot","schema":1,"infra":"not-counted","host":{"running":true,"pid":9,"version":"0.9.11"},"workspaces":[{"key":"Safety-Virtual/1","orchestration":"Safety-Virtual","name":"1","label":"NO-TICKET-injuries-v2-core","branch":"NO-TICKET-injuries-v2-core","state":"paused","paused":true,"folder":"C:\\git\\Safety-Virtual--1","dirs":["C:\\git\\Safety-Virtual--1"],"readiness":{"health":"none","ready":0,"started":0,"total":8,"down":[]},"apps":[{"name":"safety/client","state":"off"}]},{"key":"Safety-Virtual/3","orchestration":"Safety-Virtual","name":"3","label":"migration","state":"stopped","paused":false,"dirs":[],"readiness":{"health":"trouble","ready":0,"started":0,"total":8,"down":["safety/client"]},"apps":[{"name":"safety/client","state":"exited","exit":1}]},{"key":"Safety-Virtual/2","orchestration":"Safety-Virtual","name":"2","label":"onboarding","state":"running","paused":false,"dirs":[],"readiness":{"health":"starting","ready":0,"started":0,"total":8,"down":[]},"apps":[{"name":"safety/migrate","state":"running"}]}]}
+        """;
+
+    [Fact]
+    public void Readiness_Sprig0911Snapshot_ReadsAsSprigShowsIt()
+    {
+        var fold = new SprigStatusFold();
+        Assert.True(fold.Apply(Sprig0911));
+
+        var paused = fold.Current.Find("Safety-Virtual/1")!;
+        Assert.Equal(SprigReadiness.None, paused.Readiness!.Health);
+        Assert.Equal(8, paused.Readiness.Total);
+        Assert.Equal(SprigWorkspaceState.Paused, paused.Shown);
+
+        var stopped = fold.Current.Find("Safety-Virtual/3")!;   // trouble, but nothing is going: shown stopped
+        Assert.Equal(SprigWorkspaceState.Stopped, stopped.Shown);
+        Assert.False(stopped.InTrouble);
+
+        var jobs = fold.Current.Find("Safety-Virtual/2")!;      // only a job running so far
+        Assert.Equal(SprigWorkspaceState.Starting, jobs.Shown);
+        Assert.Equal((0, 0), jobs.ReadyOf);
+    }
+
     [Fact]
     public void Readiness_Absent_FallsBackToTheApps()
     {

@@ -52,8 +52,8 @@ internal sealed record SprigWorkspace(
 {
     public bool IsFree => State == SprigWorkspaceState.Free;
 
-    /// <summary>How far its apps have got, as sprig works it out; null from a sprig that doesn't send it (0.9.10 and
-    /// earlier), when the properties below work it out from <see cref="Apps"/> instead.</summary>
+    /// <summary>How far its apps have got, as sprig works it out (sprig 0.9.11 and later); null from a sprig that
+    /// doesn't send it (0.9.10), when the properties below work it out from <see cref="Apps"/> instead.</summary>
     public SprigReadiness? Readiness { get; init; }
 
     /// <summary>
@@ -90,7 +90,9 @@ internal sealed record SprigWorkspace(
     public bool AnyFailed => Apps.Any(a => a.IsFailed);
 }
 
-/// <summary>A workspace's <c>readiness</c> as sprig sends it (from its <c>starting-state</c> change on).</summary>
+/// <summary>A workspace's <c>readiness</c> as sprig sends it (0.9.11 and later). It only colours a workspace whose
+/// state is <c>running</c>: sprig itself ignores it in every other state (a stopped workspace whose apps all exited
+/// reports <c>trouble</c> but is shown stopped).</summary>
 /// <param name="Health"><see cref="None"/>, <see cref="Starting"/>, <see cref="Up"/> or <see cref="Trouble"/>; a value
 /// a newer sprig adds is kept as written and reads as none of them.</param>
 /// <param name="Started">Apps that were started (jobs and apps stopped on purpose left out).</param>
@@ -123,7 +125,7 @@ internal sealed record SprigApp(
 
     /// <summary>On its way up: building, waiting on what it depends on, starting, or a job (a migration, say) still
     /// running. Not restarting, which is <see cref="IsDown"/>: a crash loop is trouble, not a start. The same split
-    /// sprig's own readiness makes.</summary>
+    /// sprig's own readiness makes, which this stands in for with a sprig older than 0.9.11.</summary>
     public bool IsComingUp => State is "building" or "waiting" or "starting" or "running";
 
     /// <summary>On its way somewhere: building, waiting on what it depends on, starting, restarting, or stopping.</summary>

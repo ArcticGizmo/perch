@@ -229,15 +229,21 @@ public sealed partial class OverlayCanvas
     {
         var muted = Palette.Active.TextMuted.ToColor();
         // Red wherever it's shown: up, but an app has exited, failed or is crash-looping.
+        // Worded as sprig words it (AppsReadiness.Detail), so the overlay and sprig's own app say the same thing.
         if (w.InTrouble)
-            return (w.Down.Count <= 1 ? "1 app down" : $"{w.Down.Count} apps down", Palette.Red);
+            return (w.Down.Count switch
+            {
+                0 => "app down",
+                1 => $"{ShortAppName(w.Down[0])} down",
+                var n => $"{n} apps down",
+            }, Palette.Red);
         var (ready, of) = w.ReadyOf;
         switch (w.Shown)
         {
             case SprigWorkspaceState.Running:
                 return (of > 0 ? $"{ready}/{of} ready" : "running", ready == of ? Palette.Green : muted);
             case SprigWorkspaceState.Starting:
-                return (of > 0 ? $"starting {ready}/{of}" : "starting", Palette.Accent);
+                return (of > 0 ? $"starting {ready}/{of}" : "running its jobs", Palette.Accent);
             case SprigWorkspaceState.Failed:
                 return ("failed", Palette.Red);
             case SprigWorkspaceState.Paused:
@@ -414,6 +420,8 @@ public sealed partial class OverlayCanvas
         AddMenuGroups(items, whole, open, apps, where);
         return items;
     }
+
+    private static string ShortAppName(string name) => name.LastIndexOf('/') is var i and >= 0 ? name[(i + 1)..] : name;
 
     private static string SprigAppStateText(SprigApp a) => a.State switch
     {
