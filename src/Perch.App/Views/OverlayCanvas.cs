@@ -1726,7 +1726,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Worktree, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, Dnd, DockTile }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, BackgroundTasks, Metrics, Media, Mic, Pr, Jira, Worktree, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, Compact, GitHub, Todos, FeedHead, FeedMore, SprigLine, SprigRow, Dnd, DockTile }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1758,6 +1758,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public void Update(IReadOnlyList<ClaudeSession> sessions)
     {
         _sessions = sessions;
+        RelinkSprigSessions();
 
         // A session the daemon roster claims belongs to the "daemon" strip below the rows, not here —
         // its hooks may still write an ordinary session file, and rendering it twice would be worse
@@ -1976,6 +1977,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _prRects.Clear();
                 _jiraRects.Clear();
                 _worktreeRects.Clear();
+                _sprigRowRects.Clear();
                 _dirRects.Clear();
                 _subChevronRects.Clear();
 
@@ -1993,6 +1995,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // click must not still land on where it used to be).
             if (!showBody || !SectionVisible(OverlaySection.QuickLinks)) _noteButtonRect = default;
             if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hypertreeRect = default;
+            if (!showBody || !SectionVisible(OverlaySection.Sprig)) ClearSprigHitRects();
             if (!showBody || !MicStripVisible) ClearMicHitRects();
             if (!showBody || !MediaStripVisible) ClearMediaHitRects();
             if (!showBody || !FeedStripVisible) ClearSocialRegionHitRects();
@@ -2967,6 +2970,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Leads the branch glyphs, since the PR and Jira ticket beside it are read from that worktree's branch.
         bool showWorktree = _showWorktreeGlyph && session.LinkedWorktree is not null;
         double wtW = showWorktree ? WorktreeIconWidth : 0;
+        // The sprig workspace the session is working in, between the worktree and the PR it belongs with.
+        var sprigWs = SprigFor(session);
+        double sprigW = sprigWs is not null ? SprigRowIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         bool prApproved = showPr && session.PullRequest!.Value.IsApproved;
         double prW  = showPr ? PrIconWidth + (prApproved ? PrApprovedTickWidth : 0) : 0;
@@ -3028,7 +3034,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
-                         - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - wtW - prW - jiraW - mdW - dirW;
+                         - artW - warnW - thermoW - taskW - bgW - metricsW - burnW - gitW - noteW - wtW - sprigW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -3062,27 +3068,29 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawWorktreeIcon(ctx, wtGlyphX, nameMidY, _hoveredWorktreeRow == rowIndex ? FgBrush : MutedBrush);
             _worktreeRects[rowIndex] = new Rect(wtGlyphX - 2, nameMidY - 9, WorktreeIconWidth + 2, 18);
         }
+        if (sprigWs is not null)
+            DrawSprigRowIcon(ctx, left + 14 + warnW + artW + mailW + rcW + originW + noteW + wtW, nameMidY, sprigWs, rowIndex);
         if (showPr)
         {
-            double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW;
+            double prGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + sprigW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex, approved: prApproved);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, prW + 2, 18);
         }
         if (showJira)
         {
-            double jiraGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW;
+            double jiraGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + sprigW + prW;
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
         if (showMd)
         {
-            double mdGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW + jiraW;
+            double mdGlyphX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + sprigW + prW + jiraW;
             DrawMdIcon(ctx, mdGlyphX, nameMidY, hovered: _hoveredMarkdownRow == rowIndex);
             _mdRects[rowIndex] = new Rect(mdGlyphX - 2, nameMidY - 9, MdIconWidth + 2, 18);
         }
 
-        double nameX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + prW + jiraW + mdW;
+        double nameX = left + 14 +warnW + artW + mailW + rcW + originW + noteW + wtW + sprigW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -4294,6 +4302,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int wtIcon = HitRect(_worktreeRects, p);
         if (wtIcon != _hoveredWorktreeRow) { _hoveredWorktreeRow = wtIcon; InvalidateVisual(); }
 
+        int sprigIcon = HitRect(_sprigRowRects, p);
+        if (sprigIcon != _hoveredSprigRow) { _hoveredSprigRow = sprigIcon; InvalidateVisual(); }
+
         bool overUpdate = _updateAvailable && !UpdateInProgress && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
@@ -4325,6 +4336,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The feeds row: each head, the "+N" chip and the "+" are separate controls.
         bool overFeeds = UpdateFeedsHover(p);
 
+        // The Sprig section: the header toggles it, each workspace line opens it in sprig.
+        bool overSprig = UpdateSprigHover(p);
+
         // The Social sign-in strip highlights on hover and takes the hand cursor like any other control.
         bool overSocial = _socialSignInRect.Contains(p);
         if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
@@ -4346,9 +4360,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         bool overLogin = UpdateLoginButtonHover(p);
         Cursor = overResize ? ResizeCursor
-            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || wtIcon >= 0 || overUpdate || overDnd
+            : (ql >= 0 || overHypertree || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || wtIcon >= 0 || sprigIcon >= 0 || overUpdate || overDnd
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds)
+               || overRoost || overRecent || overCompact || overScroll || overUsageToggle || overLogin || overGitHub || overTodos || overFeeds || overSprig)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4372,6 +4386,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
             HitRect(_worktreeRects, p) is var wt && wt >= 0 ? (TipKind.Worktree, wt) :
+            HitRect(_sprigRowRects, p) is var sr && sr >= 0 ? (TipKind.SprigRow, sr) :
             HitRect(_dirRects, p) is var di && di >= 0 ? (TipKind.Dir, di) :
             HitTestOriginIcon(p) is var oi && oi >= 0 ? (TipKind.Origin, oi) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
@@ -4387,6 +4402,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestTodos(p)                           ? (TipKind.Todos, -1) :
             HitTestFeedHead(p) is var fh && fh >= 0   ? (TipKind.FeedHead, fh) :
             HitTestFeedMore(p)                        ? (TipKind.FeedMore, -1) :
+            HitTestSprigLine(p) is var sl && sl >= 0  ? (TipKind.SprigLine, sl) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
@@ -4431,6 +4447,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.Worktree: ShowWorktreeTooltip(_tipRow); break;
+            case TipKind.SprigRow: ShowSprigRowTooltip(_tipRow); break;
             case TipKind.Dir:     ShowDirTooltip(_tipRow);     break;
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
@@ -4441,6 +4458,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Todos:   ShowTodosTooltip();          break;
             case TipKind.FeedHead: ShowFeedHeadTooltip(_tipRow); break;
             case TipKind.FeedMore: ShowFeedMoreTooltip();       break;
+            case TipKind.SprigLine: ShowSprigLineTooltip(_tipRow); break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
@@ -4483,9 +4501,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredWorktreeRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertree ||_hoveredDaemonRow != -1 || _hoveredTodos || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredWorktreeRow != -1 || _hoveredSprigRow != -1 || _hoveredUpdateIcon || _hoveredDnd || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         changed |= ClearFeedsHover();
+        changed |= ClearSprigHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         changed |= ClearLoginButtonHover();
         _hoveredSocial = false;
@@ -4494,7 +4513,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         changed |= ClearScrollHover();
         _hoveredNewSession = false;
         _hoveredTodos = _hoveredHypertree = _hoveredAutonomousHeader = false;
-        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = _hoveredWorktreeRow = -1;
+        _hoveredRow = _hoveredQuickLink = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = _hoveredWorktreeRow = _hoveredSprigRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredDnd = false;
         _hoveredFooter = false;
@@ -4868,6 +4887,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The sprig glyph opens sprig on the workspace the session is working in.
+        if (SprigAtRow(HitRect(_sprigRowRects, p)) is { } sprigWs)
+        {
+            SprigOpenRequested?.Invoke(sprigWs);
+            return;
+        }
+
         // The Jira glyph is a single deterministic deep-link (unlike the PR/artifact pickers), so a left
         // click opens it directly — the dwell tooltip has already shown which key that is. Middle-click for
         // a fresh browser window is handled in OnPointerPressed.
@@ -4955,6 +4981,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The feeds row: a head plays its story, "+N" plays the next unread, "+" adds a feed.
         if (RouteFeedsClick(p)) return;
+
+        // The Sprig section: the header toggles it, a workspace line opens it in sprig.
+        if (RouteSprigClick(p)) return;
 
         // The Todo strip: anywhere on the line opens the Todos window.
         if (HitTestTodos(p)) { TodosRequested?.Invoke(); return; }
@@ -5045,6 +5074,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The feeds row has its own menu (per head, or the row's).
         if (ShowFeedsMenu(p)) return;
+
+        // The Sprig section has its own menu (per workspace line, or "Open sprig").
+        if (ShowSprigMenu(p)) return;
+
+        // A row's sprig glyph: that workspace's menu, the same one its line in the Sprig section has.
+        if (SprigAtRow(HitRect(_sprigRowRects, p)) is { } rowSprig)
+        {
+            ShowFlyout(SprigWorkspaceMenu(rowSprig));
+            return;
+        }
 
         // Right-click within the social region (or its sign-in strip): the Social actions live here now — a
         // right-click on the overlay header no longer carries them.

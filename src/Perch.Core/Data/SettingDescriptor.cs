@@ -70,6 +70,7 @@ internal enum PreviewTarget
     BackgroundTasks,
     Feeds,
     Worktree,
+    Sprig,
 }
 
 /// <summary>

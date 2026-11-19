@@ -12,6 +12,7 @@ using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Hypertree;
+using Perch.Data.Sprig;
 using Perch.Platform;
 
 namespace Perch.Avalonia;
@@ -35,6 +36,9 @@ public partial class App : Application
     private SupabaseSocialClient? _social;
     private SocialFeedMonitorHost? _feedHost;
     private HypertreeMonitorHost? _hypertreeHost;
+    private SprigMonitorHost? _sprigHost;
+    private SprigStatus _sprigPrevious = SprigStatus.Empty;                        // for SprigNotices.Diff
+    private readonly HashSet<string> _sprigAwaitingReady = new(StringComparer.Ordinal);   // started from Perch
     private DaemonMonitorHost? _daemonHost;
     // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
     // reused list window itself follows the WindowHost idiom below.
@@ -205,6 +209,7 @@ public partial class App : Application
                 _micHost?.Dispose();
                 _feedHost?.Dispose();
                 _hypertreeHost?.Dispose();
+                _sprigHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
                 _gitHubHost?.Dispose();
@@ -346,6 +351,10 @@ public partial class App : Application
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's Hypertree strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
+            // Sprig's `watch --json` stream → the overlay's Sprig section (opt-in; started in ApplyDisplaySettings).
+            _sprigHost = new SprigMonitorHost();
+            _sprigHost.Changed += OnSprigChanged;
+            _overlay.Canvas.SetSprigExpanded(settings.SprigSectionExpanded);
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
             // headless sessions have no window to focus, so they get their own rows with an options menu.
             // The full-list window (opened from the strip's overflow line) follows the roster live too.
@@ -515,6 +524,14 @@ public partial class App : Application
 
             // Hypertree strip: a click asks Hypertree's tray (via its CLI) to open its map.
             _overlay.Canvas.HypertreeMapRequested += OnHypertreeMapRequested;
+
+            // Sprig section: a line opens sprig on the workspace, its menu runs sprig's CLI, the chevron persists.
+            _overlay.Canvas.SprigOpenRequested += OnSprigOpenRequested;
+            _overlay.Canvas.SprigActionRequested += OnSprigActionRequested;
+            _overlay.Canvas.SprigExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.SprigSectionExpanded = expanded; s.Save(); }
+            };
 
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
@@ -1155,6 +1172,9 @@ public partial class App : Application
 
         // Feeds: subscriptions + interval + on/off into the engine (idempotent; off fetches nothing).
         _feedsHost?.Apply(s);
+
+        // Sprig: one `sprig watch` child while the section is on; off ends it (both idempotent).
+        if (s.ShowSprig) _sprigHost?.Start(); else _sprigHost?.Stop();
 
         // The experimental sign-in refresher runs only while opted in (idempotent).
         _signInHost?.SetEnabled(s.AutoRefreshSignIn);
@@ -2262,6 +2282,10 @@ public partial class App : Application
         {
             var id = action[FeedToastPrefix.Length..];
             OpenFeedStory(id.Length > 0 ? id : null);
+        }
+        else if (action.StartsWith(SprigToastPrefix, StringComparison.Ordinal))
+        {
+            OnSprigOpenRequested(_sprigHost?.Status.Find(action[SprigToastPrefix.Length..]));
         }
         else if (action.StartsWith(LoginToastPrefix, StringComparison.Ordinal)
                  && ClaudeConfigSet.Instance.ForRoot(action[LoginToastPrefix.Length..]) is { } dir)
@@ -3371,6 +3395,71 @@ public partial class App : Application
                     $"{version} can't open its map from Perch. Update Hypertree to use this.",
                     ToastLevel.Info, null, null));
         });
+    }
+
+    /// <summary>Brings sprig's window up on a workspace (or as it is). A process launch, so off the UI thread;
+    /// only a missing sprig is worth a toast, since otherwise the click would look like it did nothing.</summary>
+    private void OnSprigOpenRequested(SprigWorkspace? workspace)
+    {
+        Task.Run(() =>
+        {
+            var result = SprigCli.Open(workspace);
+            if (!result.Ok) Dispatcher.UIThread.Post(() => ShowSprigFailure("Couldn't open sprig", result, null));
+        });
+    }
+
+    /// <summary>
+    /// Runs a sprig action from the Sprig section's menu. Progress arrives on the watch stream, so success says
+    /// nothing; a failure gets one toast. When sprig needs a person (an unapproved definition, missing inputs, a
+    /// checkout another definition holds), sprig is opened on the workspace to sort it out there.
+    /// </summary>
+    private void OnSprigActionRequested(SprigWorkspace workspace, SprigAction action, string? app)
+    {
+        // Asked for from here, so say when it's up (SprigNotices); a stop or pause cancels the wait.
+        if (action is SprigAction.Start or SprigAction.Restart or SprigAction.Resume) _sprigAwaitingReady.Add(workspace.Key);
+        else _sprigAwaitingReady.Remove(workspace.Key);
+
+        Task.Run(() =>
+        {
+            var result = SprigCli.Run(action, workspace, app);
+            if (result.Ok) return;
+            if (result.NeedsSprig) SprigCli.Open(workspace);
+            var what = app is null ? workspace.Label : $"{app[(app.LastIndexOf('/') + 1)..]} in {workspace.Label}";
+            Dispatcher.UIThread.Post(() => ShowSprigFailure($"Couldn't {action.ToString().ToLowerInvariant()} {what}", result, workspace));
+        });
+    }
+
+    // Each change from sprig: repaint, then any toasts it's worth (SprigNotices.Diff only ever compares two states,
+    // so a status pushed while notifications are off simply isn't announced later). Held by the notifications master
+    // switch and Do Not Disturb; not by Quiet mode, since these are work alerts. A click opens sprig on the workspace.
+    private void OnSprigChanged()
+    {
+        if (_sprigHost is not { } host) return;
+        var status = host.Status;
+        _overlay?.Canvas.SetSprig(status, host.Feed);
+
+        var notices = SprigNotices.Diff(_sprigPrevious, status, _sprigAwaitingReady);
+        _sprigPrevious = status;
+        if (notices.Count == 0 || Effective is not { NotificationsEnabled: true, NotifySprig: true } || _notifier is null) return;
+        bool dnd;
+        try { dnd = PlatformServices.DoNotDisturb.IsActive; } catch { dnd = false; }
+        if (dnd) return;
+        foreach (var n in notices)
+            _notifier.ShowAction(n.Title, n.Body, n.Problem ? ToastLevel.Warning : ToastLevel.Info, SprigToastPrefix + n.WorkspaceKey);
+    }
+
+    private const string SprigToastPrefix = "sprig:";
+
+    private void ShowSprigFailure(string title, SprigActionResult result, SprigWorkspace? workspace)
+    {
+        var body = result.Code switch
+        {
+            SprigActionResult.Unavailable => "Sprig isn't installed, or couldn't be started.",
+            "docker-unavailable" => "Docker isn't running. Start Docker Desktop and try again.",
+            _ when result.NeedsSprig => (workspace is null ? "Sprig needs you to finish this. " : "Sprig needs you to finish this; it's open on the workspace. ") + result.Error,
+            _ => result.Error ?? "Sprig reported a problem.",
+        };
+        _notifier?.Show(title, body, ToastLevel.Warning, null, null);
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

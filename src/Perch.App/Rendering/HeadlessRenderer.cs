@@ -17,6 +17,7 @@ using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Data.Resources;
+using Perch.Data.Sprig;
 using Perch.Platform;
 
 namespace Perch.Avalonia.Rendering;
@@ -367,6 +368,24 @@ internal static class HeadlessRenderer
         hyperProbe.SetHypertree(SampleHypertree());
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1.5x.png"), 144);
+
+        // Sprig section: open (a line per non-free workspace in each state, failures first), collapsed (header
+        // only), with nothing checked out, and the header's not-installed / reconnecting states.
+        void SprigProbe(string file, SprigStatus status, SprigFeed feed, bool expanded = true, double dpi = 96)
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.SetShowSprig(true);
+            c.SetSprigExpanded(expanded);
+            c.SetSprig(status, feed);
+            RenderControl(c, Path.Combine(outDir, file), dpi);
+        }
+        SprigProbe("overlay_sprig_1x.png", SampleData.Sprig(), SprigFeed.Live);
+        SprigProbe("overlay_sprig_1.5x.png", SampleData.Sprig(), SprigFeed.Live, dpi: 144);
+        SprigProbe("overlay_sprig_collapsed_1x.png", SampleData.Sprig(), SprigFeed.Live, expanded: false);
+        SprigProbe("overlay_sprig_empty_1x.png", new SprigStatus(true, false, null, []), SprigFeed.Live);
+        SprigProbe("overlay_sprig_missing_1x.png", SprigStatus.Empty, SprigFeed.NotInstalled);
+        SprigProbe("overlay_sprig_reconnecting_1x.png", SampleData.Sprig(), SprigFeed.Reconnecting);
 
         // Daemon strip: the background daemon's headless workers as their own "daemon" section below the
         // rows, capped at five with the "show +N more" overflow line (the spare is hidden as noise). One
