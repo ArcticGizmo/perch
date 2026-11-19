@@ -7,9 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- A Sprig section on the overlay: every workspace sprig has checked out, whether it's running and how many apps are ready, with start, stop, pause and resume a right-click away
-- Sessions working in a sprig slot wear sprig's icon, coloured by how that slot is doing (blue while its apps are still coming up)
-- Opt-in toasts when a sprig app falls over, or when a workspace you started from Perch is ready
+---
+
+## [v0.6.14] - 2026-11-19
+
+- Sprig section on the overlay: your workspaces, and how many apps are up
+- Start, stop, pause and resume them a right-click away
+- Sessions in a sprig slot wear sprig's icon, coloured by how the slot is doing
+- Blue while apps are still booting (green was getting ahead of itself)
+- Opt-in toasts when a sprig app falls over, or yours is ready
 
 ---
 
