@@ -221,6 +221,45 @@ public class PrStatusServiceTests
     }
 
     [Fact]
+    public void KeepsOnlyTheNewestRunOfEachWorkflowCheck()
+    {
+        // Two runs of one workflow on the same head commit: the older failed, the newer passed. Each check
+        // shows once, from the newer run, so a stale failure can't hold the rollup red.
+        var pr = PrStatusService.ParsePrJson(
+            """
+            {"number":1,"state":"OPEN","statusCheckRollup":[
+              {"__typename":"CheckRun","workflowName":"CI","name":"build","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-11-20T09:00:00Z","detailsUrl":"old"},
+              {"__typename":"CheckRun","workflowName":"CI","name":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T09:00:00Z"},
+              {"__typename":"CheckRun","workflowName":"CI","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"new"},
+              {"__typename":"CheckRun","workflowName":"CI","name":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z"},
+              {"__typename":"CheckRun","workflowName":"Docs","name":"build","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z"}
+            ]}
+            """);
+
+        var checks = pr!.Value.Checks;
+        Assert.Equal(3, checks.Count); // CI/build, CI/tests, and Docs/build (same name, other workflow)
+        Assert.Equal(new PrCheck("build", PrCheckState.Success, "new"), checks[0]);
+        Assert.Equal("tests", checks[1].Name);
+        Assert.Equal("build", checks[2].Name);
+        Assert.Equal(PrChecksRollup.Passing, pr.Value.ChecksRollup);
+    }
+
+    [Fact]
+    public void AQueuedRerunReplacesTheCompletedRunBeforeIt()
+    {
+        // A re-run that hasn't started reports gh's zero time; it's still the newer run, whatever the order.
+        var pr = PrStatusService.ParsePrJson(
+            """
+            {"number":1,"state":"OPEN","statusCheckRollup":[
+              {"__typename":"CheckRun","workflowName":"CI","name":"build","status":"QUEUED","conclusion":"","startedAt":"0001-01-01T00:00:00Z"},
+              {"__typename":"CheckRun","workflowName":"CI","name":"build","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-11-20T09:00:00Z"}
+            ]}
+            """);
+
+        Assert.Equal(new PrCheck("build", PrCheckState.Pending), Assert.Single(pr!.Value.Checks));
+    }
+
+    [Fact]
     public void SkipsNonObjectRollupEntriesWithoutThrowing()
     {
         var pr = PrStatusService.ParsePrJson(

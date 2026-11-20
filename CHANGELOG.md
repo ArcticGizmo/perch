@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.16] - 2026-11-20
+
+- PR checks list each check once, from its newest run (not once per run)
+- A re-run that passes clears the red dot
+
+---
+
 ## [v0.6.15] - 2026-11-20
 
 - Git graph can hide main (it'll be fine)
