@@ -193,7 +193,7 @@ internal sealed class GraphRail : UserControl
             return;
         }
 
-        _before.Children.Add(Header("Worktrees", s.Worktrees.Count, _worktreesOpen, () => _worktreesOpen = !_worktreesOpen));
+        _before.Children.Add(Header("Worktrees", s.Worktrees.Count, _worktreesOpen, () => _worktreesOpen = !_worktreesOpen, first: true));
         if (_worktreesOpen)
             foreach (var w in s.Worktrees.OrderByDescending(w => w.IsCurrent))
                 _before.Children.Add(WorktreeCard(s, w));
@@ -257,7 +257,7 @@ internal sealed class GraphRail : UserControl
             _remoteRows.Children.Add(RemoteHeader(g.Key, open, filtering, shown.Count, all.Count, all.Count(s.IsHidden)));
             if (open)
                 foreach (var r in shown)
-                    _remoteRows.Children.Add(RefRow(s, r, r.Name[(g.Key.Length + 1)..], indent: 12));
+                    _remoteRows.Children.Add(RefRow(s, r, RefLabel.Display(r.Name, r.Name[(g.Key.Length + 1)..]), indent: 12));
         }
         if (filtering && !any)
             _remoteRows.Children.Add(new TextBlock
@@ -274,8 +274,12 @@ internal sealed class GraphRail : UserControl
     internal static string[] RemoteFilterTerms(string? text) =>
         (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    internal static bool MatchesFilter(string name, string[] terms) =>
-        terms.All(t => name.Contains(t, StringComparison.OrdinalIgnoreCase));
+    internal static bool MatchesFilter(string name, string[] terms)
+    {
+        // A merge-queue branch also answers to what its row says ("queue #145 → main").
+        string shown = RefLabel.Display(name, "");
+        return terms.All(t => name.Contains(t, StringComparison.OrdinalIgnoreCase) || shown.Contains(t, StringComparison.OrdinalIgnoreCase));
+    }
 
     // A remote's row: chevron and name, then how many branches (how many match while filtering). Clicking folds it,
     // except while filtering, when every group with a match is open.
@@ -290,7 +294,8 @@ internal sealed class GraphRail : UserControl
         });
         dock.Children.Add(new TextBlock
         {
-            Text = (open ? "▾ " : "▸ ") + remote, FontSize = 11.5, Foreground = Ink(_c.Muted),
+            // Heavier than the branch rows under it, so a remote's name doesn't read as one of its branches.
+            Text = (open ? "▾ " : "▸ ") + remote, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = Ink(_c.Text, 0.85),
             TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
         });
         var row = new Border
@@ -402,12 +407,16 @@ internal sealed class GraphRail : UserControl
         return row;
     }
 
-    private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, GraphRefKind? menu = null)
+    // A section's header is a tinted band in body ink with a rule above it (bar the first), so where Local ends and
+    // Remotes begins can't be mistaken for one more row, however long the lists run.
+    private Control Header(string text, int count, bool? open = null, Action? toggle = null, int hidden = 0, GraphRefKind? menu = null,
+        bool first = false)
     {
         var label = new TextBlock
         {
             Text = (open is null ? "" : open.Value ? "▾ " : "▸ ") + text.ToUpperInvariant(),
-            FontSize = 10.5, FontWeight = FontWeight.SemiBold, LetterSpacing = 1.1, Foreground = Ink(_c.Muted),
+            FontSize = 10.5, FontWeight = FontWeight.Bold, LetterSpacing = 1.1, Foreground = Ink(_c.Text),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         var n = new TextBlock
         {
@@ -430,18 +439,24 @@ internal sealed class GraphRail : UserControl
         }
         dock.Children.Add(n);
         dock.Children.Add(label);
+        var rest = Ink(_c.RowHover, 0.6);
         var row = new Border
         {
-            Padding = new Thickness(6, 4), Margin = new Thickness(0, 10, 0, 2), Background = Brushes.Transparent, CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(6, 5), Margin = new Thickness(0, 0, 0, 3), Background = rest, CornerRadius = new CornerRadius(5),
             Child = dock,
         };
         if (toggle is not null)
         {
             row.Cursor = new Cursor(StandardCursorType.Hand);
             row.PointerPressed += (_, e) => { toggle(); Rebuild(); e.Handled = true; };
-            Hover(row, -1);
+            Hover(row, -1, rest);
         }
-        return row;
+        if (first) return new Border { Margin = new Thickness(0, 6, 0, 0), Child = row };
+        return new StackPanel
+        {
+            Margin = new Thickness(0, 12, 0, 0),
+            Children = { new Border { Height = 1, Background = Ink(_c.Separator), Margin = new Thickness(2, 0, 2, 8) }, row },
+        };
     }
 
     private Control WorktreeCard(GraphSnapshot s, GraphWorktree w)

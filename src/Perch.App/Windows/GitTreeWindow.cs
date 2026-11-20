@@ -463,7 +463,9 @@ internal sealed partial class GitTreeWindow : Window
         groups.Children.Add(WithRow(stagedGroup, 2));
         _wipPanel = new DockPanel { LastChildFill = true, IsVisible = false, Children = { _composer, groups } };
 
-        _commitAreaHost = new Grid { Children = { _filesList, _filesEmpty } };
+        _commitAreaHost = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
+        _commitAreaHost.Children.Add(WithRow(BuildCommitInfo(), 0));
+        _commitAreaHost.Children.Add(WithRow(new Grid { Children = { _filesList, _filesEmpty } }, 1));
 
         OpensDiff(_filesList);
         OpensDiff(_unstagedList);
@@ -1361,6 +1363,7 @@ internal sealed partial class GitTreeWindow : Window
         _suppressSelect = false;
         _diff.SetDiff(null, "");
         _diffPlaceholder.IsVisible = true;
+        HideCommitInfo();
         _filesEmpty.Text = hint;
         _filesEmpty.IsVisible = hint.Length > 0;
     }
@@ -1404,6 +1407,8 @@ internal sealed partial class GitTreeWindow : Window
 
             string hash = node.Commit.Hash;
             bool stash = node.Kind == NodeKind.Stash;
+            ShowCommitInfoFrom(node.Commit);
+            LoadCommitInfo(cwd, hash);
             System.Threading.Tasks.Task.Run(() => stash ? _git.GetStashDiff(cwd, hash) : _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully) return;
@@ -2418,6 +2423,7 @@ internal sealed partial class GitTreeWindow : Window
         _gotoLabel.Foreground = _pal.Muted;
         ApplyCheckoutPalette();
         ApplyDragPalette();
+        ApplyCommitInfoPalette();
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;

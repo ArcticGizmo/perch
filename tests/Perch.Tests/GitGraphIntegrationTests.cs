@@ -601,6 +601,24 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal("git push", again.Command);
     }
 
+    [Fact]
+    public void CommitInfo_LoadsTheWholeMessageAndCoAuthors()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "c.txt"), "c\n");
+        Assert.Equal(0, Run("add", "c.txt").exit);
+        Assert.Equal(0, Run("commit", "-m", "Subject line", "-m", "Body paragraph.\n\nCo-authored-by: Ada <ada@example.com>").exit);
+
+        var info = CommitInfoReader.Load(_repo, Hash("HEAD"));
+        Assert.NotNull(info);
+        Assert.Equal(Hash("HEAD"), info!.Hash);
+        Assert.Equal(new GitPerson("Perch Test", "test@example.com"), info.Author);
+        Assert.Equal("Subject line\n\nBody paragraph.\n\nCo-authored-by: Ada <ada@example.com>", info.Message);
+        Assert.Equal([new GitPerson("Ada", "ada@example.com")], info.CoAuthors);
+        Assert.Equal([Hash("HEAD~1")], info.Parents);
+        Assert.Null(CommitInfoReader.Load(_repo, "--all"));
+    }
+
     // An origin whose main is one commit ahead of the local main, which tracks it and has been fetched.
     private bool SetUpOriginAhead()
     {

@@ -28,6 +28,20 @@ internal sealed partial class GitTreeWindow
     /// <summary>For the headless render: the rail's remote filter set (empty clears it).</summary>
     internal void PreviewRemoteFilter(string text) => _rail.PreviewRemoteFilter(text);
 
+    /// <summary>For the headless render: selects the newest real commit, so its details show over its files; returns
+    /// its subject.</summary>
+    internal string PreviewSelectCommit()
+    {
+        if (_snap is not { } s) return "(no snapshot)";
+        for (int r = 0; r < s.Commits.Count; r++)
+            if (!s.Commits[r].IsPseudo)
+            {
+                _graph.Canvas.Select(r);
+                return s.Commits[r].Subject;
+            }
+        return "(no commit)";
+    }
+
     /// <summary>For the headless render: a row's pills stacked open; returns what the stack holds.</summary>
     internal string PreviewOpenStack() => _graph.Canvas.PreviewOpenStack();
 

@@ -657,8 +657,9 @@ internal sealed class GraphCanvas : Control
         double trail = !local || rf.Upstream is null ? 0 : track is not null ? track.Width + 9 : 11;
         double cap = maxW - 14 - lead - trail;
         if (cap < 28) return null;
-        var name = OverlayDraw.ElideMiddle(rf.Name, PillSize, cap, FontWeight.SemiBold);
-        cut = name != rf.Name;
+        string full = RefLabel.Display(rf.Name, rf.Name);
+        var name = OverlayDraw.ElideMiddle(full, PillSize, cap, FontWeight.SemiBold);
+        cut = name != full;
         var ft = OverlayDraw.Text(name, PillSize, ink, FontWeight.SemiBold);
         double w = ft.Width + 14 + lead + trail, h = ft.Height + 4;
         var rect = new Rect(x, y - h / 2, w, h);
@@ -807,6 +808,8 @@ internal sealed class GraphCanvas : Control
         string where = s?.Worktrees.FirstOrDefault(w => w.Branch == r.Name) is { } wt ? $"\nChecked out in {wt.Name}" : "";
         return r.Kind switch
         {
+            GraphRefKind.RemoteBranch when RefLabel.MergeQueue(r.Name) is { } q =>
+                $"{r.Name}\nGitHub merge queue: PR #{q.Pr} being tested to merge into {q.Base}",
             GraphRefKind.RemoteBranch => $"{r.Name}\nRemote branch",
             GraphRefKind.Tag => $"{r.Name}\nTag",
             GraphRefKind.Stash => s?.Stashes.FirstOrDefault(x => x.Selector == r.Name) is { } st

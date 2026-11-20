@@ -1070,6 +1070,9 @@ internal static class HeadlessRenderer
             // Every row's first pill at the column's left edge with "+N" beside it, then one row's refs stacked open
             // in full over the other columns, as a hover does.
             Frame11("git_tree_pills_left_1x.png");
+            // The newest commit selected: author, times, co-authors and the whole message above its files.
+            Console.WriteLine($"git graph commit details: {tw.PreviewSelectCommit()}");
+            Frame11("git_tree_commit_details_1x.png");
             Console.WriteLine($"git graph pill stack: {tw.PreviewOpenStack()}");
             Frame11("git_tree_pills_stack_1x.png");
             Console.WriteLine("git graph Tags ⋯ menu:\n  " + tw.PreviewVisibilityMenu(Perch.Data.GitGraph.GraphRefKind.Tag).Replace("\n", "\n  "));
@@ -4261,6 +4264,8 @@ internal static class HeadlessRenderer
             // Three on one commit, one of them long: the row folds to its first pill and "+2", and stacks open on hover.
             R("NO-TICKET-feeds-opml-import-per-feed-images", Perch.Data.GitGraph.GraphRefKind.LocalBranch, "4c19a07"),
             R("origin/feeds-spike", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "4c19a07"),
+            // A GitHub merge-queue branch: shown as "queue #145 → main" rather than its machine-made name.
+            R("origin/gh-readonly-queue/main/pr-145-7e82118f122a946187618176cb52402fc023f909", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "b7d2e90"),
             R("origin/main", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "9083893"),
             R("origin/roost-tabs", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "31ac6f8"),
             R("origin/github-dashboard", Perch.Data.GitGraph.GraphRefKind.RemoteBranch, "3c51d94"),

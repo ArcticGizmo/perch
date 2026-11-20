@@ -603,6 +603,95 @@ public class GitGraphTests
     public void Push_RejectionReasonIsRead(string stderr, PushRejection expected) =>
         Assert.Equal(expected, GitOps.PushRejectionOf(stderr));
 
+    [Theory]
+    [InlineData("origin/gh-readonly-queue/main/pr-145-7e82118f122a946187618176cb52402fc023f909", 145, "main")]
+    [InlineData("gh-readonly-queue/release/2.x/pr-9-abc123", 9, "release/2.x")]
+    public void RefLabel_ReadsAMergeQueueBranch(string name, int pr, string baseBranch)
+    {
+        Assert.Equal((pr, baseBranch), RefLabel.MergeQueue(name));
+        Assert.Equal($"queue #{pr} → {baseBranch}", RefLabel.Display(name, "x"));
+    }
+
+    [Theory]
+    [InlineData("origin/main")]
+    [InlineData("origin/gh-readonly-queue-notes")]
+    [InlineData("origin/gh-readonly-queue/main/pr-x-abc")]
+    public void RefLabel_LeavesOtherNamesAlone(string name)
+    {
+        Assert.Null(RefLabel.MergeQueue(name));
+        Assert.Equal("as-is", RefLabel.Display(name, "as-is"));
+    }
+
+    [Fact]
+    public void CommitInfo_ParsesFieldsMessageAndCoAuthors()
+    {
+        const string us = "\x1f";
+        string message = "Fix the thing\n\nLonger body\x1fwith a stray separator.\n\nCo-authored-by: Ada Lovelace <ada@example.com>\n"
+                         + "co-authored-by:  Bob  <bob@example.com> \nCo-authored-by: Ada again <ADA@example.com>\n";
+        string output = string.Join(us, "abc123", "Jon", "jon@example.com", "1700000000", "Rebaser", "r@example.com", "1700000600",
+            "p1 p2", message) + "\n";
+
+        var info = CommitInfoReader.Parse(output)!;
+        Assert.Equal("abc123", info.Hash);
+        Assert.Equal(new GitPerson("Jon", "jon@example.com"), info.Author);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1700000000), info.Authored);
+        Assert.Equal(new GitPerson("Rebaser", "r@example.com"), info.Committer);
+        Assert.Equal(["p1", "p2"], info.Parents);
+        Assert.StartsWith("Fix the thing\n\nLonger body\x1fwith", info.Message);
+        Assert.EndsWith("<ADA@example.com>", info.Message);
+        Assert.Equal([new GitPerson("Ada Lovelace", "ada@example.com"), new GitPerson("Bob", "bob@example.com")], info.CoAuthors);
+        Assert.True(info.CommittedSeparately);
+        Assert.Null(CommitInfoReader.Parse(""));
+    }
+
+    [Fact]
+    public void CommitInfo_ReflowJoinsWrappedProseAndKeepsStructure()
+    {
+        string message = string.Join('\n',
+            "Subject",
+            "",
+            "Every row's first pill now starts at the column's",
+            "left edge, so names read straight down.",
+            "- a list item that wraps",
+            "onto a second line",
+            "- another item",
+            "1. numbered",
+            "    indented code",
+            "```",
+            "fenced line one",
+            "fenced line two",
+            "```",
+            "",
+            "Co-authored-by: Ada <ada@example.com>",
+            "Signed-off-by: Bob <bob@example.com>");
+        string expected = string.Join('\n',
+            "Subject",
+            "",
+            "Every row's first pill now starts at the column's left edge, so names read straight down.",
+            "- a list item that wraps onto a second line",
+            "- another item",
+            "1. numbered",
+            "    indented code",
+            "```",
+            "fenced line one",
+            "fenced line two",
+            "```",
+            "",
+            "Co-authored-by: Ada <ada@example.com>",
+            "Signed-off-by: Bob <bob@example.com>");
+        Assert.Equal(expected, CommitInfoReader.Reflow(message));
+        Assert.Equal("", CommitInfoReader.Reflow(""));
+    }
+
+    [Fact]
+    public void CommitInfo_SamePersonAtTheSameTimeIsNotCommittedSeparately()
+    {
+        var at = DateTimeOffset.FromUnixTimeSeconds(1700000000);
+        var me = new GitPerson("Jon", "jon@example.com");
+        Assert.False(new CommitInfo("h", me, at, me with { Email = "JON@example.com" }, at.AddSeconds(5), [], "m", []).CommittedSeparately);
+        Assert.True(new CommitInfo("h", me, at, me, at.AddHours(2), [], "m", []).CommittedSeparately);
+    }
+
     [Fact]
     public void PrimaryTip_AHiddenTrunkOutsideTheWalkDoesNotHoldLaneZero()
     {
