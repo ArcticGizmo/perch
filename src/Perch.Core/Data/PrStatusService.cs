@@ -340,7 +340,9 @@ internal sealed class PrStatusService : IDisposable
     /// array mixes two shapes: modern <c>CheckRun</c> objects (<c>name</c> + <c>status</c> + <c>conclusion</c>)
     /// and legacy <c>StatusContext</c> commit statuses (<c>context</c> + <c>state</c>); each is folded onto a
     /// <see cref="PrCheckState"/>. A missing/non-array field yields an empty list (a PR with no checks).
-    /// Internal for unit testing.
+    /// The rollup carries the check runs of <em>every</em> workflow run on the head commit, so a workflow that
+    /// ran twice on one SHA lists each job twice; like <c>gh pr checks</c>, only the newest run of each
+    /// (workflow, name) is kept, in the position its first appearance held. Internal for unit testing.
     /// </summary>
     internal static IReadOnlyList<PrCheck> ParseChecks(JsonElement root)
     {
@@ -348,11 +350,16 @@ internal sealed class PrStatusService : IDisposable
             return Array.Empty<PrCheck>();
 
         var checks = new List<PrCheck>();
+        var newest = new List<DateTime>();
+        var slotByKey = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var el in arr.EnumerateArray())
         {
             if (el.ValueKind != JsonValueKind.Object)
                 continue;
 
+            PrCheck check;
+            string key;
+            DateTime started;
             string typename = el.TryGetProperty("__typename", out var tn) ? tn.GetString() ?? "" : "";
             if (string.Equals(typename, "StatusContext", StringComparison.Ordinal))
             {
@@ -360,7 +367,9 @@ internal sealed class PrStatusService : IDisposable
                 string name  = el.TryGetProperty("context", out var c) ? c.GetString() ?? "" : "";
                 string cstate = el.TryGetProperty("state", out var st) ? st.GetString() ?? "" : "";
                 string url    = el.TryGetProperty("targetUrl", out var tu) ? tu.GetString() ?? "" : "";
-                checks.Add(new PrCheck(name, MapStatusContextState(cstate), url));
+                check = new PrCheck(name, MapStatusContextState(cstate), url);
+                key = "status\u0001" + name;
+                started = ReadTime(el, "startedAt");
             }
             else
             {
@@ -370,10 +379,39 @@ internal sealed class PrStatusService : IDisposable
                 string rstatus    = el.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
                 string conclusion = el.TryGetProperty("conclusion", out var cc) ? cc.GetString() ?? "" : "";
                 string url        = el.TryGetProperty("detailsUrl", out var du) ? du.GetString() ?? "" : "";
-                checks.Add(new PrCheck(name, MapCheckRunState(rstatus, conclusion), url));
+                string workflow   = el.TryGetProperty("workflowName", out var wf) ? wf.GetString() ?? "" : "";
+                check = new PrCheck(name, MapCheckRunState(rstatus, conclusion), url);
+                key = "run\u0001" + workflow + "\u0001" + name;
+                started = ReadTime(el, "startedAt");
             }
+
+            if (slotByKey.TryGetValue(key, out var slot))
+            {
+                // Ties go to the later entry, since gh lists runs oldest first.
+                if (started >= newest[slot])
+                {
+                    checks[slot] = check;
+                    newest[slot] = started;
+                }
+                continue;
+            }
+            slotByKey[key] = checks.Count;
+            checks.Add(check);
+            newest.Add(started);
         }
         return checks;
+    }
+
+    // A run that hasn't started (gh reports its zero time, 0001-01-01) can only be a re-run queued after any
+    // run that has, so it ranks newest. A field that's absent altogether ranks oldest, leaving order to decide.
+    private static DateTime ReadTime(JsonElement el, string property)
+    {
+        if (!el.TryGetProperty(property, out var v) || v.ValueKind != JsonValueKind.String)
+            return DateTime.MinValue;
+        if (!DateTime.TryParse(v.GetString(), CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+            return DateTime.MinValue;
+        return dt.Year <= 1 ? DateTime.MaxValue : dt;
     }
 
     /// <summary>
