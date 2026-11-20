@@ -48,11 +48,30 @@ internal sealed partial class GitTreeWindow
         _treeViewBtn.Click += (_, _) => SetFilesAsTree(true);
         var seg = Segment(_listViewBtn, _treeViewBtn);
         seg.CornerRadius = new CornerRadius(6);
-        seg.Margin = new Thickness(0, 6, 2, 2);
         seg.SetValue(DockPanel.DockProperty, Dock.Right);
         UpdateViewButtons();
         return seg;
     }
+
+    private TextBlock _filesCount = null!;
+
+    // The strip just above the file rows: how many files a commit changed, and the List | Tree toggle that lays them
+    // out. It sits under the commit's details rather than in the pane's heading, beside what it changes.
+    private Control BuildFilesBar()
+    {
+        _filesCount = new TextBlock { FontSize = 11, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        return new DockPanel
+        {
+            LastChildFill = true, Margin = new Thickness(12, 6, 8, 4), [DockPanel.DockProperty] = Dock.Top,
+            Children = { BuildViewToggle(), _filesCount },
+        };
+    }
+
+    // A commit's "N files changed", the working tree's "N uncommitted changes", or blank with nothing shown.
+    private void SetFilesCount(int? files, bool uncommitted = false) =>
+        _filesCount.Text = files is not { } n ? ""
+            : uncommitted ? $"{n} uncommitted change{(n == 1 ? "" : "s")}"
+            : $"{n} file{(n == 1 ? "" : "s")} changed";
 
     // A tree spends a row per folder, so its rows drop most of the list item's roomy padding.
     private void TightenTreeRows(ListBox list) => list.ContainerPrepared += (_, e) =>

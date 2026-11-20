@@ -8,6 +8,22 @@ public sealed record GitOpResult(bool Ok, string Message, string Command)
 {
     /// <summary>The operation stopped on conflicts (a merge, rebase or cherry-pick now in progress).</summary>
     public bool Conflicted { get; init; }
+
+    /// <summary>A push the remote turned down because the branch there isn't behind this one.</summary>
+    public PushRejection Rejected { get; init; }
+}
+
+/// <summary>Why a push was turned down, which decides whether offering to force it makes sense.</summary>
+public enum PushRejection
+{
+    None,
+
+    /// <summary>The remote branch has commits this one has replaced (a rebase or amend): only a force push lands it.</summary>
+    Diverged,
+
+    /// <summary>The remote branch has commits not fetched yet: pull them first, since forcing would discard work
+    /// nobody here has seen.</summary>
+    FetchFirst,
 }
 
 /// <summary>Which multi-step operation a worktree is in the middle of.</summary>
@@ -59,7 +75,8 @@ public sealed record CheckoutUndo(GitHeadState Before, string? Stash, bool Carri
 /// things the user asked for, so they run with <see cref="GitRunner.Trust.UserAction"/>: the repo's hooks and
 /// filters behave as in a terminal. Writes to one repo are serialised through a per-repo gate, a held
 /// <c>index.lock</c> (a session's own git, usually) gets one retry and then a readable message, and nothing here
-/// ever forces a push or discards work. Blocking: call off the UI thread. Never throws.
+/// discards work. A push is forced only by <see cref="ForcePush"/>, which the user confirms, and then with a lease.
+/// Blocking: call off the UI thread. Never throws.
 /// </summary>
 internal static class GitOps
 {
@@ -182,6 +199,23 @@ internal static class GitOps
         return Refuse(branch) ?? RunNetwork(worktree, "push", "-u", remote, branch);
     }
 
+    /// <summary>
+    /// Force pushes this worktree's branch to its upstream, only ever after the user has said yes to replacing it. The
+    /// lease (<c>--force-with-lease</c>) refuses if the remote branch has moved since it was last fetched, and
+    /// <c>--force-if-includes</c> refuses if that fetch happened in the background without its commits ever reaching
+    /// this branch, so it can't throw away work nobody here has seen.
+    /// </summary>
+    public static GitOpResult ForcePush(string worktree)
+    {
+        if (Head(worktree) is not { Branch: { } branch })
+            return new GitOpResult(false, "HEAD is detached, so there's no branch to push.", "git push --force-with-lease");
+        var upstream = GitRunner.Run(worktree, 6000, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}");
+        if (upstream.Exit == 0) return RunNetwork(worktree, "push", "--force-with-lease", "--force-if-includes");
+        if (PushRemote(worktree) is not { } remote)
+            return new GitOpResult(false, "This repo has no remote to push to.", "git push --force-with-lease");
+        return Refuse(branch) ?? RunNetwork(worktree, "push", "--force-with-lease", "--force-if-includes", "-u", remote, branch);
+    }
+
     // Where a branch with no upstream is published: origin when there is one, else the only remote.
     private static string? PushRemote(string worktree)
     {
@@ -215,6 +249,51 @@ internal static class GitOps
     public static GitOpResult Merge(string worktree, string rev) => Refuse(rev) ?? Run(worktree, "merge", "--no-edit", rev);
 
     public static GitOpResult FastForward(string worktree, string rev) => Refuse(rev) ?? Run(worktree, "merge", "--ff-only", rev);
+
+    /// <summary>
+    /// Moves <paramref name="branch"/> up to <paramref name="rev"/> in <paramref name="worktree"/> (<c>merge --ff-only</c>,
+    /// so a branch that has diverged since is refused, never merged), switching to it first when
+    /// <paramref name="switchFirst"/>. Uncommitted changes there are stashed first with <paramref name="stash"/> and left
+    /// in the stash list for the user to collect; a failure puts everything back as it was, the stash included. The undo
+    /// resets the branch to where it was, switches back if it switched, and pops the stash.
+    /// </summary>
+    public static (GitOpResult Result, Func<GitOpResult>? Undo, string? Stash) FastForwardBranch(string worktree, string branch,
+        string rev, bool switchFirst, bool stash)
+    {
+        if (Refuse(branch, rev) is { } bad) return (bad, null, null);
+        if (Head(worktree) is not { } before)
+            return (new GitOpResult(false, "Couldn't read this worktree's HEAD.", "git rev-parse HEAD"), null, null);
+        var tip = GitRunner.Run(worktree, 6000, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch);
+        if (tip.Exit != 0) return (new GitOpResult(false, $"{branch} is no longer there.", $"git rev-parse {branch}"), null, null);
+        string oldTip = tip.Stdout.Trim();
+
+        string? stashed = null;
+        if (stash)
+        {
+            var pushed = StashPush(worktree, $"Perch: before fast-forwarding {branch} to {rev}");
+            if (!pushed.Ok) return (pushed, null, null);
+            stashed = StashTop(worktree);
+        }
+
+        var r = switchFirst ? Switch(worktree, branch) : new GitOpResult(true, "", "");
+        if (r.Ok) r = FastForward(worktree, rev);
+        if (!r.Ok)
+        {
+            if (switchFirst && Head(worktree)?.Branch == branch) Restore(worktree, before);
+            if (stashed is not null) StashPop(worktree, stashed);
+            return (r, null, null);
+        }
+
+        return (r, () =>
+        {
+            if (Head(worktree)?.Branch != branch)
+                return new GitOpResult(false, $"{branch} isn't checked out in {Path.GetFileName(worktree)} any more, so this can't be undone.", "");
+            var back = Run(worktree, "reset", "--keep", oldTip);
+            if (back.Ok && switchFirst) back = Restore(worktree, before);
+            if (back.Ok && stashed is not null) back = StashPop(worktree, stashed);
+            return back;
+        }, stashed);
+    }
 
     public static GitOpResult Rebase(string worktree, string onto) => Refuse(onto) ?? Run(worktree, "rebase", onto);
 
@@ -524,7 +603,10 @@ internal static class GitOps
                 var message = IsLockHeld(r.Stderr)
                     ? $"Another git process is using {Path.GetFileName(worktree)} (index.lock is held). Try again in a moment."
                     : FirstLine(r.Stderr, r.Exit == -1 ? "git didn't finish in time." : "git failed.");
-                return new GitOpResult(false, message, command) { Conflicted = IsConflict(r.Stdout + r.Stderr) };
+                return new GitOpResult(false, message, command)
+                {
+                    Conflicted = IsConflict(r.Stdout + r.Stderr), Rejected = args.Length > 0 && args[0] == "push" ? PushRejectionOf(r.Stderr) : PushRejection.None,
+                };
             }
             finally
             {
@@ -538,6 +620,19 @@ internal static class GitOps
     }
 
     internal static bool IsLockHeld(string stderr) => stderr.Contains("index.lock", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Reads git's <c>! [rejected] … (reason)</c> line. "non-fast-forward" means the remote's commits are known here and
+    /// this branch has moved past them another way; "fetch first" means the remote has commits not fetched yet; a lease
+    /// that turned out stale ("stale info") is the same situation found by a force push.
+    /// </summary>
+    internal static PushRejection PushRejectionOf(string stderr)
+    {
+        if (!stderr.Contains("[rejected]", StringComparison.Ordinal)) return PushRejection.None;
+        if (stderr.Contains("(fetch first)", StringComparison.Ordinal) || stderr.Contains("(stale info)", StringComparison.Ordinal))
+            return PushRejection.FetchFirst;
+        return stderr.Contains("(non-fast-forward)", StringComparison.Ordinal) ? PushRejection.Diverged : PushRejection.None;
+    }
 
     internal static bool IsConflict(string output) =>
         output.Contains("CONFLICT", StringComparison.Ordinal) || output.Contains("could not apply", StringComparison.Ordinal)

@@ -35,9 +35,36 @@ public sealed record CheckoutPlan(CheckoutAction Action, string Target, string C
     public bool MovesHead => Action is CheckoutAction.Switch or CheckoutAction.Track or CheckoutAction.Detach;
 }
 
+/// <summary>
+/// A double-click on a remote branch whose local branch tracks it and is only behind: move <see cref="Branch"/> up to
+/// <see cref="Remote"/> (<see cref="Behind"/> commits) in <see cref="In"/>, the worktree that has it checked out, or
+/// in the window's own worktree (switching to it first) when none does.
+/// </summary>
+public sealed record FastForwardPlan(string Branch, string Remote, string RemoteCommit, int Behind, GraphWorktree? In, bool SwitchFirst);
+
 /// <summary>Decides what a double-click means. Pure: reads only the snapshot, so it's unit-tested.</summary>
 internal static class GraphCheckout
 {
+    /// <summary>
+    /// The fast-forward a double-click on <paramref name="remote"/> means, or null when it means a plain checkout: there
+    /// has to be a local branch tracking it with nothing of its own (<c>Ahead</c> 0) and something to take
+    /// (<c>Behind</c> &gt; 0). Held by another worktree, it's that worktree that moves; held by none, the window's own
+    /// worktree switches to it and then moves.
+    /// </summary>
+    public static FastForwardPlan? FastForwardFor(GraphSnapshot snap, GraphRef remote)
+    {
+        if (remote.Kind != GraphRefKind.RemoteBranch) return null;
+        // Usually one; when several track it, the one checked out here, then the one named like it.
+        var tracking = snap.Refs.Where(x => x.Kind == GraphRefKind.LocalBranch && x.Upstream == remote.Name && !x.UpstreamGone).ToList();
+        var local = tracking.FirstOrDefault(x => x.Name == snap.Current?.Branch)
+                    ?? tracking.FirstOrDefault(x => x.Name == LocalName(remote.Name))
+                    ?? tracking.FirstOrDefault();
+        if (local is not { Ahead: 0, Behind: > 0 }) return null;
+        var holder = snap.Worktrees.FirstOrDefault(w => w.Branch == local.Name);
+        if (holder is null && snap.Current is null) return null;
+        return new FastForwardPlan(local.Name, remote.Name, remote.Target, local.Behind, holder ?? snap.Current, SwitchFirst: holder is null);
+    }
+
     /// <summary>A double-click on a ref pill or a rail row, checking out in <paramref name="here"/> (the window's own
     /// worktree when null; a drag onto a worktree card names another).</summary>
     public static CheckoutPlan ForRef(GraphSnapshot snap, GraphRef r, GraphWorktree? here = null)

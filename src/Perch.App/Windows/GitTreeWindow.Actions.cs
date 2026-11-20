@@ -249,7 +249,47 @@ internal sealed partial class GitTreeWindow
     }
 
     private void Push() =>
-        RunHereAction("Pushing…", cover: false, cwd => (GitOps.Push(cwd), null), _ => "Pushed", conflict: null, from: _pushBtn);
+        RunHereAction("Pushing…", cover: false, cwd => (GitOps.Push(cwd), null), _ => "Pushed", conflict: null, from: _pushBtn,
+            failed: OnPushRejected);
+
+    // A push turned down because the remote branch isn't behind this one. Replaced history (a rebase or amend) is what a
+    // force push is for, so it asks; commits not fetched yet are someone else's work, so it says pull first instead.
+    private bool OnPushRejected(GitOpResult r)
+    {
+        string branch = _snap?.Current?.Branch ?? "this branch";
+        string upstream = _lastStatus?.Upstream ?? "the remote";
+        switch (r.Rejected)
+        {
+            case PushRejection.Diverged:
+                AskForcePush(branch, upstream);
+                return true;
+            case PushRejection.FetchFirst:
+                ShowToast($"{upstream} has commits you haven't pulled yet, so the push was turned down. Pull them first, then push.",
+                    r.Command, null, error: true, extra: ("Pull", () => Pull(_settings.GitTreePullMode == PullMode.FetchAll ? PullMode.FastForwardOnly : _settings.GitTreePullMode)));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private async void AskForcePush(string branch, string upstream)
+    {
+        HideToast();
+        bool go = await ConfirmAsync("Force push?",
+            $"{upstream} has commits that {branch} no longer has: its history was rewritten here (a rebase, amend or reset). " +
+            $"A force push replaces {upstream} with {branch}. It's done with a lease, so it still refuses if anyone has pushed " +
+            "to it since you last fetched.",
+            "Force push", "Cancel");
+        if (!go || !IsVisible) return;
+        RunHereAction("Force pushing…", cover: false, cwd => (GitOps.ForcePush(cwd), null), _ => $"Force pushed {branch} to {upstream}",
+            conflict: null, from: _pushBtn, failed: f =>
+            {
+                if (f.Rejected != PushRejection.FetchFirst) return false;
+                ShowToast($"{upstream} moved since you last fetched, so the force push was refused. Fetch and look before forcing again.",
+                    f.Command, null, error: true, extra: ("Fetch", () => Pull(PullMode.FetchAll)));
+                return true;
+            });
+    }
 
     // This worktree's changes by default; another worktree's when stashed from its WIP row.
     private void Stash(GraphWorktree? where = null)
@@ -327,8 +367,10 @@ internal sealed partial class GitTreeWindow
 
     // Runs one action off the UI thread, in this window's worktree unless <paramref name="worktree"/> names another, and
     // reports it in the toast. A pull that stops on conflicts leaves the in-progress banner to the refresh.
+    // <paramref name="failed"/> gets first say on a failure (true = it dealt with it), for a follow-up question.
     private void RunHereAction(string busy, bool cover, Func<string, (GitOpResult Result, Func<GitOpResult>? Undo)> op,
-        Func<GitOpResult, string> done, string? conflict, string? worktree = null, Button? from = null)
+        Func<GitOpResult, string> done, string? conflict, string? worktree = null, Button? from = null,
+        Func<GitOpResult, bool>? failed = null)
     {
         if (_cwd is not { } origin) return;
         string cwd = worktree ?? origin;
@@ -346,10 +388,8 @@ internal sealed partial class GitTreeWindow
                 var (r, undo) = t.Result;
                 if (r.Ok)
                     ShowToast(done(r), r.Command, undo is null ? null : () => RunDropUndo(undo));
-                else if (r.Conflicted && conflict is not null)
-                    ShowToast(conflict, r.Command, null, error: true);
-                else
-                    ShowToast(r.Message, r.Command, null, error: true);
+                else if (failed?.Invoke(r) != true)
+                    ShowToast(r.Conflicted && conflict is not null ? conflict : r.Message, r.Command, null, error: true);
                 if (string.Equals(origin, _cwd, StringComparison.Ordinal)) RefreshStatus(preserveSelection: true); else ClearGraphBusy();
             });
         });

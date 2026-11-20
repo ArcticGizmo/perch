@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.15] - 2026-11-20
+
+- Git graph can hide main (it'll be fine)
+- Remotes fold per remote and have a filter box
+- Double-click a remote branch to fast-forward your local onto it
+- Changes in the way get stashed and left for you to collect
+- Rejected pushes offer a force push, with a lease
+- Branch pills line up on the left, extras fold into "+N"
+- Hover a row's pills to see every branch in full
+- Merge-queue branches read as "queue #145 → main" (not a hash and a prayer)
+- Sidebar sections are visibly separate
+- Local, Tags and Stashes start folded
+- Commit details above the files: author, co-authors, time, whole message
+- List | Tree toggle sits right above the files it arranges
+
+---
+
 ## [v0.6.14] - 2026-11-19
 
 - Sprig section on the overlay: your workspaces, and how many apps are up

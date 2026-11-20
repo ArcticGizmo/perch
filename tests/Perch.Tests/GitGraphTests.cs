@@ -552,6 +552,154 @@ public class GitGraphTests
         Assert.Equal(CheckoutAction.AlreadyHere, GraphCheckout.ForRef(s, RefNamed(s, "origin/main")).Action);
     }
 
+    // main is m1, behind origin/main at m2; feat is f1, which origin/feat is level with.
+    private static GraphSnapshot BehindSnap(GraphRef main, params GraphWorktree[] wts) =>
+        GraphSnapshot.Build("C:/r", GraphScope.All, GraphLogQuery.Everything, [C("m2", "m1"), C("f1", "m1"), C("m1")],
+        [
+            main,
+            new("feat", "refs/heads/feat", GraphRefKind.LocalBranch, "f1") { Upstream = "origin/feat" },
+            new("origin/main", "refs/remotes/origin/main", GraphRefKind.RemoteBranch, "m2"),
+            new("origin/feat", "refs/remotes/origin/feat", GraphRefKind.RemoteBranch, "f1"),
+        ], wts, "main", 100);
+
+    private static readonly GraphRef MainBehind = new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m1") { Upstream = "origin/main", Behind = 1 };
+
+    [Fact]
+    public void FastForward_ARemoteItsTrackingBranchIsOnlyBehind()
+    {
+        var here = new GraphWorktree("C:/r", "main", "m1", 3, true);
+        var s = BehindSnap(MainBehind, here);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, here, SwitchFirst: false),
+            GraphCheckout.FastForwardFor(s, RefNamed(s, "origin/main")));
+
+        // Level, ahead (diverged), gone, or not tracked: a plain checkout.
+        Assert.Null(GraphCheckout.FastForwardFor(s, RefNamed(s, "origin/feat")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { Ahead = 2 }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { UpstreamGone = true }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(BehindSnap(MainBehind with { Upstream = null }, here), RefNamed(s, "origin/main")));
+        Assert.Null(GraphCheckout.FastForwardFor(s, RefNamed(s, "main")));
+    }
+
+    [Fact]
+    public void FastForward_MovesTheWorktreeHoldingIt_OrSwitchesHereFirst()
+    {
+        var here = new GraphWorktree("C:/r", "feat", "f1", 0, true);
+        var other = new GraphWorktree("C:/r--main", "main", "m1", 0, false);
+        var held = BehindSnap(MainBehind, here, other);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, other, SwitchFirst: false),
+            GraphCheckout.FastForwardFor(held, RefNamed(held, "origin/main")));
+
+        var free = BehindSnap(MainBehind, here);
+        Assert.Equal(new FastForwardPlan("main", "origin/main", "m2", 1, here, SwitchFirst: true),
+            GraphCheckout.FastForwardFor(free, RefNamed(free, "origin/main")));
+    }
+
+    [Theory]
+    [InlineData("To x\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs", PushRejection.Diverged)]
+    [InlineData("To x\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs", PushRejection.FetchFirst)]
+    [InlineData("To x\n ! [rejected]        main -> main (stale info)\nerror: failed to push some refs", PushRejection.FetchFirst)]
+    [InlineData("fatal: Authentication failed", PushRejection.None)]
+    [InlineData(" ! [remote rejected] main -> main (pre-receive hook declined)", PushRejection.None)]
+    public void Push_RejectionReasonIsRead(string stderr, PushRejection expected) =>
+        Assert.Equal(expected, GitOps.PushRejectionOf(stderr));
+
+    [Theory]
+    [InlineData("origin/gh-readonly-queue/main/pr-145-7e82118f122a946187618176cb52402fc023f909", 145, "main")]
+    [InlineData("gh-readonly-queue/release/2.x/pr-9-abc123", 9, "release/2.x")]
+    public void RefLabel_ReadsAMergeQueueBranch(string name, int pr, string baseBranch)
+    {
+        Assert.Equal((pr, baseBranch), RefLabel.MergeQueue(name));
+        Assert.Equal($"queue #{pr} → {baseBranch}", RefLabel.Display(name, "x"));
+    }
+
+    [Theory]
+    [InlineData("origin/main")]
+    [InlineData("origin/gh-readonly-queue-notes")]
+    [InlineData("origin/gh-readonly-queue/main/pr-x-abc")]
+    public void RefLabel_LeavesOtherNamesAlone(string name)
+    {
+        Assert.Null(RefLabel.MergeQueue(name));
+        Assert.Equal("as-is", RefLabel.Display(name, "as-is"));
+    }
+
+    [Fact]
+    public void CommitInfo_ParsesFieldsMessageAndCoAuthors()
+    {
+        const string us = "\x1f";
+        string message = "Fix the thing\n\nLonger body\x1fwith a stray separator.\n\nCo-authored-by: Ada Lovelace <ada@example.com>\n"
+                         + "co-authored-by:  Bob  <bob@example.com> \nCo-authored-by: Ada again <ADA@example.com>\n";
+        string output = string.Join(us, "abc123", "Jon", "jon@example.com", "1700000000", "Rebaser", "r@example.com", "1700000600",
+            "p1 p2", message) + "\n";
+
+        var info = CommitInfoReader.Parse(output)!;
+        Assert.Equal("abc123", info.Hash);
+        Assert.Equal(new GitPerson("Jon", "jon@example.com"), info.Author);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1700000000), info.Authored);
+        Assert.Equal(new GitPerson("Rebaser", "r@example.com"), info.Committer);
+        Assert.Equal(["p1", "p2"], info.Parents);
+        Assert.StartsWith("Fix the thing\n\nLonger body\x1fwith", info.Message);
+        Assert.EndsWith("<ADA@example.com>", info.Message);
+        Assert.Equal([new GitPerson("Ada Lovelace", "ada@example.com"), new GitPerson("Bob", "bob@example.com")], info.CoAuthors);
+        Assert.True(info.CommittedSeparately);
+        Assert.Null(CommitInfoReader.Parse(""));
+    }
+
+    [Fact]
+    public void CommitInfo_ReflowJoinsWrappedProseAndKeepsStructure()
+    {
+        string message = string.Join('\n',
+            "Subject",
+            "",
+            "Every row's first pill now starts at the column's",
+            "left edge, so names read straight down.",
+            "- a list item that wraps",
+            "onto a second line",
+            "- another item",
+            "1. numbered",
+            "    indented code",
+            "```",
+            "fenced line one",
+            "fenced line two",
+            "```",
+            "",
+            "Co-authored-by: Ada <ada@example.com>",
+            "Signed-off-by: Bob <bob@example.com>");
+        string expected = string.Join('\n',
+            "Subject",
+            "",
+            "Every row's first pill now starts at the column's left edge, so names read straight down.",
+            "- a list item that wraps onto a second line",
+            "- another item",
+            "1. numbered",
+            "    indented code",
+            "```",
+            "fenced line one",
+            "fenced line two",
+            "```",
+            "",
+            "Co-authored-by: Ada <ada@example.com>",
+            "Signed-off-by: Bob <bob@example.com>");
+        Assert.Equal(expected, CommitInfoReader.Reflow(message));
+        Assert.Equal("", CommitInfoReader.Reflow(""));
+    }
+
+    [Fact]
+    public void CommitInfo_SamePersonAtTheSameTimeIsNotCommittedSeparately()
+    {
+        var at = DateTimeOffset.FromUnixTimeSeconds(1700000000);
+        var me = new GitPerson("Jon", "jon@example.com");
+        Assert.False(new CommitInfo("h", me, at, me with { Email = "JON@example.com" }, at.AddSeconds(5), [], "m", []).CommittedSeparately);
+        Assert.True(new CommitInfo("h", me, at, me, at.AddHours(2), [], "m", []).CommittedSeparately);
+    }
+
+    [Fact]
+    public void PrimaryTip_AHiddenTrunkOutsideTheWalkDoesNotHoldLaneZero()
+    {
+        GraphRef[] refs = [new("main", "refs/heads/main", GraphRefKind.LocalBranch, "m2")];
+        Assert.Equal("m2", GraphSnapshot.PrimaryTip([], refs, "main", _ => true));
+        Assert.Null(GraphSnapshot.PrimaryTip([], refs, "main", _ => false));
+    }
+
     [Fact]
     public void Checkout_TagsAndBareCommitsDetach()
     {

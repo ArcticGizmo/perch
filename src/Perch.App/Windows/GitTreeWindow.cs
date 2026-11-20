@@ -314,7 +314,7 @@ internal sealed partial class GitTreeWindow : Window
         };
         _graph.Canvas.SelectionChanged += OnGraphSelected;
         _graph.Canvas.RowActivated += OnGraphActivated;
-        _graph.Canvas.RefActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _graph.Canvas); };
+        _graph.Canvas.RefActivated += r => ActivateRef(r, _graph.Canvas);
         _graph.Canvas.LoadMoreRequested += LoadMore;
         _graph.Canvas.DragRequested += BeginDrag;
         // The graph card's own title row: what it shows (and, for "This branch", since when), in a fixed place.
@@ -329,7 +329,7 @@ internal sealed partial class GitTreeWindow : Window
         _rail.JumpRequested += hash => { if (_snap?.RowOf(hash) is int r and >= 0) _graph.Canvas.Flash(r); };
         _rail.LaneHovered += lane => _graph.Canvas.HighlightLane(lane);
         _rail.WorktreeActivated += wt => { if (!wt.IsCurrent) Retarget(wt.Path, wt.Name, null, isActive: false); };
-        _rail.BranchActivated += r => { if (_snap is not null) BeginCheckout(GraphCheckout.ForRef(_snap, r), _rail); };
+        _rail.BranchActivated += r => ActivateRef(r, _rail);
         _rail.DragRequested += BeginDrag;
         _rail.WorktreeMenuRequested += ShowWorktreeMenu;
         _rail.VisibilityToggled += ToggleHidden;
@@ -487,7 +487,7 @@ internal sealed partial class GitTreeWindow : Window
         var filesHeader = new DockPanel
         {
             LastChildFill = false, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
-            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, BuildViewToggle(), _filesLabel },
+            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel },
         };
         ToolTip.SetTip(filesHeader, "Hide the files pane");
         filesHeader.Tapped += (_, e) => { if (!FromButton(e, filesHeader)) SetFilesCollapsed(true); };
@@ -515,7 +515,11 @@ internal sealed partial class GitTreeWindow : Window
         ToolTip.SetTip(_filesStrip, "Show the files pane");
         _filesStrip.Tapped += (_, e) => { if (!FromButton(e, _filesStrip)) SetFilesCollapsed(false); };
         var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
-        var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, filesBody } };
+        // Top to bottom: the pane's heading, the commit's details, then the List | Tree toggle right over the rows it
+        // lays out.
+        var commitInfo = BuildCommitInfo();
+        commitInfo.SetValue(DockPanel.DockProperty, Dock.Top);
+        var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, commitInfo, BuildFilesBar(), filesBody } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView { Padding = new Thickness(0, 0, 0, 64) }; // clear space for the floating bar
@@ -1361,6 +1365,8 @@ internal sealed partial class GitTreeWindow : Window
         _suppressSelect = false;
         _diff.SetDiff(null, "");
         _diffPlaceholder.IsVisible = true;
+        HideCommitInfo();
+        SetFilesCount(null);
         _filesEmpty.Text = hint;
         _filesEmpty.IsVisible = hint.Length > 0;
     }
@@ -1384,6 +1390,8 @@ internal sealed partial class GitTreeWindow : Window
         {
             _wipPanel.IsVisible = true;
             _commitAreaHost.IsVisible = false;
+            HideCommitInfo();
+            SetFilesCount(null);
             _shownCommit = null;
             _filesList.ItemsSource = null;
             _commitFiles = [];
@@ -1404,6 +1412,8 @@ internal sealed partial class GitTreeWindow : Window
 
             string hash = node.Commit.Hash;
             bool stash = node.Kind == NodeKind.Stash;
+            ShowCommitInfoFrom(node.Commit);
+            LoadCommitInfo(cwd, hash);
             System.Threading.Tasks.Task.Run(() => stash ? _git.GetStashDiff(cwd, hash) : _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully) return;
@@ -1447,6 +1457,7 @@ internal sealed partial class GitTreeWindow : Window
         _unstagedList.SelectedIndex = -1;
         _stagedList.SelectedIndex = -1;
 
+        SetFilesCount(changes.Count, uncommitted: true);
         _unstagedLabel.Text = $"Changes ({unstaged.Count})";
         _stagedLabel.Text = $"Staged · pending commit ({staged.Count})";
         _stageAllBtn.IsEnabled = unstaged.Count > 0;
@@ -1591,6 +1602,7 @@ internal sealed partial class GitTreeWindow : Window
         int raw = IndexOfDiffFile(files, wantPath);
         if (raw >= 0) RevealFile(wantPath);
         _commitFiles = files;
+        SetFilesCount(files.Count);
         _suppressSelect = true;
         _filesList.ItemsSource = ArrangeCommit();
         _filesList.SelectedIndex = -1;
@@ -2418,6 +2430,7 @@ internal sealed partial class GitTreeWindow : Window
         _gotoLabel.Foreground = _pal.Muted;
         ApplyCheckoutPalette();
         ApplyDragPalette();
+        ApplyCommitInfoPalette();
 
         _prChip.Background = _pal.Accent;
         _prChip.Foreground = _pal.OnAccent;

@@ -601,6 +601,132 @@ public sealed class GitGraphIntegrationTests : IDisposable
         Assert.Equal("git push", again.Command);
     }
 
+    [Fact]
+    public void CommitInfo_LoadsTheWholeMessageAndCoAuthors()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "c.txt"), "c\n");
+        Assert.Equal(0, Run("add", "c.txt").exit);
+        Assert.Equal(0, Run("commit", "-m", "Subject line", "-m", "Body paragraph.\n\nCo-authored-by: Ada <ada@example.com>").exit);
+
+        var info = CommitInfoReader.Load(_repo, Hash("HEAD"));
+        Assert.NotNull(info);
+        Assert.Equal(Hash("HEAD"), info!.Hash);
+        Assert.Equal(new GitPerson("Perch Test", "test@example.com"), info.Author);
+        Assert.Equal("Subject line\n\nBody paragraph.\n\nCo-authored-by: Ada <ada@example.com>", info.Message);
+        Assert.Equal([new GitPerson("Ada", "ada@example.com")], info.CoAuthors);
+        Assert.Equal([Hash("HEAD~1")], info.Parents);
+        Assert.Null(CommitInfoReader.Load(_repo, "--all"));
+    }
+
+    // An origin whose main is one commit ahead of the local main, which tracks it and has been fetched.
+    private bool SetUpOriginAhead()
+    {
+        string origin = _repo + "-origin.git", other = _repo + "-other";
+        return RunIn(Path.GetTempPath(), "clone", "--bare", _repo, origin).exit == 0
+               && Run("remote", "add", "origin", origin).exit == 0
+               && Run("fetch", "origin").exit == 0
+               && Run("branch", "-u", "origin/main", "main").exit == 0
+               && RunIn(Path.GetTempPath(), "clone", origin, other).exit == 0
+               && RunIn(other, "-c", "user.email=o@example.com", "-c", "user.name=Other", "-c", "commit.gpgsign=false",
+                   "commit", "--allow-empty", "-m", "upstream work").exit == 0
+               && RunIn(other, "push", "origin", "main").exit == 0
+               && Run("fetch", "origin").exit == 0;
+    }
+
+    [Fact]
+    public void FastForwardBranch_StashesChangesInTheWay_AndUndoPutsThemBack()
+    {
+        if (!_ready) return;
+        Assert.True(SetUpOriginAhead());
+        string wip = Path.Combine(_repo, "wip.txt");
+        File.WriteAllText(wip, "not committed\n");
+        var before = Hash("main");
+
+        var (r, undo, stash) = GitOps.FastForwardBranch(_repo, "main", "origin/main", switchFirst: false, stash: true);
+        Assert.True(r.Ok, r.Message);
+        Assert.Equal(Hash("origin/main"), Hash("main"));
+        Assert.NotNull(stash);
+        Assert.False(File.Exists(wip));     // waiting in the stash
+        Assert.Equal(stash, GitOps.StashTop(_repo));
+
+        Assert.True(undo!().Ok);
+        Assert.Equal(before, Hash("main"));
+        Assert.True(File.Exists(wip));
+        Assert.Null(GitOps.StashTop(_repo));
+    }
+
+    [Fact]
+    public void FastForwardBranch_SwitchesFirst_AndUndoSwitchesBack()
+    {
+        if (!_ready) return;
+        Assert.True(SetUpOriginAhead());
+        Assert.Equal(0, Run("switch", "feature").exit);
+        var before = Hash("main");
+
+        var (r, undo, stash) = GitOps.FastForwardBranch(_repo, "main", "origin/main", switchFirst: true, stash: false);
+        Assert.True(r.Ok, r.Message);
+        Assert.Null(stash);
+        Assert.Equal("main", GitOps.Head(_repo)?.Branch);
+        Assert.Equal(Hash("origin/main"), Hash("main"));
+
+        Assert.True(undo!().Ok);
+        Assert.Equal("feature", GitOps.Head(_repo)?.Branch);
+        Assert.Equal(before, Hash("main"));
+    }
+
+    [Fact]
+    public void FastForwardBranch_RefusesADivergedBranch_AndPopsTheStashBack()
+    {
+        if (!_ready) return;
+        Assert.True(SetUpOriginAhead());
+        Assert.True(Commit("mine.txt", "local only"));
+        string wip = Path.Combine(_repo, "wip.txt");
+        File.WriteAllText(wip, "not committed\n");
+        var before = Hash("main");
+
+        var (r, undo, _) = GitOps.FastForwardBranch(_repo, "main", "origin/main", switchFirst: false, stash: true);
+        Assert.False(r.Ok);
+        Assert.Null(undo);
+        Assert.Equal(before, Hash("main"));
+        Assert.True(File.Exists(wip));
+        Assert.Null(GitOps.StashTop(_repo));
+    }
+
+    [Fact]
+    public void Push_ARewrittenBranchIsRejectedAsDiverged_AndForcePushLandsItWithALease()
+    {
+        if (!_ready) return;
+        string origin = _repo + "-origin.git", other = _repo + "-other";
+        Assert.Equal(0, RunIn(Path.GetTempPath(), "clone", "--bare", _repo, origin).exit);
+        Run("remote", "add", "origin", origin);
+        Assert.Equal(0, Run("switch", "-c", "pub").exit);
+        Assert.True(Commit("p.txt", "pub work"));
+        Assert.True(GitOps.Push(_repo).Ok);
+
+        // Rewritten here: a plain push is turned down as diverged, and the force push lands it.
+        Assert.Equal(0, Run("commit", "--amend", "-m", "pub work, amended").exit);
+        var rejected = GitOps.Push(_repo);
+        Assert.False(rejected.Ok);
+        Assert.Equal(PushRejection.Diverged, rejected.Rejected);
+        var forced = GitOps.ForcePush(_repo);
+        Assert.True(forced.Ok, forced.Message);
+        Assert.Equal(Hash("pub"), RunIn(origin, "rev-parse", "pub").stdout.Trim());
+
+        // Someone else pushes to it; rewritten here again without fetching, the lease refuses and their work stays.
+        Assert.Equal(0, RunIn(Path.GetTempPath(), "clone", "-b", "pub", origin, other).exit);
+        Assert.Equal(0, RunIn(other, "-c", "user.email=o@example.com", "-c", "user.name=Other", "-c", "commit.gpgsign=false",
+            "commit", "--allow-empty", "-m", "their work").exit);
+        Assert.Equal(0, RunIn(other, "push", "origin", "pub").exit);
+        string theirs = RunIn(origin, "rev-parse", "pub").stdout.Trim();
+        Assert.Equal(0, Run("commit", "--amend", "-m", "pub work, amended twice").exit);
+        Assert.Equal(PushRejection.FetchFirst, GitOps.Push(_repo).Rejected);
+        var refused = GitOps.ForcePush(_repo);
+        Assert.False(refused.Ok);
+        Assert.Equal(PushRejection.FetchFirst, refused.Rejected);
+        Assert.Equal(theirs, RunIn(origin, "rev-parse", "pub").stdout.Trim());
+    }
+
     [Theory]
     [InlineData("hint: Waiting for your editor\nfatal: 'feature' is already used by worktree at 'C:/x'", "'feature' is already used by worktree at 'C:/x'")]
     [InlineData("error: Your local changes would be overwritten\n", "Your local changes would be overwritten")]

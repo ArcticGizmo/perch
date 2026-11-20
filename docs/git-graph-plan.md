@@ -90,7 +90,7 @@ Perch.App
 
 ### M6: Remotes & PRs
 
-- **CP15: fetch / pull / push.** On click and on open, off the UI thread; ahead/behind on pills and cards; create a tracking branch by double-clicking a remote branch; push never forces from a gesture.
+- **CP15: fetch / pull / push.** On click and on open, off the UI thread; ahead/behind on pills and cards; create a tracking branch by double-clicking a remote branch; push never forces from a gesture (a rejected push asks before force pushing with a lease; feedback round 14).
 - **CP16: PR badges.** `PrStatusService` state on branch pills (open/draft/approved/CI).
 - **CP17: right-click menus.** Rename, delete, reset (soft/mixed/hard with confirmation), revert, tag, copy hash/name.
 
@@ -189,6 +189,26 @@ The user tried CP11–CP14 and asked for four things; all four are built (427ff6
 - **Column edges are header-only** (`GraphCanvas.EdgeAt(Point)` returns 0 below `_headerH`), so they no longer cover pills and nodes on the rows.
 - **Branch here…** (`GitTreeWindow.Menus.cs`: `AskBranchHere`, `CreateBranchOnly`): first on a commit row (replacing "Create a branch at…"), second on a branch/tag pill and rail row, and on this worktree's WIP row (= the toolbar's Branch). The dialog's first choice is **Just create it** (`git branch <name> <hash>`, Undo = `branch -D`); the others check it out (stash / bring along when dirty), through the existing `RunCheckout`.
 - **Long names in menus** (`TextFit.ShortenNames`, tested; `GitTreeWindow.ShortNames`): the drop menu, its notes, the drag ghost and the ref menu cut each long branch/worktree name in the middle (`OverlayDraw.ElideMiddle`, 220 px at the menu's 14 px), matching whole names only, longest first, in one pass. Only names over 24 chars are candidates, so a big repo's refs don't all enter the scan. The command under a drop option now **wraps** instead of being cut from the left, and the item's tooltip has the full line. Render: `git_tree_drop_menu_long_1x.png` (`PreviewLongDropMenu`).
+
+## Feedback round 14 (2026-11-19)
+
+Branch `git-graph-feedback-13`. Checks in `docs/git-graph-testing.md` "Feedback round 14".
+
+- **The trunk can be hidden** (`GitTreeWindow.WhyNotHide`): only a branch a worktree has checked out still refuses. Bulk hides (`BranchVisibility.Hideable`) still keep the trunk. `GraphSnapshot.PrimaryTip`'s no-worktree fallback now skips a trunk that's out of the walk. Tested (`PrimaryTip_AHiddenTrunkOutsideTheWalkDoesNotHoldLaneZero`).
+- **Remote groups fold, and a filter box** (`GraphRail.BuildRemoteRows` / `RemoteHeader`, `_remotesClosed` in memory like the other folds). The rail is three panels (`_before`, `_remoteRows`, `_after`) around a persistent `TextBox`, so a live refresh never detaches the box mid-typing; typing rebuilds only `_remoteRows`. Every word must match (`MatchesFilter`); a filter opens every group with a match. The Remotes **⋯** adds Hide/Show the matching ones. Render: `git_tree_rail_remote_filter_1x.png`, `git_tree_rail_remote_folded_1x.png`.
+- **Double-click a remote to fast-forward** (`GraphCheckout.FastForwardFor`, tested; `GitTreeWindow.ActivateRef` / `BeginFastForward`; `GitOps.FastForwardBranch`, integration-tested): when a local branch tracks it with Ahead 0 and Behind > 0. It moves whichever worktree holds the branch, or switches this one to it first. Changes in the way go to a stash that's left for the user (the toast offers **Pop them back**); a failure puts the stash back. Undo = `reset --keep` + switch back + pop. Only a session working there asks first. `GraphCheckout.ForRef` is unchanged, so drag-onto-worktree is unaffected.
+- **Force push prompt** (`GitOpResult.Rejected` from `GitOps.PushRejectionOf`, tested; `GitOps.ForcePush`, integration-tested): a push rejected as **non-fast-forward** asks in the in-window modal, then runs `push --force-with-lease --force-if-includes`. **Fetch first** (remote has commits not fetched) never offers force: the toast offers Pull. A lease refused as stale info offers Fetch. `RunHereAction` gained a `failed` hook for follow-ups like this.
+
+## Feedback round 15 (2026-11-19): GitKraken-style pill column
+
+- **Pills read down the page** (`GraphCanvas.Pills` / `RowRefs` / `PaintPill`): one pill per row, left edge at the column's start, then a `+N` chip; the connector runs from the chip/pill's end to the node. `PaintPill` is measure-or-paint (null context measures).
+- **Hover stack** (`PaintStack`, `UpdateStack`, `_stackRow`/`_stackPanel`/`_stackHits`, `_pillRows`): hovering a row's pill area opens every ref of that row in full over the other columns on a background panel; it stays while the pointer is on the panel. Only rows with more than one pill, or a cut name, open. `RefAt` asks the stack first and treats the rest of its panel as covering the rows; `RowUnder` maps presses and hover on the panel to the stacked row. `DropTargetAt` calls `UpdateStack`, so a drag can drop onto a folded branch. Wheel scrolling closes it. Render: `git_graph_stack_1x.png` / `_light_` (`PreviewOpenStack`; the sample graph now has three refs on one commit). The real pointer path (open/close as the mouse moves) is unverified.
+
+## Feedback round 16 (2026-11-20)
+
+- **Merge-queue refs** (`RefLabel.MergeQueue` / `Display` in Core `CommitInfo.cs`, tested): `…gh-readonly-queue/<base>/pr-<n>-<sha>` shows as `queue #n → base` on pills (`GraphCanvas.PaintPill`) and rail rows; `Describe` says what it is; the remote filter matches the label too.
+- **Distinct rail sections** (`GraphRail.Header(first:)`): tinted band (`RowHover` at 0.6, full on hover), bold body-ink caps, a rule and 12 px above every section but the first; remote group names semi-bold.
+- **Commit details** (`GitTreeWindow.CommitInfo.cs`; Core `CommitInfoReader.Load/Parse/CoAuthors/Reflow` + `CommitInfo`, unit- and integration-tested): a card in row 0 of `_commitAreaHost` over the files. `ShowNode` fills it from the row's `GitCommit` at once and from one `git show -s --no-show-signature` off the UI thread (dropped if the selection moved). Committer line only when `CommittedSeparately` (different email, or > 1 min apart). Message reflowed (wrapped prose joined; lists, indented/fenced code, trailers kept), in a `SelectableTextBlock` inside a 160 px `ScrollViewer`. SHA button copies the full hash. Render: `git_tree_commit_details_1x.png` (`PreviewSelectCommit`).
 
 ## Handover (2026-10-30, end of session 2)
 

@@ -25,6 +25,29 @@ internal sealed partial class GitTreeWindow
     /// <summary>For the headless render: the rail's tags grouped and opened.</summary>
     internal void PreviewTags() => _rail.PreviewTags();
 
+    /// <summary>For the headless render: the rail's remote filter set (empty clears it).</summary>
+    internal void PreviewRemoteFilter(string text) => _rail.PreviewRemoteFilter(text);
+
+    /// <summary>For the headless render: selects the newest real commit, so its details show over its files; returns
+    /// its subject.</summary>
+    internal string PreviewSelectCommit()
+    {
+        if (_snap is not { } s) return "(no snapshot)";
+        for (int r = 0; r < s.Commits.Count; r++)
+            if (!s.Commits[r].IsPseudo)
+            {
+                _graph.Canvas.Select(r);
+                return s.Commits[r].Subject;
+            }
+        return "(no commit)";
+    }
+
+    /// <summary>For the headless render: a row's pills stacked open; returns what the stack holds.</summary>
+    internal string PreviewOpenStack() => _graph.Canvas.PreviewOpenStack();
+
+    /// <summary>For the headless render: one remote's group folded or opened.</summary>
+    internal void PreviewFoldRemote(string remote, bool fold) => _rail.PreviewFoldRemote(remote, fold);
+
     /// <summary>For the headless render: Pull spinning with the rest of the toolbar off, or back to normal.</summary>
     internal void PreviewSpinner(bool on)
     {
