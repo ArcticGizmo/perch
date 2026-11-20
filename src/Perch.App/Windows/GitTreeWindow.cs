@@ -463,9 +463,7 @@ internal sealed partial class GitTreeWindow : Window
         groups.Children.Add(WithRow(stagedGroup, 2));
         _wipPanel = new DockPanel { LastChildFill = true, IsVisible = false, Children = { _composer, groups } };
 
-        _commitAreaHost = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
-        _commitAreaHost.Children.Add(WithRow(BuildCommitInfo(), 0));
-        _commitAreaHost.Children.Add(WithRow(new Grid { Children = { _filesList, _filesEmpty } }, 1));
+        _commitAreaHost = new Grid { Children = { _filesList, _filesEmpty } };
 
         OpensDiff(_filesList);
         OpensDiff(_unstagedList);
@@ -489,7 +487,7 @@ internal sealed partial class GitTreeWindow : Window
         var filesHeader = new DockPanel
         {
             LastChildFill = false, Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
-            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, BuildViewToggle(), _filesLabel },
+            [DockPanel.DockProperty] = Dock.Top, Children = { collapseFiles, _filesLabel },
         };
         ToolTip.SetTip(filesHeader, "Hide the files pane");
         filesHeader.Tapped += (_, e) => { if (!FromButton(e, filesHeader)) SetFilesCollapsed(true); };
@@ -517,7 +515,11 @@ internal sealed partial class GitTreeWindow : Window
         ToolTip.SetTip(_filesStrip, "Show the files pane");
         _filesStrip.Tapped += (_, e) => { if (!FromButton(e, _filesStrip)) SetFilesCollapsed(false); };
         var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
-        var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, filesBody } };
+        // Top to bottom: the pane's heading, the commit's details, then the List | Tree toggle right over the rows it
+        // lays out.
+        var commitInfo = BuildCommitInfo();
+        commitInfo.SetValue(DockPanel.DockProperty, Dock.Top);
+        var filesPane = new DockPanel { LastChildFill = true, Children = { filesHeader, commitInfo, BuildFilesBar(), filesBody } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView { Padding = new Thickness(0, 0, 0, 64) }; // clear space for the floating bar
@@ -1364,6 +1366,7 @@ internal sealed partial class GitTreeWindow : Window
         _diff.SetDiff(null, "");
         _diffPlaceholder.IsVisible = true;
         HideCommitInfo();
+        SetFilesCount(null);
         _filesEmpty.Text = hint;
         _filesEmpty.IsVisible = hint.Length > 0;
     }
@@ -1387,6 +1390,8 @@ internal sealed partial class GitTreeWindow : Window
         {
             _wipPanel.IsVisible = true;
             _commitAreaHost.IsVisible = false;
+            HideCommitInfo();
+            SetFilesCount(null);
             _shownCommit = null;
             _filesList.ItemsSource = null;
             _commitFiles = [];
@@ -1452,6 +1457,7 @@ internal sealed partial class GitTreeWindow : Window
         _unstagedList.SelectedIndex = -1;
         _stagedList.SelectedIndex = -1;
 
+        SetFilesCount(changes.Count, uncommitted: true);
         _unstagedLabel.Text = $"Changes ({unstaged.Count})";
         _stagedLabel.Text = $"Staged · pending commit ({staged.Count})";
         _stageAllBtn.IsEnabled = unstaged.Count > 0;
@@ -1596,6 +1602,7 @@ internal sealed partial class GitTreeWindow : Window
         int raw = IndexOfDiffFile(files, wantPath);
         if (raw >= 0) RevealFile(wantPath);
         _commitFiles = files;
+        SetFilesCount(files.Count);
         _suppressSelect = true;
         _filesList.ItemsSource = ArrangeCommit();
         _filesList.SelectedIndex = -1;

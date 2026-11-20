@@ -44,7 +44,9 @@ internal sealed class GraphRail : UserControl
     private GraphCanvas.Colors _c = GraphCanvas.Colors.For(light: false);
     private GraphSnapshot? _snap;
     private IReadOnlyDictionary<string, WorktreeSession> _sessions = new Dictionary<string, WorktreeSession>();
-    private bool _worktreesOpen = true, _localOpen = true, _remotesOpen = true, _tagsOpen, _stashesOpen = true;
+    // Local, Tags and Stashes start folded: Worktrees and Remotes are what a fresh look usually wants, and the folded
+    // headers still give their counts.
+    private bool _worktreesOpen = true, _localOpen, _remotesOpen = true, _tagsOpen, _stashesOpen;
     private readonly HashSet<string> _remotesClosed = new(StringComparer.Ordinal);
 
     /// <summary>The Claude session working in a worktree, as the rail shows it.</summary>

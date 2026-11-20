@@ -141,6 +141,13 @@ Use a throwaway clone with a few local branches (one checked out in an extra wor
 4. **Show all, per section.** With branches hidden in both sections, Remotes' **⋯** offers **Show all N hidden remote branches** and Local's the local ones; each brings back only its own section. *Before:* one "Show all hidden branches" for both.
 5. **The setting reads as a setting.** In Remotes' **⋯**, a divider separates the actions above from **Hide new remote branches that aren't mine**, which has a real checkbox (ticked when on). Clicking it flips the setting with a toast, as before. Local's **⋯** has no such checkbox (it's about remote branches). *Before:* the setting sat at the top of the menu with a ✓ text prefix, looking like one more action.
 
+## Feedback round 17: folded rail sections, List | Tree beside the files
+
+Compare `captures/20261120-git-graph-round17-b/git_tree_live_1x.png` (working tree) and `captures/20261120-git-graph-round17/git_tree_commit_details_1x.png` (a commit).
+
+1. **Local, Tags and Stashes start folded.** Open a fresh git graph window: Worktrees and Remotes are open; Local, Tags and Stashes show only their headers (with counts). Clicking a header opens it as before; folds aren't remembered across windows. *Before:* Local and Stashes started open.
+2. **List | Tree sits over the rows.** The toggle has left the "Files" heading. Click a commit: under its details card, a line reads "11 files changed" with **List | Tree** on the right, directly above the file rows. Click the uncommitted-changes row: the same line reads "4 uncommitted changes" above Changes / Staged. Switching still re-lays out both, and is remembered. *Before:* the toggle sat in the pane heading, above the commit card, away from the rows it changes.
+
 ## Feedback round 16: merge-queue refs, distinct rail sections, commit details
 
 Use a repo on GitHub with a merge queue (or `git update-ref refs/remotes/origin/gh-readonly-queue/main/pr-145-<any 40-char sha> <commit>` in a throwaway clone). Compare `captures/20261120-git-graph-round16/git_tree_1x.png` (queue pill), `git_tree_commit_details_1x.png` (details and rail).

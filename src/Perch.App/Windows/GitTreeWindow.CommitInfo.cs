@@ -78,6 +78,7 @@ internal sealed partial class GitTreeWindow
         _ciRule.Background = _pal.Separator;
         _ciMessage.Foreground = _pal.Fg;
         _ciHash.Foreground = _pal.Muted;
+        _filesCount.Foreground = _pal.Muted;
     }
 
     private void HideCommitInfo() => _commitInfo.IsVisible = false;
@@ -122,7 +123,8 @@ internal sealed partial class GitTreeWindow
             if (!t.IsCompletedSuccessfully || t.Result is not { } info) return;
             Dispatcher.UIThread.Post(() =>
             {
-                if (!IsVisible || _selectedCommitHash != hash) return;
+                // Gone stale: another commit picked, or the working tree (whose view has no card) shown since.
+                if (!IsVisible || _selectedNode is null || _selectedCommitHash != hash || !_commitAreaHost.IsVisible) return;
                 ShowCommitInfo(info);
             });
         });
