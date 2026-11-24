@@ -184,6 +184,18 @@ public sealed partial class OverlayCanvas
             ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6 / r, lineCap: PenLineCap.Round), arc);
     }
 
+    // A small yellow pause symbol in the spinner's spot, on the same disc of panel surface so it reads against the mark.
+    private static void DrawSprigPauseBadge(DrawingContext ctx, double cx, double cy, double size)
+    {
+        double r = size * 0.2;
+        var c = new Point(cx + size * 0.3, cy + size * 0.34);
+        ctx.DrawEllipse(Palette.OverlaySurfaceBrush, null, c, r + 1.2, r + 1.2);
+        var brush = OverlayDraw.Brush(Palette.Yellow);
+        double barW = r * 0.62, gap = r * 0.5, barH = r * 1.8;
+        ctx.DrawRectangle(brush, null, new Rect(c.X - gap / 2 - barW, c.Y - barH / 2, barW, barH), 0.4, 0.4);
+        ctx.DrawRectangle(brush, null, new Rect(c.X + gap / 2, c.Y - barH / 2, barW, barH), 0.4, 0.4);
+    }
+
     // An open arc on the unit circle, built once and scaled into place, so a spinning frame allocates no geometry.
     private static StreamGeometry UnitArc(double sweepDeg)
     {
@@ -544,10 +556,14 @@ public sealed partial class OverlayCanvas
     {
         if (_hoveredSprigRow == rowIndex)
             OverlayDraw.Panel(ctx, new Rect(x - 2, midY - 8, SprigRowIconWidth, 16), FeedHoverBrush, null, 4);
-        // Sprig's own mark, but in the workspace's state colour: on a row it's a status glyph first.
-        var color = w.InTrouble ? Palette.Red : SprigStateColor(w.Shown);
+        // Sprig's own mark, but in the workspace's state colour: on a row it's a status glyph first. Paused is
+        // parked, so the mark greys like a stopped one and the pause badge alone tells the two apart.
+        bool paused = !w.InTrouble && w.Shown == SprigWorkspaceState.Paused;
+        var color = w.InTrouble ? Palette.Red : paused ? Palette.Muted : SprigStateColor(w.Shown);
         DrawSprigMark(ctx, x + 5, midY, 14, OverlayDraw.Brush(color));
-        DrawSprigSpinner(ctx, x + 5, midY, 14, SprigActivityOf(w));
+        var activity = SprigActivityOf(w);
+        if (paused && activity == SprigActivity.None) DrawSprigPauseBadge(ctx, x + 5, midY, 14);
+        else DrawSprigSpinner(ctx, x + 5, midY, 14, activity);
         _sprigRowRects[rowIndex] = new Rect(x - 2, midY - 9, SprigRowIconWidth + 2, 18);
     }
 
