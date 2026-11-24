@@ -210,19 +210,73 @@ public sealed class SessionStatsCacheTests : IDisposable
         Assert.True(cache.BytesRead > 0);   // it rebuilt from the transcripts rather than trusting the file
     }
 
-    [Fact]
-    public void DeletedTranscripts_ArePrunedByTheAllTimeReport()
+    // Claude Code's cleanupPeriodDays sweep: the session and its two teammates' transcripts vanish.
+    private void DeleteTeamSession()
     {
-        var cache = new SessionStatsCache(null);
-        Report(cache);
-        int tracked = cache.TrackedFiles;
-
         var team = Transcripts().Single(p => Path.GetFileNameWithoutExtension(p) == "sessTeam");
         File.Delete(team);
         Directory.Delete(Path.Combine(Path.GetDirectoryName(team)!, "sessTeam"), recursive: true);
+    }
 
-        Assert.Equal(Fresh(), Report(cache));
-        Assert.Equal(tracked - 3, cache.TrackedFiles);   // the session and its two teammates
+    [Fact]
+    public void DeletedTranscripts_LeaveTheLiveFold_ButKeepCounting()
+    {
+        var cache = new SessionStatsCache(null);
+        var before = Report(cache);
+        int tracked = cache.TrackedFiles;
+
+        DeleteTeamSession();
+
+        Assert.Equal(before, Report(cache));             // lifetime totals don't shrink
+        Assert.NotEqual(Fresh(), before);                // (a cache that never saw the files can't know them)
+        Assert.Equal(tracked - 3, cache.TrackedFiles);   // the session and its two teammates left the live fold
+        Assert.Equal(3, cache.ArchivedFiles);            // ...and went to the archive
+        Assert.Equal(before, Report(cache));             // a second report doesn't count them twice
+    }
+
+    [Fact]
+    public void Archive_SurvivesARestart_AndACacheRebuild()
+    {
+        var first = new SessionStatsCache(CachePath);
+        var before = Report(first);
+        DeleteTeamSession();
+        Report(first);   // archives them, and saves the archive at once
+
+        Assert.Equal(before, Report(new SessionStatsCache(CachePath)));
+
+        // A fold-version bump or time-zone change discards the cache file; the archive is separate and stays.
+        File.Delete(CachePath);
+        Assert.Equal(before, Report(new SessionStatsCache(CachePath)));
+    }
+
+    [Fact]
+    public void ATranscriptThatReappears_LeavesTheArchive_AndCountsOnce()
+    {
+        var team = Transcripts().Single(p => Path.GetFileNameWithoutExtension(p) == "sessTeam");
+        var backup = Path.Combine(_root, "backup");
+        CopyTree(Path.GetDirectoryName(team)!, backup);
+
+        var cache = new SessionStatsCache(null);
+        var before = Report(cache);
+        DeleteTeamSession();
+        Report(cache);
+
+        File.Copy(Path.Combine(backup, "sessTeam.jsonl"), team);
+        CopyTree(Path.Combine(backup, "sessTeam"), Path.Combine(Path.GetDirectoryName(team)!, "sessTeam"));
+
+        Assert.Equal(before, Report(cache));
+        Assert.Equal(0, cache.ArchivedFiles);
+    }
+
+    [Fact]
+    public void ADamagedArchive_IsMovedAsideNotOverwritten()
+    {
+        var archive = Path.Combine(_root, "stats-archive.bin");
+        File.WriteAllText(archive, "not an archive");
+
+        Report(new SessionStatsCache(CachePath));
+
+        Assert.Single(Directory.GetFiles(_root, "stats-archive.bin.unreadable-*"));
     }
 
     private static string Line(string timestamp) =>
