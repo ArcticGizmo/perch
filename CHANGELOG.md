@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.18] - 2026-11-24
+
+- A paused sprig workspace's icon goes grey with a small yellow pause badge (yellow alone was doing too much)
+
+---
+
 ## [v0.6.17] - 2026-11-24
 
 - Sprig's icon spins while things start, and spins yellow while they stop
