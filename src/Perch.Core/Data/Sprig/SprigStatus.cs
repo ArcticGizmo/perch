@@ -38,6 +38,10 @@ internal enum SprigFeed
 /// <summary>A workspace's state as sprig shows it. <see cref="Unknown"/> is a state a newer sprig added.</summary>
 internal enum SprigWorkspaceState { Unknown, Free, Starting, Running, Paused, Stopped, Failed }
 
+/// <summary>What a workspace is in the middle of, which the overlay shows as a spinner on its sprig mark. Sprig has no
+/// "stopping" workspace state (a stop shows as its apps stopping), so this is worked out alongside the state.</summary>
+internal enum SprigActivity { None, Starting, Stopping }
+
 /// <param name="Key"><c>orchestration/name</c>: how actions address it.</param>
 /// <param name="Name">The slot number, or <c>main</c> / a name for one that runs the repos in place.</param>
 /// <param name="Label">How people know it: its branch, or "free".</param>
@@ -88,6 +92,13 @@ internal sealed record SprigWorkspace(
     public int ActiveCount => Apps.Count(a => !a.IsOff);
 
     public bool AnyFailed => Apps.Any(a => a.IsFailed);
+
+    /// <summary>Stopping while any app is on its way down (a stop or pause in progress), else starting while it shows
+    /// as <see cref="SprigWorkspaceState.Starting"/>.</summary>
+    public SprigActivity Activity
+        => Apps.Any(a => a.IsStopping) ? SprigActivity.Stopping
+         : Shown == SprigWorkspaceState.Starting ? SprigActivity.Starting
+         : SprigActivity.None;
 }
 
 /// <summary>A workspace's <c>readiness</c> as sprig sends it (0.9.11 and later). It only colours a workspace whose
@@ -127,6 +138,8 @@ internal sealed record SprigApp(
     /// running. Not restarting, which is <see cref="IsDown"/>: a crash loop is trouble, not a start. The same split
     /// sprig's own readiness makes, which this stands in for with a sprig older than 0.9.11.</summary>
     public bool IsComingUp => State is "building" or "waiting" or "starting" or "running";
+
+    public bool IsStopping => State == "stopping";
 
     /// <summary>On its way somewhere: building, waiting on what it depends on, starting, restarting, or stopping.</summary>
     public bool IsBusy => State is "building" or "waiting" or "starting" or "restarting" or "stopping" or "running";

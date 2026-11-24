@@ -3419,9 +3419,13 @@ public partial class App : Application
         if (action is SprigAction.Start or SprigAction.Restart or SprigAction.Resume) _sprigAwaitingReady.Add(workspace.Key);
         else _sprigAwaitingReady.Remove(workspace.Key);
 
+        var canvas = _overlay?.Canvas;
+        int? pending = canvas?.BeginSprigPending(workspace.Key, SprigActions.ActivityOf(action));
         Task.Run(() =>
         {
-            var result = SprigCli.Run(action, workspace, app);
+            SprigActionResult result;
+            try { result = SprigCli.Run(action, workspace, app); }
+            finally { if (pending is { } token) Dispatcher.UIThread.Post(() => canvas!.EndSprigPending(workspace.Key, token)); }
             if (result.Ok) return;
             if (result.NeedsSprig) SprigCli.Open(workspace);
             var what = app is null ? workspace.Label : $"{app[(app.LastIndexOf('/') + 1)..]} in {workspace.Label}";

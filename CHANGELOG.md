@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.17] - 2026-11-24
+
+- Sprig's icon spins while things start, and spins yellow while they stop
+- Middle-click a sprig app link to open it in a new browser window
+- Sprig's grey matches the worktree glyph's (there were two greys; there is now one)
+
+---
+
 ## [v0.6.16] - 2026-11-20
 
 - PR checks list each check once, from its newest run (not once per run)
