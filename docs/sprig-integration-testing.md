@@ -160,6 +160,22 @@ Settings → search `sprig` → turn **Notify on sprig changes** on (with **Spri
 | Start a slot with Docker off | The action's own "Docker isn't running" toast; you may also get `<branch> failed to start` from the stream |
 | Turn on Windows Do Not Disturb, then kill an app | No toast |
 
+## 12. Spinner, grey and middle-click links
+
+The sprig mark (on the `SPRIG` header and on session rows) gets a small spinning arc at its bottom right while something is moving: the starting colour (blue) while a workspace starts, yellow while it stops or pauses. The header spins while Perch connects to sprig, then for whichever workspace is busiest (a stop outranks a start). A row spins for its own workspace. The spin begins at the click when the action came from Perch's menu, and otherwise when sprig first reports an app building or stopping. With Windows' reduce-motion setting on (Settings → Accessibility → Visual effects → Animation effects off), it's a still dot instead.
+
+Use the session from section 10, in `Safety-Virtual--1`.
+
+| Do this | Before | After |
+|---|---|---|
+| Restart Perch with **Sprig** on | No spinner | The header mark (grey) spins blue for a moment while it connects, then stops |
+| Right-click the row's sprig icon → **Start** (or **Resume**) | No spinner | A blue spinner on the row icon and the header mark until every app is ready |
+| Right-click it → **Stop** (or **Pause**) | No spinner | A yellow spinner on both until the apps are down |
+| `sprig stop Safety-Virtual 1` in a terminal | No spinner | A yellow spinner while sprig reports the apps stopping |
+| A stopped slot's row icon and the worktree glyph beside it | Slightly different greys | The same grey |
+| Right-click a running slot → middle-click **Open api (localhost:…)** | Middle click did nothing (menu stayed open) | The menu closes and the app opens in a new browser window |
+| Left-click the same entry | Opens in the browser | Unchanged |
+
 ## Not covered live
 
 - **`not installed`:** render-only (`overlay_sprig_missing_1x.png`), unless you're willing to rename `%LOCALAPPDATA%\Sprig\current\sprig.exe` for a minute. If you do, sprig is looked for again every minute.

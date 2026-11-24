@@ -100,18 +100,103 @@ public sealed partial class OverlayCanvas
         _ => 5,
     };
 
+    // Grey is the text-muted grey, so a parked sprig mark matches the worktree glyph beside it on a row.
     private static Color SprigStateColor(SprigWorkspaceState s) => s switch
     {
         SprigWorkspaceState.Running => Palette.Green,
         SprigWorkspaceState.Starting => Palette.Accent,
         SprigWorkspaceState.Paused => Palette.Yellow,
         SprigWorkspaceState.Failed => Palette.Red,
-        _ => IdleColor,
+        _ => Palette.Muted,
     };
 
     private static Color SprigAppColor(SprigApp a)
         => a.IsReady ? Palette.Green : a.IsFailed ? Palette.Red : a.IsBusy ? Palette.Accent
-         : a.State == "restarting" ? Palette.Yellow : IdleColor;
+         : a.State == "restarting" ? Palette.Yellow : Palette.Muted;
+
+    // ── activity spinner ────────────────────────────────────────────────────────────────────────────────────
+
+    // Actions asked for from Perch that sprig hasn't finished, by workspace key, so the spinner shows from the click
+    // rather than from sprig's first report. The token stops an earlier action finishing from clearing a later one.
+    private readonly Dictionary<string, (int Token, SprigActivity Activity)> _sprigPending = new(StringComparer.Ordinal);
+    private int _sprigPendingToken;
+    private bool _anySpinnerThisFrame;
+    private static Geometry? _spinnerArc;
+    private const double SpinnerPeriodMs = 900;
+
+    /// <summary>Marks <paramref name="key"/> as busy with an action Perch just asked for. Returns the token to end it
+    /// with.</summary>
+    internal int BeginSprigPending(string key, SprigActivity activity)
+    {
+        int token = ++_sprigPendingToken;
+        _sprigPending[key] = (token, activity);
+        InvalidateVisual();
+        return token;
+    }
+
+    /// <summary>Ends the wait <see cref="BeginSprigPending"/> started, unless a later action has replaced it.</summary>
+    internal void EndSprigPending(string key, int token)
+    {
+        if (!_sprigPending.TryGetValue(key, out var p) || p.Token != token) return;
+        _sprigPending.Remove(key);
+        InvalidateVisual();
+    }
+
+    private SprigActivity SprigActivityOf(SprigWorkspace w)
+        => _sprigPending.TryGetValue(w.Key, out var p) ? p.Activity : w.Activity;
+
+    // The header mark's spinner: starting while the feed connects, else the busiest workspace (a stop outranks a
+    // start, being the shorter and rarer of the two).
+    private SprigActivity SprigHeaderActivity()
+    {
+        if (_sprigFeed is SprigFeed.Connecting or SprigFeed.Reconnecting) return SprigActivity.Starting;
+        if (_sprigFeed != SprigFeed.Live) return SprigActivity.None;
+        var any = SprigActivity.None;
+        foreach (var w in _sprigLines)
+            switch (SprigActivityOf(w))
+            {
+                case SprigActivity.Stopping: return SprigActivity.Stopping;
+                case SprigActivity.Starting: any = SprigActivity.Starting; break;
+            }
+        return any;
+    }
+
+    // A small spinner badged on the bottom right of a sprig mark drawn by DrawSprigMark at (cx, cy, size): the
+    // starting colour while starting, yellow while stopping. A disc of the panel surface goes under it so it reads
+    // against the mark. Under reduced motion it's a still dot and no repaint timer runs for it.
+    private void DrawSprigSpinner(DrawingContext ctx, double cx, double cy, double size, SprigActivity activity)
+    {
+        if (activity == SprigActivity.None) return;
+        var brush = OverlayDraw.Brush(activity == SprigActivity.Stopping ? Palette.Yellow : Palette.Accent);
+        double r = size * 0.18;
+        var c = new Point(cx + size * 0.3, cy + size * 0.34);
+        ctx.DrawEllipse(Palette.OverlaySurfaceBrush, null, c, r + 1.2, r + 1.2);
+        if (Pulse.ReduceMotion)
+        {
+            ctx.DrawEllipse(brush, null, c, r, r);
+            return;
+        }
+        _anySpinnerThisFrame = true;
+        double turn = DateTime.Now.TimeOfDay.TotalMilliseconds % SpinnerPeriodMs / SpinnerPeriodMs * 2 * Math.PI;
+        var arc = _spinnerArc ??= UnitArc(270);
+        var m = Matrix.CreateScale(r, r) * Matrix.CreateRotation(turn) * Matrix.CreateTranslation(c.X, c.Y);
+        using (ctx.PushTransform(m))
+            ctx.DrawGeometry(null, OverlayDraw.Pen(brush, 1.6 / r, lineCap: PenLineCap.Round), arc);
+    }
+
+    // An open arc on the unit circle, built once and scaled into place, so a spinning frame allocates no geometry.
+    private static StreamGeometry UnitArc(double sweepDeg)
+    {
+        double end = sweepDeg * Math.PI / 180;
+        var geo = new StreamGeometry();
+        using (var gc = geo.Open())
+        {
+            gc.BeginFigure(new Point(1, 0), isFilled: false);
+            gc.ArcTo(new Point(Math.Cos(end), Math.Sin(end)), new Size(1, 1), 0, sweepDeg > 180, SweepDirection.Clockwise);
+            gc.EndFigure(false);
+        }
+        return geo;
+    }
 
     // ── paint ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -154,7 +239,8 @@ public sealed partial class OverlayCanvas
 
         DrawChevron(ctx, HorizPad + 4, midY, _sprigExpanded);
         // Sprig's brand green while the feed is live; greyed while connecting, reconnecting or not installed.
-        DrawSprigMark(ctx, HorizPad + 17, midY, 13, _sprigFeed == SprigFeed.Live ? Palette.SprigBrush : OverlayDraw.Brush(IdleColor));
+        DrawSprigMark(ctx, HorizPad + 17, midY, 13, _sprigFeed == SprigFeed.Live ? Palette.SprigBrush : MutedBrush);
+        DrawSprigSpinner(ctx, HorizPad + 17, midY, 13, SprigHeaderActivity());
         var capFt = OverlayDraw.Text("SPRIG", FeedCaptionSize, MutedBrush);
         double x = HorizPad + 26;
         OverlayDraw.TextLeftMid(ctx, capFt, x, midY);
@@ -384,7 +470,7 @@ public sealed partial class OverlayCanvas
         foreach (var app in w.Apps.Where(a => a is { IsReady: true, Port: not null }))
         {
             var url = $"http://localhost:{app.Port}";
-            open.Add(MenuItem($"Open {app.ShortName}  ({url[7..]})", () => PlatformServices.UrlOpener.Open(url)));
+            open.Add(UrlMenuItem($"Open {app.ShortName}  ({url[7..]})", url));
         }
 
         // One submenu per app, for starting or stopping just that one.
@@ -461,6 +547,7 @@ public sealed partial class OverlayCanvas
         // Sprig's own mark, but in the workspace's state colour: on a row it's a status glyph first.
         var color = w.InTrouble ? Palette.Red : SprigStateColor(w.Shown);
         DrawSprigMark(ctx, x + 5, midY, 14, OverlayDraw.Brush(color));
+        DrawSprigSpinner(ctx, x + 5, midY, 14, SprigActivityOf(w));
         _sprigRowRects[rowIndex] = new Rect(x - 2, midY - 9, SprigRowIconWidth + 2, 18);
     }
 

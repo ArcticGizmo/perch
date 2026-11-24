@@ -1902,6 +1902,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public override void Render(DrawingContext ctx)
     {
         _anyMismatchThisFrame = false;
+        _anySpinnerThisFrame = false;
         Draw(ctx, Bounds.Width);
         UpdatePulseTimer();
         UpdateTickTimer();
@@ -3261,9 +3262,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return names.Count == 1 ? names[0]! : $"{names[0]} +{names.Count - 1}";
     }
 
-    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame) and motion is
-    // allowed, so the pulse animates without spinning a timer when nothing is wrong (or when the outline is
-    // steady under reduced motion). Mirrors UpdateTickTimer.
+    // Runs a ~17fps repaint only while a mismatch outline or a sprig spinner is on screen (see _anyMismatchThisFrame,
+    // _anySpinnerThisFrame) and motion is allowed, so the pulse animates without spinning a timer when nothing is
+    // wrong (or when both hold still under reduced motion). Mirrors UpdateTickTimer.
     //
     // It also stops once the overlay can't be seen (hidden, minimised, detached): no frame is painted then, so
     // _anyMismatchThisFrame never gets cleared and the timer used to invalidate forever (CP23). The next paint
@@ -3273,7 +3274,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void UpdatePulseTimer()
     {
         _pulseTimer ??= CreatePulseTimer();
-        bool animate = _anyMismatchThisFrame && !Pulse.ReduceMotion;
+        bool animate = (_anyMismatchThisFrame || _anySpinnerThisFrame) && !Pulse.ReduceMotion;
         if (animate && !_pulseTimer.IsEnabled) _pulseTimer.Start();
         else if (!animate && _pulseTimer.IsEnabled) _pulseTimer.Stop();
     }
@@ -3288,7 +3289,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 t.Stop();
                 return;
             }
-            RecomputeMismatches();
+            if (_anyMismatchThisFrame) RecomputeMismatches();
             InvalidateVisual();
         };
         return t;

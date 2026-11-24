@@ -22,6 +22,14 @@ internal sealed record SprigActionResult(bool Ok, string? Code = null, string? E
 /// <summary>What Perch can ask sprig to do to a workspace, or one of its apps.</summary>
 internal enum SprigAction { Start, Restart, Stop, Pause, Resume }
 
+internal static class SprigActions
+{
+    /// <summary>What a workspace is doing while <paramref name="action"/> runs, so the spinner can show from the click
+    /// rather than from sprig's first report.</summary>
+    public static SprigActivity ActivityOf(SprigAction action)
+        => action is SprigAction.Stop or SprigAction.Pause ? SprigActivity.Stopping : SprigActivity.Starting;
+}
+
 /// <summary>
 /// Finds sprig and runs its CLI for the things Perch asks it to <em>do</em>. Everything Perch reads comes from the
 /// <c>sprig watch --json</c> stream (see <see cref="SprigStatusFold"/>); only actions launch a command.

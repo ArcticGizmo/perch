@@ -73,6 +73,32 @@ public class SprigStatusTests
         Assert.Equal(["shop/web"], looping.Down);
     }
 
+    [Fact]
+    public void Activity_StartingWhileAppsComeUp_StoppingWhileAnyGoesDown()
+    {
+        var fold = Folded();
+        Assert.Equal(SprigActivity.Starting, fold.Current.Find("shop/1")!.Activity);   // web is building
+        Assert.Equal(SprigActivity.None, fold.Current.Find("shop/2")!.Activity);       // paused, nothing moving
+
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"ready","port":5124}""");
+        Assert.Equal(SprigActivity.None, fold.Current.Find("shop/1")!.Activity);
+
+        // Sprig has no "stopping" workspace state: a stop shows as the apps going down, and outranks a start.
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/api","state":"stopping"}""");
+        fold.Apply("""{"type":"app","workspace":"shop/1","name":"shop/web","state":"building"}""");
+        Assert.Equal(SprigActivity.Stopping, fold.Current.Find("shop/1")!.Activity);
+    }
+
+    [Fact]
+    public void ActivityOf_StopAndPauseGoDown_EverythingElseComesUp()
+    {
+        Assert.Equal(SprigActivity.Starting, SprigActions.ActivityOf(SprigAction.Start));
+        Assert.Equal(SprigActivity.Starting, SprigActions.ActivityOf(SprigAction.Restart));
+        Assert.Equal(SprigActivity.Starting, SprigActions.ActivityOf(SprigAction.Resume));
+        Assert.Equal(SprigActivity.Stopping, SprigActions.ActivityOf(SprigAction.Stop));
+        Assert.Equal(SprigActivity.Stopping, SprigActions.ActivityOf(SprigAction.Pause));
+    }
+
     // A workspace line from a sprig that sends readiness (its starting-state change).
     private const string WithReadiness = """
         {"type":"workspace","key":"shop/1","orchestration":"shop","name":"1","label":"feat-cart","state":"running","paused":false,"dirs":[],"readiness":{"health":"HEALTH","ready":1,"started":3,"total":4,"down":DOWN}}

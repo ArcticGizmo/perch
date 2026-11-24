@@ -98,6 +98,7 @@ running the tray app.
   leading ellipsis. **Never** use plain `TextTrimming.CharacterEllipsis` on a path (it trims the name off the
   right). Applies to every path list/pill: the changed-files panel (`SessionWindow.Changes.cs`), the composer's
   `@`-mention rows, the image viewer caption, and any future one.
+- **Every link that opens in the browser also takes a middle click, which opens it in a new browser window.** Left click → `PlatformServices.UrlOpener.Open(url)`; middle click → `UrlOpener.OpenInNewWindow(url)`. This applies everywhere a URL is opened: menu items, glyphs, chips, buttons and text links. In the overlay's menus use `OverlayCanvas.UrlMenuItem(header, url)` (or `MenuItem(header, onClick, onMiddleClick)`), which wires the middle click via `WireMiddleClick`. Avalonia's `MenuItem` raises `Click` for the left button only, so the middle click has to be caught on the tunnel. Elsewhere, check `e.InitialPressMouseButton == MouseButton.Middle` on pointer release, as `LinkText` and `SettingsControls` do.
 - **Never use `TextBox.Watermark` — set placeholder text via `PlaceholderText`.** `Watermark` is obsolete
   in Avalonia (CS0618) and banned here: a source-scan test (`UiConventionTests`) fails the build if the word
   `Watermark` appears anywhere under `src/`.
