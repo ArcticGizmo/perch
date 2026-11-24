@@ -15,6 +15,15 @@ namespace Perch.Data;
 /// atomic and throttled to one per <see cref="SaveInterval"/>; the first build saves at once. Honours
 /// <see cref="AppSettings.PersistenceDisabled"/> (tests and the headless renderer never touch the real file).</para>
 ///
+/// <para><b>The archive is the exception.</b> Claude Code deletes transcripts older than its
+/// <c>cleanupPeriodDays</c>, so an "all time" built only from what's on disk would quietly become "the last N
+/// days" and cumulative achievements could never be reached. When the all-time report finds a transcript gone,
+/// its folded figures move into an archive that every report keeps counting. The archive can't be rebuilt, so it
+/// lives in its own file, <c>stats-archive.bin</c>, outside the cache's invalidation rules: a fold-version bump
+/// or a time-zone change discards the live folds but never the archive (its days stay as they were bucketed).
+/// Changing its layout means keeping a reader for the old one. A transcript that reappears is live again and
+/// leaves the archive, so nothing counts twice.</para>
+///
 /// <para>Thread-safe: every report runs inside <see cref="Use"/>, which serialises them, so the Stats window, the
 /// Achievements window and the tray's achievement check can overlap; a caller that arrives during a cold build
 /// waits for it and then gets the warm result.</para>
@@ -23,6 +32,8 @@ internal sealed class SessionStatsCache
 {
     private const int Magic = 0x43545350;   // "PSTC"
     private const int FormatVersion = 2;   // 2: TokenTotals gained CacheWrite1h
+    private const int ArchiveMagic = 0x41545350;   // "PSTA"
+    private const int ArchiveFormatVersion = 1;
     internal static readonly TimeSpan SaveInterval = TimeSpan.FromMinutes(10);
 
     private static readonly Lazy<SessionStatsCache> SharedLazy = new(() =>
@@ -44,12 +55,26 @@ internal sealed class SessionStatsCache
     private readonly HashSet<string> _seenSessions = new();
     private readonly HashSet<string> _seenTeams = new();
     private readonly HashSet<string> _seenMetas = new();
+    private readonly string? _archivePath;
+    private readonly Dictionary<string, SessionStatsService.ArchivedSession> _archivedSessions = new();
+    private readonly Dictionary<string, Dictionary<DateOnly, TeamReader.TeamDayData>> _archivedTeams = new();
+    private long _archiveGeneration, _archiveSavedGeneration;
     private bool _loaded;
     private long _savedGeneration = -1;
     private DateTime _lastSaveUtc = DateTime.MinValue;
 
-    /// <param name="path">Where to persist, or null to keep the cache in memory only.</param>
-    internal SessionStatsCache(string? path) => _path = path;
+    /// <param name="path">Where to persist, or null to keep the cache in memory only. The archive goes beside it.</param>
+    internal SessionStatsCache(string? path)
+    {
+        _path = path;
+        _archivePath = path is null ? null : Path.Combine(Path.GetDirectoryName(path) ?? "", "stats-archive.bin");
+    }
+
+    /// <summary>How many deleted transcripts (sessions + teammates) the archive is keeping.</summary>
+    internal int ArchivedFiles
+    {
+        get { lock (_gate) return _archivedSessions.Count + _archivedTeams.Count; }
+    }
 
     /// <summary>Bytes read from transcripts so far — the probe that proves a report reads only appended bytes.</summary>
     internal long BytesRead
@@ -75,6 +100,7 @@ internal sealed class SessionStatsCache
         public SessionStatsService.SessionFoldState? Session(string transcript)
         {
             cache._seenSessions.Add(transcript);
+            if (cache._archivedSessions.Remove(transcript)) cache._archiveGeneration++;
             return cache._sessions.Get(transcript, SessionStatsService.SessionFolder, s => s, null);
         }
 
@@ -84,17 +110,41 @@ internal sealed class SessionStatsCache
             foreach (var agent in TeamReader.TeammateTranscripts(transcript, cache.IsTeammate))
             {
                 cache._seenTeams.Add(agent);
+                if (cache._archivedTeams.Remove(agent)) cache._archiveGeneration++;
                 if (cache._teams.Get(agent, TeamReader.TeamFolder, s => s, null) is { } state)
                     yield return state;
             }
         }
 
-        /// <summary>Drops state for every transcript this report didn't visit — only valid after a report that
-        /// visited every transcript on disk (the all-time one), where "not visited" means "gone".</summary>
+        /// <summary>Deleted session transcripts, keyed by their old path.</summary>
+        public IReadOnlyDictionary<string, SessionStatsService.ArchivedSession> ArchivedSessions => cache._archivedSessions;
+
+        /// <summary>Deleted teammate transcripts' per-day contributions.</summary>
+        public IEnumerable<Dictionary<DateOnly, TeamReader.TeamDayData>> ArchivedTeams => cache._archivedTeams.Values;
+
+        /// <summary>Archives, then drops, the state for every transcript this report didn't visit — only valid after
+        /// a report that visited every transcript on disk (the all-time one), where "not visited" means "gone".</summary>
         public void PruneUnseen()
         {
-            foreach (var p in cache._sessions.Paths.Where(p => !cache._seenSessions.Contains(p)).ToList()) cache._sessions.Forget(p);
-            foreach (var p in cache._teams.Paths.Where(p => !cache._seenTeams.Contains(p)).ToList()) cache._teams.Forget(p);
+            foreach (var p in cache._sessions.Paths.Where(p => !cache._seenSessions.Contains(p)).ToList())
+            {
+                if (cache._sessions.Export(p)?.States[0] is SessionStatsService.SessionFoldState { Days.Count: > 0 } s)
+                {
+                    cache._archivedSessions[p] = SessionStatsService.ArchivedSession.Of(s);
+                    cache._archiveGeneration++;
+                }
+                cache._sessions.Forget(p);
+            }
+            foreach (var p in cache._teams.Paths.Where(p => !cache._seenTeams.Contains(p)).ToList())
+            {
+                if (cache._teams.Export(p)?.States[0] is TeamReader.TeamFoldState t
+                    && TeamReader.Contributions(t, _ => true) is { Count: > 0 } days)
+                {
+                    cache._archivedTeams[p] = days;
+                    cache._archiveGeneration++;
+                }
+                cache._teams.Forget(p);
+            }
             foreach (var p in cache._metas.Keys.Where(p => !cache._seenMetas.Contains(p)).ToList()) cache._metas.Remove(p);
         }
     }
@@ -109,11 +159,16 @@ internal sealed class SessionStatsCache
             {
                 _loaded = true;
                 Load();
+                LoadArchive();
             }
             _seenSessions.Clear();
             _seenTeams.Clear();
             _seenMetas.Clear();
             report(new View(this));
+            // Unthrottled: the archive changes rarely, and a crash before a throttled save would lose a deleted
+            // transcript for good.
+            if (_archivePath is not null && _archiveGeneration != _archiveSavedGeneration)
+                SaveArchive();
             if (_path is not null && Generation != _savedGeneration
                 && (_savedGeneration < 0 || DateTime.UtcNow - _lastSaveUtc >= SaveInterval))
                 SaveCore();
@@ -124,7 +179,10 @@ internal sealed class SessionStatsCache
     internal void SaveNow()
     {
         lock (_gate)
+        {
             if (_path is not null && Generation != _savedGeneration) SaveCore();
+            if (_archivePath is not null && _archiveGeneration != _archiveSavedGeneration) SaveArchive();
+        }
     }
 
     private long Generation => _sessions.Generation + _teams.Generation + _metaGeneration;
@@ -199,6 +257,116 @@ internal sealed class SessionStatsCache
             _lastSaveUtc = DateTime.UtcNow;
         }
         catch { /* damaged or foreign — start empty */ }
+    }
+
+    private void SaveArchive()
+    {
+        try
+        {
+            AtomicFile.Write(_archivePath!, stream =>
+            {
+                using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+                w.Write(ArchiveMagic);
+                w.Write(ArchiveFormatVersion);
+                w.Write(_archivedSessions.Count);
+                foreach (var (path, s) in _archivedSessions)
+                {
+                    w.Write(path);
+                    w.Write(s.Project);
+                    w.Write(s.Branch);
+                    w.Write(s.Days.Count);
+                    foreach (var (day, d) in s.Days)
+                    {
+                        w.Write(day.DayNumber);
+                        w.Write(d.Prompts);
+                        w.Write(d.Swears);
+                        w.Write(d.Whoops);
+                        w.Write(d.ToolCalls);
+                        w.Write(d.SubAgents);
+                        WriteTokens(w, d.Tokens);
+                        WriteCounts(w, d.ToolCounts);
+                        w.Write(d.Models.Count);
+                        foreach (var (model, tt) in d.Models)
+                        {
+                            w.Write(model);
+                            WriteTokens(w, tt);
+                        }
+                        w.Write(d.Active.Ticks);
+                        foreach (var secs in d.Hourly) w.Write(secs);
+                    }
+                }
+                w.Write(_archivedTeams.Count);
+                foreach (var (path, days) in _archivedTeams)
+                {
+                    w.Write(path);
+                    w.Write(days.Count);
+                    foreach (var (day, td) in days)
+                    {
+                        w.Write(day.DayNumber);
+                        w.Write(td.Teammates);
+                        WriteTokens(w, td.Tokens);
+                    }
+                }
+            });
+            _archiveSavedGeneration = _archiveGeneration;
+        }
+        catch { /* best-effort: still in memory, so the next report retries */ }
+    }
+
+    // All or nothing, like Load. A file that exists but won't read is moved aside rather than left to be
+    // overwritten by the next save: unlike the cache, nothing can rebuild it.
+    private void LoadArchive()
+    {
+        if (_archivePath is null || !File.Exists(_archivePath)) return;
+        try
+        {
+            var sessions = new Dictionary<string, SessionStatsService.ArchivedSession>();
+            var teams = new Dictionary<string, Dictionary<DateOnly, TeamReader.TeamDayData>>();
+            using (var fs = new FileStream(_archivePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var r = new BinaryReader(fs, System.Text.Encoding.UTF8))
+            {
+                if (r.ReadInt32() != ArchiveMagic || r.ReadInt32() != ArchiveFormatVersion)
+                    throw new InvalidDataException("not an archive this code reads");
+                for (int i = 0, n = r.ReadInt32(); i < n; i++)
+                {
+                    var path = r.ReadString();
+                    var s = new SessionStatsService.ArchivedSession { Project = r.ReadString(), Branch = r.ReadString() };
+                    for (int k = 0, m = r.ReadInt32(); k < m; k++)
+                    {
+                        var day = DateOnly.FromDayNumber(r.ReadInt32());
+                        var d = new SessionStatsService.ArchivedDay
+                        {
+                            Prompts = r.ReadInt32(), Swears = r.ReadInt32(), Whoops = r.ReadInt32(),
+                            ToolCalls = r.ReadInt32(), SubAgents = r.ReadInt32(), Tokens = ReadTokens(r),
+                        };
+                        ReadCounts(r, d.ToolCounts);
+                        for (int j = 0, c = r.ReadInt32(); j < c; j++)
+                            d.Models[r.ReadString()] = ReadTokens(r);
+                        d.Active = TimeSpan.FromTicks(r.ReadInt64());
+                        for (int h = 0; h < d.Hourly.Length; h++) d.Hourly[h] = r.ReadInt32();
+                        s.Days[day] = d;
+                    }
+                    sessions[path] = s;
+                }
+                for (int i = 0, n = r.ReadInt32(); i < n; i++)
+                {
+                    var path = r.ReadString();
+                    var days = new Dictionary<DateOnly, TeamReader.TeamDayData>();
+                    for (int k = 0, m = r.ReadInt32(); k < m; k++)
+                        days[DateOnly.FromDayNumber(r.ReadInt32())] =
+                            new TeamReader.TeamDayData { Teammates = r.ReadInt32(), Tokens = ReadTokens(r) };
+                    teams[path] = days;
+                }
+                if (fs.Position != fs.Length) throw new InvalidDataException("trailing bytes");
+            }
+            foreach (var (path, s) in sessions) _archivedSessions[path] = s;
+            foreach (var (path, days) in teams) _archivedTeams[path] = days;
+        }
+        catch
+        {
+            try { File.Move(_archivePath, _archivePath + ".unreadable-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"), overwrite: true); }
+            catch { }
+        }
     }
 
     private static void WriteHeader(BinaryWriter w)

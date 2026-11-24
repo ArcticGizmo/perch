@@ -124,6 +124,21 @@ public class SessionStatsServiceTests
     }
 
     [Fact]
+    public void ParseSession_CountsAgentToolAsSubAgent()
+    {
+        // Current Claude Code names the sub-agent launcher "Agent"; "Task" is only in older transcripts.
+        var path = Path.Combine(Path.GetTempPath(), $"perch-agent-{Guid.NewGuid():N}.jsonl");
+        File.WriteAllText(path,
+            """{"type":"assistant","timestamp":"2025-03-10T13:00:30Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"tool_use","id":"ag1","name":"Agent","input":{"description":"explore","subagent_type":"Explore"}}]}}""" + "\n");
+        try
+        {
+            var data = Assert.Single(SessionStatsService.ParseSession(path, null, DateTime.MaxValue).Values);
+            Assert.Equal(1, data.SubAgents);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void ActiveSpan_SumsCappedGapsPlusTail()
     {
         SessionStatsService.IdleThreshold = TimeSpan.FromMinutes(5);

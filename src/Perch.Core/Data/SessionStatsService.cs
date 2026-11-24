@@ -258,8 +258,9 @@ internal static class SessionStatsService
         return Assemble(buckets, scopeLabel, trendFrom: from, to: to, streakMeaningful: false);
     }
 
-    /// <summary>Statistics over every transcript on disk: all-time totals, streak and records, with the
-    /// trend showing the last 30 days. Covers the full project history, but through
+    /// <summary>Statistics over every transcript on disk, plus those Claude Code has since deleted (kept in the
+    /// cache's archive): all-time totals, streak and records, with the trend showing the last 30 days. Covers the
+    /// full project history, but through
     /// <see cref="SessionStatsCache"/>: only transcripts that grew since the last report are read (just their
     /// new bytes), so after the first run this is cheap.</summary>
     public static RangeReport ReportAllTime(DateOnly today) =>
@@ -279,8 +280,8 @@ internal static class SessionStatsService
     // no lower bound). Each transcript is one session; a session active on N days contributes to N
     // day-buckets. The per-(session, day) figures come from the cache, which folds each transcript
     // incrementally — so this is the same result a fresh parse would give, at the cost of reading only what
-    // was appended. `prune` (the all-time scan, which sees every transcript) drops cache state for files
-    // that no longer exist.
+    // was appended. `prune` (the all-time scan, which sees every transcript) moves the state of files that no
+    // longer exist into the cache's archive, which every report folds in after the live transcripts.
     private static Dictionary<DateOnly, DayBucket> Scan(SessionStatsCache cache, IEnumerable<string> transcripts,
         DateOnly? from, DateOnly to, bool prune = false)
     {
@@ -311,6 +312,22 @@ internal static class SessionStatsService
                     }
             }
             if (prune) view.PruneUnseen();
+
+            foreach (var (file, archived) in view.ArchivedSessions)
+            {
+                var sessionId = Path.GetFileNameWithoutExtension(file);
+                foreach (var (day, ad) in archived.Days)
+                    if (InRange(day))
+                        FoldArchived(BucketFor(day), sessionId, ad, archived.Project, archived.Branch);
+            }
+            foreach (var team in view.ArchivedTeams)
+                foreach (var (day, td) in team)
+                    if (InRange(day))
+                    {
+                        var bucket = BucketFor(day);
+                        bucket.Teammates += td.Teammates;
+                        bucket.TeammateTokens += td.Tokens;
+                    }
         });
         return map;
     }
@@ -333,7 +350,7 @@ internal static class SessionStatsService
 
     // Bump when StepSession's rules (or anything it counts — SwearFilter's list, prompt detection) change:
     // the persisted cache folded old transcripts under the old rules and must be rebuilt.
-    internal const int SessionFoldVersion = 2;   // 2: counts 1-hour cache writes (TokenTotals.CacheWrite1h)
+    internal const int SessionFoldVersion = 3;   // 3: counts the "Agent" tool as a sub-agent
 
     internal static readonly LineFolder<SessionFoldState> SessionFolder = new(() => new SessionFoldState(), StepSession);
 
@@ -439,8 +456,8 @@ internal static class SessionStatsService
                 var name = b!["name"]?.GetValue<string>() ?? "tool";
                 data.ToolCalls++;
                 data.ToolCounts[name] = data.ToolCounts.GetValueOrDefault(name) + 1;
-                if (name == "Task")
-                    data.SubAgents++;   // the Task tool is how a session spawns a sub-agent
+                if (name is "Agent" or "Task")
+                    data.SubAgents++;   // the sub-agent launcher; older Claude Code called it "Task"
             }
         }
     }
@@ -450,28 +467,43 @@ internal static class SessionStatsService
     private static void FoldSession(DayBucket bucket, string sessionId, SessionDayData s, string project, string branch)
     {
         s.EnsureSorted();
-        var span = ActiveSpan(s.Times);
+        AccumulateHourly(bucket.Hourly, s.Times);
+        FoldCounts(bucket, sessionId, project, branch, ActiveSpan(s.Times),
+            s.Prompts, s.Swears, s.Whoops, s.ToolCalls, s.SubAgents, s.Tokens, s.ToolCounts, s.Models);
+    }
+
+    private static void FoldArchived(DayBucket bucket, string sessionId, ArchivedDay a, string project, string branch)
+    {
+        for (int h = 0; h < a.Hourly.Length; h++)
+            bucket.Hourly[h] += a.Hourly[h];
+        FoldCounts(bucket, sessionId, project, branch, a.Active,
+            a.Prompts, a.Swears, a.Whoops, a.ToolCalls, a.SubAgents, a.Tokens, a.ToolCounts, a.Models);
+    }
+
+    private static void FoldCounts(DayBucket bucket, string sessionId, string project, string branch, TimeSpan span,
+        int prompts, int swears, int whoops, int toolCalls, int subAgents, TokenTotals tokens,
+        Dictionary<string, int> toolCounts, Dictionary<string, TokenTotals> models)
+    {
         bucket.Sessions.Add(sessionId);
         bucket.Active += span;
         if (span > bucket.LongestSession)
             bucket.LongestSession = span;
-        bucket.Prompts += s.Prompts;
-        bucket.Swears += s.Swears;
-        bucket.Whoops += s.Whoops;
-        if (s.Whoops > bucket.MaxSessionWhoops)
-            bucket.MaxSessionWhoops = s.Whoops;
-        bucket.ToolCalls += s.ToolCalls;
-        bucket.SubAgents += s.SubAgents;
-        bucket.Tokens += s.Tokens;
-        AccumulateHourly(bucket.Hourly, s.Times);
+        bucket.Prompts += prompts;
+        bucket.Swears += swears;
+        bucket.Whoops += whoops;
+        if (whoops > bucket.MaxSessionWhoops)
+            bucket.MaxSessionWhoops = whoops;
+        bucket.ToolCalls += toolCalls;
+        bucket.SubAgents += subAgents;
+        bucket.Tokens += tokens;
 
-        foreach (var (k, v) in s.ToolCounts)
+        foreach (var (k, v) in toolCounts)
             bucket.ToolCounts[k] = bucket.ToolCounts.GetValueOrDefault(k) + v;
-        foreach (var (k, v) in s.Models)
+        foreach (var (k, v) in models)
             bucket.Models[k] = bucket.Models.GetValueOrDefault(k, TokenTotals.Zero) + v;
-        AddGroup(bucket.Projects, project.Length > 0 ? project : "session", span, s.Tokens.Total);
+        AddGroup(bucket.Projects, project.Length > 0 ? project : "session", span, tokens.Total);
         if (branch.Length > 0)
-            AddGroup(bucket.Branches, branch, span, s.Tokens.Total);
+            AddGroup(bucket.Branches, branch, span, tokens.Total);
     }
 
     private static void AddGroup(Dictionary<string, (int sessions, TimeSpan active, long tokens)> d,
@@ -708,6 +740,57 @@ internal static class SessionStatsService
             if (!TimesUnsorted) return;
             Times.Sort();
             TimesUnsorted = false;
+        }
+    }
+
+    /// <summary>
+    /// A transcript that no longer exists, kept so lifetime totals don't shrink when Claude Code's
+    /// <c>cleanupPeriodDays</c> sweep deletes it. Unlike a live fold it can never be re-read, so it's the one
+    /// authoritative part of the stats cache (see <see cref="SessionStatsCache"/>).
+    /// </summary>
+    internal sealed class ArchivedSession
+    {
+        public string Project = "";
+        public string Branch = "";
+        public readonly Dictionary<DateOnly, ArchivedDay> Days = new();
+
+        public static ArchivedSession Of(SessionFoldState s)
+        {
+            var a = new ArchivedSession { Project = s.Project, Branch = s.Branch };
+            foreach (var (day, d) in s.Days)
+                a.Days[day] = ArchivedDay.Of(d);
+            return a;
+        }
+    }
+
+    /// <summary>One archived (session, day). The record timestamps are baked into <see cref="Active"/> and
+    /// <see cref="Hourly"/> under the idle threshold in force when it was archived: they're most of a live day's
+    /// size, and an archive that only ever grows can't afford them.</summary>
+    internal sealed class ArchivedDay
+    {
+        public int Prompts;
+        public int Swears;
+        public int Whoops;
+        public int ToolCalls;
+        public int SubAgents;
+        public TokenTotals Tokens = TokenTotals.Zero;
+        public readonly Dictionary<string, int> ToolCounts = new();
+        public readonly Dictionary<string, TokenTotals> Models = new();
+        public TimeSpan Active;
+        public readonly int[] Hourly = new int[24];
+
+        public static ArchivedDay Of(SessionDayData d)
+        {
+            d.EnsureSorted();
+            var a = new ArchivedDay
+            {
+                Prompts = d.Prompts, Swears = d.Swears, Whoops = d.Whoops, ToolCalls = d.ToolCalls,
+                SubAgents = d.SubAgents, Tokens = d.Tokens, Active = ActiveSpan(d.Times),
+            };
+            foreach (var (k, v) in d.ToolCounts) a.ToolCounts[k] = v;
+            foreach (var (k, v) in d.Models) a.Models[k] = v;
+            AccumulateHourly(a.Hourly, d.Times);
+            return a;
         }
     }
 
