@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.19] - 2026-11-24
+
+- Sub-agent achievements count again (Claude Code renamed the tool and told nobody)
+- Lifetime stats keep sessions after Claude Code deletes their transcripts (all time now means all time)
+
+---
+
 ## [v0.6.18] - 2026-11-24
 
 - A paused sprig workspace's icon goes grey with a small yellow pause badge (yellow alone was doing too much)
