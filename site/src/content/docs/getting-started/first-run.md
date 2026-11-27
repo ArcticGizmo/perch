@@ -72,7 +72,7 @@ things later and harder to notice what you'd turn off.
 | Alerts | Desktop notifications, Notify when done, Notify when waiting for input | Chime when done, Chime when waiting, Notify on API error, Notify when a PR finishes, is reviewed, or is approved, Todo reminders | Chimes for API errors and PR events, Flash a PR state banner, External push (ntfy), Push while screen locked, Notify when a friend posts, Notify when challenged to a game |
 | Stats & tools | Today's stats in tray | Estimated cost, Todos | |
 | Integrations | | Hypertree, Pull requests, Jira ticket | |
-| Fun & social | | Perch reacts, Achievement reveal card | Achievement toasts, Upside-down quick links, Social feed, Show large reactions |
+| Fun & social | | Perch reacts, Achievement reveal card | Achievement toasts, Social feed, Show large reactions |
 
 The Quick Start only manages these switches. It never changes anything else, such as thresholds, your quick
 links or your accounts.

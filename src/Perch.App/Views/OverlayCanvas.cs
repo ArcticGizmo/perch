@@ -939,11 +939,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Quick-links strip: the enabled subset of the user's links, their decoded icons (null → draw
     // initials), and the hover index. Icons are resolved to PNG file paths by the app (off the platform
-    // seam) and decoded here once per SetQuickLinks. The source icons render upside-down, so each is
-    // flipped 180° unless the user opts into the upside-down look.
+    // seam) and decoded here once per SetQuickLinks.
     private IReadOnlyList<QuickLink> _quickLinks = [];
     private List<Bitmap?> _quickLinkIcons = [];
-    private bool _upsideDownQuickLinks;
     private int _hoveredQuickLink = -1;
 
     // Real host-app icons for the origin glyph — an IDE (keyed by the host's executable path) or Claude
@@ -1103,14 +1101,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _quickLinkIcons.Add(DecodeIcon(i < iconFiles.Count ? iconFiles[i] : null));
         _hoveredQuickLink = -1;
         RemeasurePanel();
-    }
-
-    /// <summary>Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.</summary>
-    public void SetUpsideDownQuickLinks(bool upsideDown)
-    {
-        if (_upsideDownQuickLinks == upsideDown) return;
-        _upsideDownQuickLinks = upsideDown;
-        InvalidateVisual();
     }
 
     private static Bitmap? DecodeIcon(string? file)
@@ -2509,8 +2499,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // ── Quick-links row ────────────────────────────────────────────────────────
     // The enabled quick-link icons side-by-side, centred horizontally. Each slot shows its pre-decoded
-    // icon, or drawn initials over a name-derived colour when no icon resolved. The source icons render
-    // upside-down, so each is mirrored vertically about its own centre unless the user opts into upside-down.
+    // icon, or drawn initials over a name-derived colour when no icon resolved.
     private void DrawQuickLinksRow(DrawingContext ctx, double width)
     {
         const double IconSize = 16, IconGap = 14, HitPad = 4;
@@ -2545,21 +2534,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
             if (icon != null)
             {
-                if (_upsideDownQuickLinks)
-                {
-                    ctx.DrawImage(icon, iconRect);
-                }
-                else
-                {
-                    // Source icons are vertically flipped (upside-down); mirror about the horizontal
-                    // axis to right them. A full 180° rotation would also flip them horizontally.
-                    double cy = iconY + IconSize / 2;
-                    var flip = Matrix.CreateTranslation(0, -cy)
-                             * Matrix.CreateScale(1, -1)
-                             * Matrix.CreateTranslation(0, cy);
-                    using (ctx.PushTransform(flip))
-                        ctx.DrawImage(icon, iconRect);
-                }
+                ctx.DrawImage(icon, iconRect);
             }
             else
             {
@@ -2911,7 +2886,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
             if (tinted is not null)
             {
-                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted, flip: !session.IsPerchControlled);
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
             }
             else
             {
@@ -3531,25 +3506,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
-    // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
-    // out vertically flipped (see the quick-links strip), so by default mirror about the horizontal axis to
-    // right them; a bitmap decoded straight from a PNG asset (the Perch mark) is already upright, so it opts out.
-    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon, bool flip = true)
+    // the status-dot centre — so it lines up with the plain dots on other rows.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
     {
         var src = icon.Size;
         double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
-        var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
-        if (!flip)
-        {
-            ctx.DrawImage(icon, new Rect(src), dst);
-            return;
-        }
-        var mirror = Matrix.CreateTranslation(0, -cy)
-                   * Matrix.CreateScale(1, -1)
-                   * Matrix.CreateTranslation(0, cy);
-        using (ctx.PushTransform(mirror))
-            ctx.DrawImage(icon, new Rect(src), dst);
+        ctx.DrawImage(icon, new Rect(src), new Rect(cx - w / 2, cy - h / 2, w, h));
     }
 
     // VS Code: the blue folded-ribbon silhouette — a vertical spine on the left, with the two ribbon tips

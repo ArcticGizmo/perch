@@ -3472,12 +3472,10 @@ public partial class App : Application
     // Applies the enabled links to the overlay strip at once (initials), then resolves their icons off the UI
     // thread (the first shell lookup enumerates the Start Menu, ~1s) and swaps them in. Showing the links before
     // their icons means one link whose icon lookup fails or stalls can't hide the rest. Always sets the strip
-    // (an empty list clears it), so a link removed or disabled in Settings disappears immediately; also syncs
-    // the upside-down flag.
+    // (an empty list clears it), so a link removed or disabled in Settings disappears immediately.
     private void ReloadQuickLinks(AppSettings settings)
     {
         if (_overlay is null || _quickLinkLauncher is null) return;
-        _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
 
         var links = (settings.QuickLinks ?? []).Where(l => l.Enabled).ToList();
         int generation = ++_quickLinksGeneration;

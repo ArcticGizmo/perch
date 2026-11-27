@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Quick links no longer all vanish because one of them points at something Windows is slow to draw an icon for
+- Quick-link and app icons now come out of Windows the right way up, so the upside-down setting has retired: there's nothing left to invert
+
 ---
 
 ## [v0.6.20] - 2026-11-27

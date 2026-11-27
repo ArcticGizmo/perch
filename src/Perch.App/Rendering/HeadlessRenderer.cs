@@ -1795,8 +1795,7 @@ internal static class HeadlessRenderer
                 c.SetOriginIcon(exe, provider.GetIconFile("", null, exe, 32));
         }
         if (SampleData.Sessions().Any(s => s.IsDesktop))
-            c.SetOriginIcon(OverlayCanvas.DesktopOriginKey, provider.GetIconFile("Claude", null, null, 32));
-    }
+            c.SetOriginIcon(OverlayCanvas.DesktopOriginKey, provider.GetIconFile("Claude", null, null, 32));    }
 
     private static void RenderControl(Control control, string path, double dpi)
     {
@@ -1935,8 +1934,8 @@ internal static class HeadlessRenderer
 
     private static (IReadOnlyList<QuickLink> links, IReadOnlyList<string?> icons) SampleQuickLinks(string outDir)
     {
-        // Write the bundled brand icon to a PNG file so the icon-drawing path (decode + 180° flip) is
-        // exercised; the other two links carry no icon, so they draw initials.
+        // Write the bundled brand icon to a PNG file so the icon-drawing path (decode + draw) is exercised;
+        // the other two links carry no icon, so they draw initials.
         string brandPng = Path.Combine(outDir, "sample_quicklink.png");
         try
         {

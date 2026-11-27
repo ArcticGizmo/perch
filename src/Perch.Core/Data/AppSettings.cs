@@ -500,10 +500,6 @@ internal sealed class AppSettings
     // (non-null) list means the user deliberately removed every link and is left alone.
     public List<QuickLink>? QuickLinks { get; set; }
 
-    // Renders the quick-link icons rotated 180°. Purely for fun — the icons happen to look upside down
-    // already, so this leans in. Off by default.
-    public bool UpsideDownQuickLinks { get; set; }
-
     // User-defined initial placement for the two overlay presentations, set from the "Set initial
     // placements…" editor (header right-click). Each is stored relative to the nearest monitor corner
     // (anchor + DIP offset; see OverlayPlacement) so it survives a resolution change. Null means "use

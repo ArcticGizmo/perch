@@ -1825,12 +1825,6 @@ internal sealed partial class SettingsWindow : Window
         _quickLinkPresets = SettingsUi.ButtonRow();
         page.Children.Add(_quickLinkPresets);
 
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Upside-down icons",
-            SaveToggle(_settings.UpsideDownQuickLinks, v => { _settings.UpsideDownQuickLinks = v; _hooks.QuickLinksChanged?.Invoke(); })));
-        page.Children.Add(SettingsUi.BodyText("For when the world feels right way up and you'd rather it didn't."));
-
         RebuildQuickLinksList();
     }
 

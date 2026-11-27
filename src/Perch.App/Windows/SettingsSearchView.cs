@@ -30,7 +30,6 @@ internal static class SettingsLiveApply
             case "system-metrics":
             case "session-metrics":
             case "include-subprocess-metrics": hooks.MetricsChanged?.Invoke(); break;
-            case "upside-down-quick-links":    hooks.QuickLinksChanged?.Invoke(); break;
             case "feeds":                      hooks.FeedsChanged?.Invoke(); break;
         }
 

@@ -18,7 +18,8 @@ public interface IAppIconProvider
     /// null when no icon resolves (the strip then draws name-derived initials). The three inputs mirror
     /// a quick link's identity: its display <paramref name="name"/> (used for a Start-Menu/Store lookup),
     /// an <paramref name="explicitPath"/> if the user pinned one, and the <paramref name="resolvedPath"/>
-    /// discovered for a well-known app. Best-effort; never throws.
+    /// discovered for a well-known app. Best-effort; never throws. The PNG is upright: callers draw it as
+    /// is, so any platform-specific row order (a bottom-up Windows DIB) is corrected behind the seam.
     /// </summary>
     string? GetIconFile(string name, string? explicitPath, string? resolvedPath, int pixelSize);
 

@@ -173,7 +173,6 @@ how often Perch checks with **Service status poll interval**.
 | Setting | What it does |
 | --- | --- |
 | Quick links | The launcher icons on the panel. Edited on the Quick Links page. |
-| Upside-down quick links | Rotate the quick-link icons 180 degrees. |
 | Todos | A Todo line on the panel counting open and overdue to-dos. Click it to open the list. |
 | Todo reminders | A desktop notification when a to-do's due time arrives. |
 | GitHub alerts | A panel line for open pull requests that need you, with the GitHub dashboard behind it. Uses the `gh` CLI. |

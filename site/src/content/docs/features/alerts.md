@@ -97,7 +97,6 @@ Quiet mode switches off these settings while it lasts, and puts them back afterw
 
 - Perch reacts
 - Achievement reveal card and Achievement toasts
-- Upside-down quick links
 - Desktop basketball
 - Notify on new feed entries
 - Social feed, Notify when a friend posts and Show large reactions, along with the other social toasts

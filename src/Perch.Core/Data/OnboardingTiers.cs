@@ -112,7 +112,6 @@ internal static class OnboardingTiers
             new OnboardingItem("perch-reacts",          OnboardingTier.Intermediate),
             new OnboardingItem("notify-achievement",    OnboardingTier.Intermediate),
             new OnboardingItem("achievement-toasts",    OnboardingTier.KitchenSink),
-            new OnboardingItem("upside-down-quick-links", OnboardingTier.KitchenSink),
             new OnboardingItem("social",                OnboardingTier.KitchenSink),
             new OnboardingItem("social-large-reactions", OnboardingTier.KitchenSink),
         ]),
