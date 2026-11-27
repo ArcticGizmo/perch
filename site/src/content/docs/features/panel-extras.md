@@ -16,16 +16,15 @@ You choose the order of these sections by dragging them in the Settings live pre
 
 ## Quick links
 
-Quick links are a row of app icons on the panel. Click one to open that app, or to bring it to the front if it
-is already running. The row also always holds a note button that opens your scratch pad.
+Quick links are a row of icons on the panel. A link can be an app, a file or folder, or a web page. The row also always holds a note button that opens your scratch pad.
 
-To set them up, open **Settings → Quick Links**:
+To set them up, open **Settings → Quick Links** and click **Add quick link…**, then choose what the link points at:
 
-- Click **Add quick link…** and name the link after the app. If an installed app matches that name, Perch finds
-  its icon and the program path is optional. Otherwise choose the program with **Browse…**.
-- Click a preset button (**+ GitKraken**, **+ Slack**, **+ Microsoft Teams**, **+ Outlook**) to add one of the
-  apps Perch knows how to find.
-- Use a link's toggle to hide it without removing it, or **Edit** and **Remove** to change it.
+- **App**: name the link after the app. If an installed app matches that name, Perch finds its icon and the program path is optional. Otherwise choose the program with **Browse…**. Clicking the link opens the app, or brings it to the front if it is already running.
+- **File or folder**: choose a file with **File…** or a folder with **Folder…**. Clicking the link opens the file with its default app, or the folder in your file manager. A file link only opens files that app views, such as pictures, documents and PDFs. A program or script is shown in its folder instead, so add those as an App.
+- **Web link**: type an address. Clicking the link opens it in your browser, and a middle click opens it in a new browser window. Its icon is the site's own, fetched once a week.
+
+You can also click a preset button (**+ GitKraken**, **+ Slack**, **+ Microsoft Teams**, **+ Outlook**) to add one of the apps Perch knows how to find. Use a link's toggle to hide it without removing it, or **Edit** and **Remove** to change it.
 
 :::note
 The presets look for the usual Windows install locations of those apps. On any platform you can still add a
@@ -172,7 +171,7 @@ how often Perch checks with **Service status poll interval**.
 
 | Setting | What it does |
 | --- | --- |
-| Quick links | The launcher icons on the panel. Edited on the Quick Links page. |
+| Quick links | The panel's icons for apps, files, folders and web pages. Edited on the Quick Links page. |
 | Todos | A Todo line on the panel counting open and overdue to-dos. Click it to open the list. |
 | Todo reminders | A desktop notification when a to-do's due time arrives. |
 | GitHub alerts | A panel line for open pull requests that need you, with the GitHub dashboard behind it. Uses the `gh` CLI. |

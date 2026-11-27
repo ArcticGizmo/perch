@@ -1086,9 +1086,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Update(_sessions);
     }
 
-    /// <summary>Raised when a quick-link icon is clicked; the app wires this to the launcher's
-    /// LaunchOrFocus. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
-    internal event Action<QuickLink>? QuickLinkActivated;
+    /// <summary>Raised when a quick-link icon is clicked, with true for a middle click; the app opens the
+    /// link. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
+    internal event Action<QuickLink, bool>? QuickLinkActivated;
 
     /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links and their
     /// resolved icon file paths — a null path draws name-derived initials. Called on the UI thread on
@@ -1098,9 +1098,25 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _quickLinks = links;
         _quickLinkIcons = new List<Bitmap?>(links.Count);
         for (int i = 0; i < links.Count; i++)
-            _quickLinkIcons.Add(DecodeIcon(i < iconFiles.Count ? iconFiles[i] : null));
+            _quickLinkIcons.Add(DecodeQuickLinkIcon(i < iconFiles.Count ? iconFiles[i] : null));
         _hoveredQuickLink = -1;
         RemeasurePanel();
+    }
+
+    // Quick-link icons come from the shell cache, a downloaded favicon (vetted ≤1024px) or an imported icon
+    // (stored at 64px), and are drawn at 16 DIP; decoding to a fixed small width keeps a large favicon cheap and
+    // still sharp at high display scales.
+    private const int QuickLinkDecodeWidth = 64;
+
+    private static Bitmap? DecodeQuickLinkIcon(string? file)
+    {
+        if (string.IsNullOrEmpty(file)) return null;
+        try
+        {
+            using var stream = File.OpenRead(file);
+            return Bitmap.DecodeToWidth(stream, QuickLinkDecodeWidth);
+        }
+        catch { return null; }
     }
 
     private static Bitmap? DecodeIcon(string? file)
@@ -4528,14 +4544,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // Middle-click the Jira glyph to open the ticket in a fresh browser window (mirrors the middle-click
-        // "open in new window" the URL menu items offer). Only the Jira glyph takes a middle click today.
+        // Middle-click the Jira glyph, or a quick link, to open it in a fresh browser window (mirrors the
+        // middle-click "open in new window" the URL menu items offer). A non-web quick link treats it as a click.
         if (props.IsMiddleButtonPressed)
         {
             int jiraMid = HitRect(_jiraRects, e.GetPosition(this));
             if (jiraMid >= 0 && _rows[jiraMid].Session is { JiraTicket: { } jira })
             {
                 PlatformServices.UrlOpener.OpenInNewWindow(jira.Url);
+                e.Handled = true;
+                return;
+            }
+            int qlMid = HitTestQuickLink(e.GetPosition(this));
+            if (qlMid >= 0 && qlMid < _quickLinks.Count)
+            {
+                QuickLinkActivated?.Invoke(_quickLinks[qlMid], true);
                 e.Handled = true;
                 return;
             }
@@ -4973,7 +4996,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int ql = HitTestQuickLink(p);
         if (ql >= 0 && ql < _quickLinks.Count)
         {
-            QuickLinkActivated?.Invoke(_quickLinks[ql]);
+            QuickLinkActivated?.Invoke(_quickLinks[ql], false);
             return;
         }
 

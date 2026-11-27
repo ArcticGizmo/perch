@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Quick links no longer all vanish because one of them points at something Windows is slow to draw an icon for
 - Quick-link and app icons now come out of Windows the right way up, so the upside-down setting has retired: there's nothing left to invert
+- Quick links can now point at a file, a folder or a web page, not just an app. Web links wear the site's own icon and open a new window on a middle click
 
 ---
 

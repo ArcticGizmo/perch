@@ -440,6 +440,7 @@ internal static class HeadlessRenderer
         RenderGitHubAlertsWindow(outDir);
         RenderPrSessionWindow(outDir);
         RenderFeedDialog(outDir);
+        RenderQuickLinkDialog(outDir);
         RenderFeedStory(outDir);
         RenderLinkPopup(outDir);
 
@@ -4037,6 +4038,43 @@ internal static class HeadlessRenderer
             LinkText.DismissPopup();
             w.Close();
         }
+    }
+
+    // The quick-link dialog in each kind: a new app link, an old app link whose "program" is a picture (offering
+    // the switch to a file link), a file link, a web link, and a web link with an address that isn't one. The icon
+    // seam is stubbed so the app-name lookup never touches the shell.
+    private static void RenderQuickLinkDialog(string outDir)
+    {
+        Capture("quicklink_dialog_app_1x.png", null);
+        Capture("quicklink_dialog_app_convert_1x.png",
+            new QuickLink { Name = "Office Layout", ExePath = @"C:\Users\me\Documents\office-layout.png" });
+        Capture("quicklink_dialog_file_1x.png",
+            new QuickLink { Name = "Office Layout", Kind = QuickLinkKind.File, Target = @"C:\Users\me\Documents\files\office-layout.png" });
+        Capture("quicklink_dialog_url_1x.png",
+            new QuickLink { Name = "Perch docs", Kind = QuickLinkKind.Url, Target = "https://arcticgizmo.github.io/perch/" });
+        Capture("quicklink_dialog_url_invalid_1x.png",
+            new QuickLink { Name = "Calc", Kind = QuickLinkKind.Url, Target = "javascript:alert(1)" });
+
+        void Capture(string file, QuickLink? link)
+        {
+            var w = new QuickLinkDialog(link, new NoIconProvider());
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    private sealed class NoIconProvider : Perch.Platform.IAppIconProvider
+    {
+        public string? GetIconFile(string name, string? explicitPath, string? resolvedPath, int pixelSize) => null;
+        public bool TryLaunchByName(string name) => false;
     }
 
     // The Add feed dialog after a check: a good feed, a web page given by mistake (with its hint), plain http (the

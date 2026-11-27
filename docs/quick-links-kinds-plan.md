@@ -1,6 +1,6 @@
 # Quick links: link kinds, custom icons, upright icons
 
-Status: **plan**. Phase 1 is built in code (uncommitted on `main`); phases 2–4 are not started.
+Status: on branch `quick-links-kinds`. Phases 1–3 are built and committed; phase 4 is in progress. Testing: `docs/quick-links-testing.md`.
 
 ## Why
 

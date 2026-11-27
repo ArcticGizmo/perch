@@ -1803,9 +1803,9 @@ internal sealed partial class SettingsWindow : Window
     private void BuildQuickLinksPage(StackPanel page)
     {
         page.Children.Add(SettingsUi.BodyText(
-            "Quick links are a row of icons below the usage bars in the overlay. Click an icon to open that " +
-            "app, or bring it to the front if it's already running. Add a shortcut to any program on your PC; " +
-            "use the toggle to show or hide one without removing it."));
+            "Quick links are a row of icons below the usage bars in the overlay. A link can be an app (opened, or " +
+            "brought to the front if it's already running), a file or folder, or a web page. Use the toggle to " +
+            "show or hide one without removing it."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -1865,7 +1865,7 @@ internal sealed partial class SettingsWindow : Window
         textStack.Children.Add(new TextBlock
         {
             Text = QuickLinkSubtitle(link), FontSize = 12, Foreground = Palette.MutedBrush,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
         });
         Grid.SetColumn(textStack, 1);
 
@@ -1890,6 +1890,12 @@ internal sealed partial class SettingsWindow : Window
 
     private static string QuickLinkSubtitle(QuickLink link)
     {
+        if (link.Kind == QuickLinkKind.Url)
+            return QuickLinkRouting.NormalizeUrl(link.Target) ?? link.Target + "   ⚠ not a web address";
+        if (link.Kind == QuickLinkKind.File)
+            return File.Exists(link.Target) || Directory.Exists(link.Target)
+                ? link.Target
+                : link.Target + "   ⚠ not found";
         if (!string.IsNullOrWhiteSpace(link.ExePath))
             return File.Exists(link.ExePath) ? link.ExePath : link.ExePath + "   ⚠ file not found";
         var resolved = link.ResolveExe();
@@ -1922,13 +1928,12 @@ internal sealed partial class SettingsWindow : Window
         bool ok = await dlg.ShowDialog<bool>(this);
         if (!ok) return;
 
-        if (existing == null)
-            _quickLinks.Add(new QuickLink { Name = dlg.LinkName, ExePath = dlg.LinkPath, Enabled = true });
-        else
-        {
-            existing.Name = dlg.LinkName;
-            existing.ExePath = dlg.LinkPath;
-        }
+        var link = existing ?? new QuickLink { Enabled = true };
+        link.Name = dlg.LinkName;
+        link.Kind = dlg.LinkKind;
+        link.ExePath = dlg.LinkKind == QuickLinkKind.App ? dlg.LinkPath : "";
+        link.Target = dlg.LinkTarget;
+        if (existing == null) _quickLinks.Add(link);
         RebuildQuickLinksList();
         RaiseQuickLinksChanged();
     }

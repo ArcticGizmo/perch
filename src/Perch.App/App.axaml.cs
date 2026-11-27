@@ -519,8 +519,9 @@ public partial class App : Application
             _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
-            _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
-            _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
+            _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider,
+                PlatformServices.FileRevealer, PlatformServices.UrlOpener);
+            _overlay.Canvas.QuickLinkActivated += OnQuickLinkActivated;
 
             // Hypertree strip: a click asks Hypertree's tray (via its CLI) to open its map.
             _overlay.Canvas.HypertreeMapRequested += OnHypertreeMapRequested;
@@ -3468,11 +3469,14 @@ public partial class App : Application
 
     // Bumped on every reload so a slow icon pass from an earlier edit can't overwrite a newer strip.
     private int _quickLinksGeneration;
+    // Created on first use, so nobody without a web link pays for its HTTP clients.
+    private QuickLinkFavicons? _quickLinkFavicons;
 
     // Applies the enabled links to the overlay strip at once (initials), then resolves their icons off the UI
     // thread (the first shell lookup enumerates the Start Menu, ~1s) and swaps them in. Showing the links before
-    // their icons means one link whose icon lookup fails or stalls can't hide the rest. Always sets the strip
-    // (an empty list clears it), so a link removed or disabled in Settings disappears immediately.
+    // their icons means one link whose icon lookup fails or stalls can't hide the rest. Local icons land first;
+    // web links' favicons follow in a second pass, so a slow site never holds up the app icons. Always sets the
+    // strip (an empty list clears it), so a link removed or disabled in Settings disappears immediately.
     private void ReloadQuickLinks(AppSettings settings)
     {
         if (_overlay is null || _quickLinkLauncher is null) return;
@@ -3483,18 +3487,38 @@ public partial class App : Application
         if (links.Count == 0) return;
 
         var launcher = _quickLinkLauncher;
-        System.Threading.Tasks.Task.Run(() =>
+        var favicons = links.Any(l => l.Kind == QuickLinkKind.Url)
+            ? _quickLinkFavicons ??= new QuickLinkFavicons(new Perch.Feeds.FeedFetcher())
+            : null;
+
+        void Apply(List<string?> icons) => Dispatcher.UIThread.Post(() =>
+        {
+            if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons);
+        });
+
+        System.Threading.Tasks.Task.Run(async () =>
         {
             var icons = links.Select(l =>
             {
                 try { return launcher.IconFile(l, 32); }
                 catch { return null; }
             }).ToList();
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons);
-            });
+            Apply(icons);
+            if (favicons is null) return;
+
+            var fetched = await System.Threading.Tasks.Task.WhenAll(links.Select(l =>
+                l.Kind == QuickLinkKind.Url ? favicons.GetAsync(l.Target) : System.Threading.Tasks.Task.FromResult<string?>(null)));
+            Apply(icons.Select((icon, i) => icon ?? fetched[i]).ToList());
         });
+    }
+
+    // A quick-link click (middle = a web link in a new window). A file link whose file has gone says so rather
+    // than doing nothing.
+    private void OnQuickLinkActivated(QuickLink link, bool middleClick)
+    {
+        if (_quickLinkLauncher?.Open(link, middleClick) == QuickLinkOpenResult.Missing)
+            _notifier?.Show("Quick link", $"Can't find {link.Target}. Edit the link in Settings → Quick Links.",
+                ToastLevel.Warning, null, null);
     }
 
     // Renders the real host-app icon for the origin glyph — an IDE-hosted session (from the editor's
