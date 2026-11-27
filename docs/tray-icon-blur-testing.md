@@ -28,3 +28,15 @@ Restart Perch after each scale change: Avalonia only reloads the tray icon on a 
 2. Repeat at 175 %, then at 100 % and 150 %.
 3. With Perch running, change the scale without restarting. The icon should stay sharp, even if its size lags until the next restart.
 4. Check that the Perch window icons and the taskbar button still look as they did. They still use `icon.ico`.
+
+## `.ico` frames
+
+`icon.ico` now holds uncompressed 32bpp BMP frames below 256 px and a PNG frame only at 256, as Shrike's does. Windows mishandles PNG-compressed small frames, so they can render low-res.
+
+| Where | Before | After |
+|---|---|---|
+| Explorer, Details or Small icons view of `perch.exe` | Can look soft | Sharp 16/24 px frame |
+| Taskbar button and Alt+Tab, at 100 % and 150 % | Can look soft | Sharp |
+| Session or Settings window title-bar icon | Can look soft | Sharp |
+
+Explorer caches icons, so after installing, refresh the folder view or sign out and in before comparing.

@@ -77,16 +77,25 @@ static void WritePng(SvgDocument doc, Fit fit, string path, int size)
     Console.WriteLine($"  {Path.GetFileName(path)}  {size}x{size}");
 }
 
-// Writes a Vista+ ICO whose frames are PNG-compressed (keeps the file small and supports 256px).
+// Writes an ICO with uncompressed 32bpp BMP/DIB frames below 256px and a PNG frame at 256. Win32 icon loading
+// and the .NET <ApplicationIcon> PE embedding mishandle PNG-compressed small frames, which then render
+// low-res in the taskbar and Explorer; 256 stays PNG to keep the file a sane size.
 static void WriteIco(SvgDocument doc, Fit fit, string path, int[] sizes)
 {
     var frames = new List<byte[]>();
     foreach (var size in sizes)
     {
         using var bmp = Render(doc, fit, size);
-        using var ms = new MemoryStream();
-        bmp.Save(ms, ImageFormat.Png);
-        frames.Add(ms.ToArray());
+        if (size >= 256)
+        {
+            using var ms = new MemoryStream();
+            bmp.Save(ms, ImageFormat.Png);
+            frames.Add(ms.ToArray());
+        }
+        else
+        {
+            frames.Add(BuildBmpFrame(bmp, size));
+        }
     }
 
     using var fs = File.Create(path);
@@ -116,7 +125,38 @@ static void WriteIco(SvgDocument doc, Fit fit, string path, int[] sizes)
     foreach (var frame in frames)
         w.Write(frame);
 
-    Console.WriteLine($"  {Path.GetFileName(path)}  [{string.Join(", ", sizes)}]");
+    Console.WriteLine($"  {Path.GetFileName(path)}  [{string.Join(", ", sizes)}]  (BMP < 256, PNG 256)");
+}
+
+// A 32bpp BGRA DIB frame for an ICO: a BITMAPINFOHEADER with doubled height, bottom-up colour rows, then
+// a zeroed 1bpp AND mask (transparency comes from the alpha channel, not the mask).
+static byte[] BuildBmpFrame(Bitmap bmp, int size)
+{
+    var locked = bmp.LockBits(new Rectangle(0, 0, size, size), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+    var stride = locked.Stride;
+    var pixels = new byte[stride * size];
+    System.Runtime.InteropServices.Marshal.Copy(locked.Scan0, pixels, 0, pixels.Length);
+    bmp.UnlockBits(locked);
+
+    using var ms = new MemoryStream();
+    using var w = new BinaryWriter(ms);
+    w.Write(40);          // biSize
+    w.Write(size);        // biWidth
+    w.Write(size * 2);    // biHeight (colour rows + mask rows)
+    w.Write((ushort)1);   // biPlanes
+    w.Write((ushort)32);  // biBitCount
+    w.Write(0);           // biCompression = BI_RGB
+    w.Write(0);           // biSizeImage
+    w.Write(0); w.Write(0); w.Write(0); w.Write(0);   // x/y pels-per-metre, clrUsed, clrImportant
+
+    for (int y = size - 1; y >= 0; y--)   // bottom-up; Format32bppArgb rows are already BGRA
+        w.Write(pixels, y * stride, size * 4);
+
+    var maskRow = new byte[((size + 31) / 32) * 4];   // 1bpp AND mask, padded to 4 bytes, all zero = opaque
+    for (int y = 0; y < size; y++)
+        w.Write(maskRow, 0, maskRow.Length);
+
+    return ms.ToArray();
 }
 
 // Walks up from the tool's binary location to the directory that holds perch.svg.
