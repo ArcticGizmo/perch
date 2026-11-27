@@ -41,6 +41,13 @@ public interface IWindowChrome
     /// the docked column too tall, drooping under the taskbar). Null when unavailable (off-platform stub).</summary>
     MonitorGeometry? GetMonitorGeometryAt(int x, int y);
 
+    /// <summary>Makes the UI framework re-read its cached screen list (bounds, work area and scale) through
+    /// <paramref name="handle"/>'s window. Avalonia's Win32 backend refreshes that process-wide cache only on
+    /// <c>WM_DISPLAYCHANGE</c>, which a display-scale change doesn't send, so menus, the tray menu and the
+    /// overlay's hints would keep placing themselves with the old scale. On Windows this posts
+    /// <c>WM_DISPLAYCHANGE</c> to the window; elsewhere a no-op. A zero handle is ignored.</summary>
+    void RefreshScreenCache(IntPtr handle);
+
     /// <summary>Reads, live from the OS, the geometry of the monitor showing the current <em>foreground</em>
     /// window — the window that has focus right now. When <c>perch</c> is run at a terminal the foreground
     /// window is that terminal, so this is how the CLI process learns which monitor the launch came from (to

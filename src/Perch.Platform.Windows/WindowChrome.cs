@@ -158,6 +158,16 @@ public sealed class WindowChrome : IWindowChrome
         SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    private const uint WM_DISPLAYCHANGE = 0x007E;
+
+    // Avalonia's handler ignores the message's parameters and just invalidates its screen cache, so zeros do.
+    public void RefreshScreenCache(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return;
+        PostMessage(handle, WM_DISPLAYCHANGE, IntPtr.Zero, IntPtr.Zero);
+    }
+
     /// <summary>Turns the OS window-manager's rounded corners on/off (Win11 <c>DWMWA_WINDOW_CORNER_PREFERENCE</c>)
     /// so the docked full-height column can sit square and flush to the screen edge. Best-effort; a zero
     /// handle (or a pre-Win11 OS, where the attribute is simply ignored) leaves the default.</summary>

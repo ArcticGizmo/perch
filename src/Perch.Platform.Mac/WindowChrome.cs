@@ -48,6 +48,9 @@ public sealed class WindowChrome : IWindowChrome
 
     /// <summary>Lifts the window to the front of its level without activating it, so a hint shows above
     /// the overlay. <c>orderFrontRegardless</c> raises a window without making it key/main. Best-effort.</summary>
+    /// <summary>No-op: Avalonia's macOS backend tracks screen changes itself.</summary>
+    public void RefreshScreenCache(IntPtr handle) { }
+
     public void BringToTopNoActivate(IntPtr handle)
     {
         try

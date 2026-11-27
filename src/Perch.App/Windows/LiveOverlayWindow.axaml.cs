@@ -70,8 +70,10 @@ public partial class LiveOverlayWindow : Window
         // zero and leaves `handled` false so Avalonia's own WndProc still runs.
         if (OperatingSystem.IsWindows())
         {
-            _wndProcHook = (IntPtr _, uint msg, IntPtr wParam, IntPtr _, ref bool _) =>
+            _wndProcHook = (IntPtr hwnd, uint msg, IntPtr wParam, IntPtr _, ref bool _) =>
             {
+                if (msg == WM_DPICHANGED && ScreenScaleIsStale(wParam))
+                    PlatformServices.WindowChrome.RefreshScreenCache(hwnd);
                 if (msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED
                     || (msg == WM_SETTINGCHANGE && (uint)wParam == SPI_SETWORKAREA))
                     Canvas.OnDisplayChanged();
@@ -79,6 +81,16 @@ public partial class LiveOverlayWindow : Window
             };
             global::Avalonia.Controls.Win32Properties.AddWndProcHookCallback(this, _wndProcHook);
         }
+    }
+
+    // WM_DPICHANGED fires both when this monitor's scale changes and when the overlay is dragged onto a monitor
+    // with a different scale. Only the first leaves Avalonia's cached scale for the monitor wrong, and only that
+    // one should refresh it: a refresh raises Screens.Changed, which re-places the overlay, and doing that
+    // mid-drag would fight the drag. The new DPI is in wParam's low word.
+    private bool ScreenScaleIsStale(IntPtr wParam)
+    {
+        double newScale = (wParam.ToInt64() & 0xFFFF) / 96.0;
+        return Screens.ScreenFromWindow(this) is { } screen && Math.Abs(screen.Scaling - newScale) > 0.001;
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

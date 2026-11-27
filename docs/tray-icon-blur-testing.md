@@ -40,3 +40,21 @@ Restart Perch after each scale change: Avalonia only reloads the tray icon on a 
 | Session or Settings window title-bar icon | Can look soft | Sharp |
 
 Explorer caches icons, so after installing, refresh the folder view or sign out and in before comparing.
+
+## Menus and hints after a scale change
+
+Avalonia caches each screen's scale and only refreshes it on `WM_DISPLAYCHANGE`, which a scale change doesn't send. Menus, the tray menu and the overlay's hover hints went on placing themselves with the old scale. Now, when the overlay gets `WM_DPICHANGED` and the cached scale for its monitor is wrong, it posts itself `WM_DISPLAYCHANGE` so Avalonia refreshes the cache.
+
+Run Perch and leave it running throughout: the bug only shows when the scale changes while the app is open.
+
+| Step | Before | After |
+|---|---|---|
+| Change the scale (say 100 % → 150 %), then right-click the tray icon | Menu opens offset from the cursor, or flips the wrong way near the taskbar | Menu opens at the cursor |
+| Hover the usage strip until its panel appears (it opens to the left of the overlay) | Gap to the overlay too big or too small, or overlapping it | A small, even gap |
+| Hover a glyph near the bottom or right of the screen | Hint clamps to the wrong spot, or runs off-screen | Hint stays on-screen beside the glyph |
+| Right-click a session row near the bottom of the screen | Menu may flip or slide wrongly (it checks fit against the cached work area) | Menu flips up cleanly and stays on-screen |
+| Drag the overlay onto a monitor with a different scale | Unchanged | Unchanged: the drag isn't interrupted and the overlay stays where you drop it |
+
+Also new: after a scale change the floating overlay re-places itself from its remembered corner, just as it already did after a resolution change.
+
+Known gap: the refresh needs the overlay to be on the monitor whose scale changed. If the overlay is on another monitor, the cache stays stale until the next display change.
