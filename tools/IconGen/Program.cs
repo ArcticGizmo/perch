@@ -6,8 +6,9 @@ using Svg;
 // Generates every raster icon asset from the single source-of-truth SVG (perch.svg).
 //
 //   src/Perch.App/Assets/icon.png   256x256 PNG — window icons and the in-app logo
-//   src/Perch.App/Assets/icon.ico   multi-resolution ICO (16..256) — tray icon + the .exe ApplicationIcon
-//   landing-icon.png                512x512 PNG — the README header logo
+//   src/Perch.App/Assets/icon.ico   multi-resolution ICO (16..256) — windows, taskbar + the .exe ApplicationIcon
+//   src/Perch.App/Assets/tray.png   32x32 PNG — the Windows tray icon (see docs/tray-icon-blur.md)
+//   landing-icon.png               512x512 PNG — the README header logo
 //
 // Re-run after editing perch.svg:  dotnet run --project tools/IconGen
 // (or tools/gen-icons.ps1, which also restores packages.)
@@ -35,11 +36,14 @@ float vbSide = doc.ViewBox.Width > 0 ? doc.ViewBox.Width : fit.Side;
 Console.WriteLine($"Fit: content {fit.Box.Width:0.0}x{fit.Box.Height:0.0} cropped from {vbSide:0}x{vbSide:0} viewBox ({vbSide / fit.Side:0.00}x larger)");
 
 // The .ico ships a true frame at each of these sizes so Windows never has to downscale at runtime
-// (the tray asks for a 16px frame; large surfaces ask for 256).
+// (small window icons ask for 16; large surfaces ask for 256).
 int[] icoSizes = { 16, 24, 32, 48, 64, 128, 256 };
 
 string assetsDir = Path.Combine(repoRoot, "src", "Perch.App", "Assets");
 WritePng(doc, fit, Path.Combine(assetsDir, "icon.png"), 256);
+// Avalonia never resizes a tray icon frame, and an .ico has no 20/28px frame for 125%/175%, so Explorer
+// would stretch a smaller one. One 32px image is only ever shrunk, which stays sharp at every scale up to 200%.
+WritePng(doc, fit, Path.Combine(assetsDir, "tray.png"), 32);
 WritePng(doc, fit, Path.Combine(repoRoot, "landing-icon.png"), 512);
 WriteIco(doc, fit, Path.Combine(assetsDir, "icon.ico"), icoSizes);
 
