@@ -7,10 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Quick links no longer all vanish because one of them points at something Windows is slow to draw an icon for
-- Quick-link and app icons now come out of Windows the right way up, so the upside-down setting has retired: there's nothing left to invert
-- Quick links can now point at a file, a folder or a web page, not just an app. Web links wear the site's own icon and open a new window on a middle click
-- Any quick link can wear an icon of your choosing: pick an image and Perch keeps its own small copy
+---
+
+## [v0.6.21] - 2026-11-27
+
+- One slow quick-link icon no longer hides every quick link
+- Quick links to files, folders and web pages
+- Custom quick-link icons from any image
+- Picture, page and folder marks for file links
+- Icons come out of Windows the right way up
+- Retired the upside-down quick links setting (nothing left to invert)
 
 ---
 
