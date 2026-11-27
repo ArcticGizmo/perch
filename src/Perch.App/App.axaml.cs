@@ -3538,14 +3538,19 @@ public partial class App : Application
     }
 
     // A dev instance gets a colour-inverted mark so its tray icon can't be mistaken for the installed Perch's.
+    // Windows gets a 32px PNG rather than the .ico: Avalonia hands Explorer the nearest .ico frame unresized, and
+    // with no 20/28px frame the 125%/175% scales get a smaller one stretched up. A 32px image is only ever shrunk.
     private static WindowIcon TrayIconImage()
     {
+        bool windows = OperatingSystem.IsWindows();
         if (AppProfile.IsDev)
         {
-            try { return new WindowIcon(Rendering.InvertedIcon.Load(new Uri("avares://perch/Assets/icon.png"), 64)); }
+            var source = windows ? "avares://perch/Assets/tray.png" : "avares://perch/Assets/icon.png";
+            try { return new WindowIcon(Rendering.InvertedIcon.Load(new Uri(source), windows ? 32 : 64)); }
             catch { /* fall back to the normal mark */ }
         }
-        return new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
+        var asset = windows ? "avares://perch/Assets/tray.png" : "avares://perch/Assets/icon.ico";
+        return new WindowIcon(AssetLoader.Open(new Uri(asset)));
     }
 
     private void SetUpTray(IClassicDesktopStyleApplicationLifetime desktop)
