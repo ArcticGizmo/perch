@@ -1878,7 +1878,13 @@ internal sealed partial class SettingsWindow : Window
         remove.Foreground = new SolidColorBrush(Palette.Danger);
         remove.Margin = new Thickness(6, 0, 0, 0);
         remove.VerticalAlignment = VerticalAlignment.Center;
-        remove.Click += (_, _) => { _quickLinks.Remove(link); RebuildQuickLinksList(); RaiseQuickLinksChanged(); };
+        remove.Click += (_, _) =>
+        {
+            _quickLinks.Remove(link);
+            RebuildQuickLinksList();
+            RaiseQuickLinksChanged();
+            DeleteRetiredIcon(link.CustomIcon);
+        };
         Grid.SetColumn(remove, 3);
 
         grid.Children.Add(toggle);
@@ -1933,9 +1939,32 @@ internal sealed partial class SettingsWindow : Window
         link.Kind = dlg.LinkKind;
         link.ExePath = dlg.LinkKind == QuickLinkKind.App ? dlg.LinkPath : "";
         link.Target = dlg.LinkTarget;
+
+        // A replaced or reset icon's old file goes only after the settings that stop naming it are saved, so a
+        // failed save never leaves a link pointing at a deleted file.
+        string? retired = null;
+        if (dlg.NewIcon is { } png && QuickLinkIcons.Save(png, QuickLinkIcons.DefaultDirectory) is { } stored)
+        {
+            retired = link.CustomIcon;
+            link.CustomIcon = stored;
+        }
+        else if (dlg.IconReset)
+        {
+            retired = link.CustomIcon;
+            link.CustomIcon = null;
+        }
+
         if (existing == null) _quickLinks.Add(link);
         RebuildQuickLinksList();
         RaiseQuickLinksChanged();
+        DeleteRetiredIcon(retired);
+    }
+
+    // Saving is declined for a session whose settings file couldn't be read; the file on disk may still name this
+    // icon, so it stays.
+    private void DeleteRetiredIcon(string? name)
+    {
+        if (!_settings.SaveSuppressed) QuickLinkIcons.Delete(name, QuickLinkIcons.DefaultDirectory);
     }
 
     private void RaiseQuickLinksChanged()

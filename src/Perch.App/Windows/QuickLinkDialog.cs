@@ -3,9 +3,12 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 using Perch.Data;
 using Perch.Platform;
 
@@ -37,6 +40,14 @@ internal sealed class QuickLinkDialog : Window
     private readonly Button _ok;
     private readonly IAppIconProvider _icons;
     private readonly DispatcherTimer _nameCheck;
+    private readonly Image _iconPreview = new() { Width = 32, Height = 32 };
+    private readonly TextBlock _iconCaption = new()
+    {
+        FontSize = 12, Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center,
+        TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 0, 0, 0),
+    };
+    private readonly Button _resetIcon;
+    private readonly bool _hadCustomIcon;
     private QuickLinkKind _kind;
     // Set once the user types a name, so picking a target stops proposing one.
     private bool _nameEdited;
@@ -51,6 +62,12 @@ internal sealed class QuickLinkDialog : Window
         QuickLinkKind.Url => QuickLinkRouting.NormalizeUrl(_urlBox.Text) ?? "",
         _ => "",
     };
+
+    /// <summary>A newly imported icon's PNG bytes, to store on Save; null when the icon wasn't replaced.</summary>
+    public byte[]? NewIcon { get; private set; }
+
+    /// <summary>True when the user reset a custom icon to the kind's own (and imported nothing since).</summary>
+    public bool IconReset { get; private set; }
 
     public QuickLinkDialog(QuickLink? existing, IAppIconProvider icons)
     {
@@ -128,6 +145,32 @@ internal sealed class QuickLinkDialog : Window
         buttons.Children.Add(_ok);
         buttons.Children.Add(cancel);
 
+        // Icon: the kind's own unless the user imports one.
+        var chooseIcon = SettingsUi.FlatButton("Choose icon…");
+        chooseIcon.Click += async (_, _) => await ChooseIconAsync();
+        _resetIcon = SettingsUi.FlatButton("Reset to default");
+        _resetIcon.Margin = new Thickness(8, 0, 0, 0);
+        _resetIcon.Click += (_, _) =>
+        {
+            NewIcon = null;
+            IconReset = _hadCustomIcon;
+            ShowIcon(null, "The link's own icon.");
+        };
+        var iconRow = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), Margin = new Thickness(0, 4, 0, 0) };
+        Grid.SetColumn(_iconPreview, 0);
+        Grid.SetColumn(_iconCaption, 1);
+        Grid.SetColumn(chooseIcon, 2);
+        Grid.SetColumn(_resetIcon, 3);
+        iconRow.Children.Add(_iconPreview);
+        iconRow.Children.Add(_iconCaption);
+        iconRow.Children.Add(chooseIcon);
+        iconRow.Children.Add(_resetIcon);
+
+        _hadCustomIcon = QuickLinkIcons.IsValidName(existing?.CustomIcon);
+        ShowIcon(null, "The link's own icon.");
+        if (QuickLinkIcons.PathFor(existing?.CustomIcon, QuickLinkIcons.DefaultDirectory) is { } current)
+            _ = ShowStoredIconAsync(current);
+
         _kindHost.Margin = new Thickness(0, 0, 0, 12);
         var layout = new StackPanel { Margin = new Thickness(16) };
         layout.Children.Add(_kindHost);
@@ -137,6 +180,8 @@ internal sealed class QuickLinkDialog : Window
         layout.Children.Add(_appPanel);
         layout.Children.Add(_filePanel);
         layout.Children.Add(_urlPanel);
+        layout.Children.Add(SettingsUi.FieldCaption("Icon"));
+        layout.Children.Add(iconRow);
         layout.Children.Add(buttons);
         Content = layout;
 
@@ -307,6 +352,53 @@ internal sealed class QuickLinkDialog : Window
 
         _fileBox.Text = path;
         ProposeName(Path.GetFileName(Path.TrimEndingDirectorySeparator(path)));
+    }
+
+    private async System.Threading.Tasks.Task ChooseIconAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Choose an icon",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("Images") { Patterns = QuickLinkIconImport.Patterns }],
+        });
+        if (files.Count == 0 || files[0].TryGetLocalPath() is not { Length: > 0 } path) return;
+
+        var png = await QuickLinkIconImport.ImportAsync(path);
+        if (png is null)
+        {
+            _iconCaption.Text = "Perch can't use that file as an icon. Choose a PNG, JPEG, GIF, BMP or WebP image.";
+            return;
+        }
+        NewIcon = png;
+        IconReset = false;
+        using var ms = new MemoryStream(png);
+        ShowIcon(new Bitmap(ms), "Your icon, used in place of the link's own.");
+    }
+
+    /// <summary>Headless render only: poses the dialog as if <paramref name="png"/> had just been imported.</summary>
+    internal void SeedIconForRender(byte[] png)
+    {
+        NewIcon = png;
+        using var ms = new MemoryStream(png);
+        ShowIcon(new Bitmap(ms), "Your icon, used in place of the link's own.");
+    }
+
+    // The link's current imported icon, decoded off the UI thread like any user-supplied image.
+    private async System.Threading.Tasks.Task ShowStoredIconAsync(string path)
+    {
+        var bmp = await BoundedBitmap.LoadAsync(path, QuickLinkIcons.PixelSize);
+        if (bmp is not null && NewIcon is null && !IconReset)
+            ShowIcon(bmp, "Your icon, used in place of the link's own.");
+    }
+
+    private void ShowIcon(Bitmap? icon, string caption)
+    {
+        _iconPreview.Source = icon;
+        _iconPreview.IsVisible = icon is not null;
+        _iconCaption.Margin = new Thickness(icon is null ? 0 : 10, 0, 0, 0);
+        _iconCaption.Text = caption;
+        _resetIcon.IsEnabled = icon is not null;
     }
 
     private static StackPanel Stack(params Control[] children)

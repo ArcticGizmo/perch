@@ -4054,10 +4054,22 @@ internal static class HeadlessRenderer
             new QuickLink { Name = "Perch docs", Kind = QuickLinkKind.Url, Target = "https://arcticgizmo.github.io/perch/" });
         Capture("quicklink_dialog_url_invalid_1x.png",
             new QuickLink { Name = "Calc", Kind = QuickLinkKind.Url, Target = "javascript:alert(1)" });
+        // An imported icon (the Perch mark, through the real fit-and-encode step).
+        byte[]? icon = null;
+        try
+        {
+            using var s = AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"));
+            using var mark = new Bitmap(s);
+            icon = QuickLinkIconImport.Fit(mark);
+        }
+        catch { /* the capture below just shows the default */ }
+        Capture("quicklink_dialog_custom_icon_1x.png",
+            new QuickLink { Name = "Perch docs", Kind = QuickLinkKind.Url, Target = "https://arcticgizmo.github.io/perch/" }, icon);
 
-        void Capture(string file, QuickLink? link)
+        void Capture(string file, QuickLink? link, byte[]? seedIcon = null)
         {
             var w = new QuickLinkDialog(link, new NoIconProvider());
+            if (seedIcon is not null) w.SeedIconForRender(seedIcon);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

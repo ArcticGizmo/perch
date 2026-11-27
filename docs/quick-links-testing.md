@@ -55,3 +55,23 @@ A link now says what it points at. The Add/Edit dialog has a three-way switch. F
 9. **Intranet:** a web link to a private-network host (e.g. `http://192.168.1.10:8080`) still gets its favicon from that host.
 10. **No favicon:** a web link to a site with no `/favicon.ico` keeps its initials, and editing Settings repeatedly doesn't refetch it (one request a week).
 11. **Settings list:** long file paths in the Quick Links list keep their file name visible and lose the leading folders (leading ellipsis).
+
+## Phase 4: custom icons
+
+### The change
+
+Any link can wear an imported image instead of its kind's icon. The dialog's **Icon** row has **Choose icon…** and **Reset to default**. The image is decoded with the pixel cap, fitted into a 64px transparent square and stored as Perch's own PNG in `%APPDATA%\Perch\quick-link-icons\`. The link records only the file name. Nothing is written until **Save**.
+
+### Checks
+
+1. **Import:** edit any link → **Choose icon…** → pick a PNG or JPEG. Expect: the preview shows it, with "Your icon, used in place of the link's own." Save. The strip shows that image, upright and not stretched (a wide image is letterboxed in its square).
+2. **Cancel leaves nothing:** choose an icon, then **Cancel**. Expect: no new file in `%APPDATA%\Perch\quick-link-icons\` and the link unchanged.
+3. **Original can go:** after importing, move or delete the source image. Expect: the link keeps its icon (Perch has its own copy).
+4. **Replace:** choose a different icon for the same link and Save. Expect: exactly one file for that link in the folder (the old one is deleted).
+5. **Reset:** **Reset to default** → Save. Expect: the kind's icon returns (app icon, file-type icon or favicon) and the link's file is deleted.
+6. **Remove:** remove a link that has a custom icon. Expect: its file is deleted.
+7. **Precedence:** give a web link a custom icon. Expect: the custom icon shows, and no favicon request is made for it.
+8. **Bad input:** choose a file renamed to `.png` that isn't an image, or a huge image (e.g. 20000×20000). Expect: "Perch can't use that file as an icon…" and the previous icon kept.
+9. **Missing file:** delete a link's icon file by hand while Perch runs, then toggle the link off and on. Expect: it falls back to the kind's icon, never blank.
+10. **Orphan sweep:** quit Perch, drop a copy of one of the icon files under a new 32-hex-digit name (e.g. `0123456789abcdef0123456789abcdef.png`) and add a `notes.png` too. Start Perch. Expect: the 32-hex file is deleted; `notes.png` is left alone.
+11. **Sweep stands down:** corrupt `settings.json` so it fails to parse (Perch recovers it into `settings.unreadable.json`). Expect: no icon files are deleted that launch.

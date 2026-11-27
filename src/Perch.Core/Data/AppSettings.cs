@@ -889,6 +889,15 @@ internal sealed class AppSettings
     // clean launch reads the real file again. Internal (non-public accessors), so it never serializes.
     internal bool SaveSuppressed { get; private set; }
 
+    // True when this instance came from the salvage path, so some of the user's values may be missing. Anything
+    // that deletes data by what settings don't reference (the quick-link icon sweep) stands down. Internal, so it
+    // never serializes.
+    internal bool Recovered { get; private set; }
+
+    /// <summary>Whether these settings are the user's whole file, read cleanly, so housekeeping may trust that
+    /// what they don't mention is unused.</summary>
+    internal bool LoadedCleanly => !SaveSuppressed && !Recovered;
+
     public static AppSettings Load()
     {
         var (json, existed) = ReadSettingsFile();
@@ -914,6 +923,7 @@ internal sealed class AppSettings
                 // broken settings file is usually only off by one value and still full of good ones.
                 BackupUnreadable(json);
                 var recovered = SalvageMerge(json);
+                recovered.Recovered = true;
                 recovered.MigrateQuickLinks();
                 recovered.MigrateStartMode();
                 return recovered;

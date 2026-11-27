@@ -276,6 +276,115 @@ public class QuickLinkTests
         Assert.Empty(rig.Calls);
     }
 
+    // ── Custom icons ────────────────────────────────────────────────────────────
+
+    private sealed class IconDir : IDisposable
+    {
+        public readonly string Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "perch-qlicons-" + Guid.NewGuid().ToString("N"));
+        public IconDir() => Directory.CreateDirectory(Path);
+        public string File(string name) => System.IO.Path.Combine(Path, name);
+        public void Dispose()
+        {
+            try { Directory.Delete(Path, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void CustomIcon_RoundTrips_AndIsAbsentByDefault()
+    {
+        Assert.Null(new QuickLink().CustomIcon);
+        var name = QuickLinkIcons.NewName();
+        var s = new AppSettings { QuickLinks = [new QuickLink { Name = "x", CustomIcon = name }] };
+        var back = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(s))!;
+        Assert.Equal(name, Assert.Single(back.QuickLinks!).CustomIcon);
+    }
+
+    [Fact]
+    public void NewName_IsValid()
+    {
+        Assert.True(QuickLinkIcons.IsValidName(QuickLinkIcons.NewName()));
+    }
+
+    // A hand-edited settings file can't point the icon loader (or the deleter) anywhere else.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("icon.png")]
+    [InlineData("..\\settings.json")]
+    [InlineData("../0123456789abcdef0123456789abcdef.png")]
+    [InlineData("C:\\Windows\\0123456789abcdef0123456789abcdef.png")]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF.png")]
+    [InlineData("0123456789abcdef0123456789abcdef.png.exe")]
+    [InlineData("0123456789abcdef0123456789abcdef.svg")]
+    public void IsValidName_RefusesAnythingButOurOwnNames(string? name)
+    {
+        Assert.False(QuickLinkIcons.IsValidName(name));
+    }
+
+    [Fact]
+    public void Save_ThenPathFor_FindsIt_AndDeleteRemovesIt()
+    {
+        using var dir = new IconDir();
+        var name = QuickLinkIcons.Save(TinyPng, dir.Path);
+        Assert.NotNull(name);
+        var path = QuickLinkIcons.PathFor(name, dir.Path);
+        Assert.Equal(dir.File(name!), path);
+        Assert.Equal(TinyPng, File.ReadAllBytes(path!));
+
+        QuickLinkIcons.Delete(name, dir.Path);
+        Assert.Null(QuickLinkIcons.PathFor(name, dir.Path));
+    }
+
+    // A link whose icon file has gone falls back to the kind's own icon rather than showing nothing.
+    [Fact]
+    public void PathFor_MissingFile_IsNull()
+    {
+        using var dir = new IconDir();
+        Assert.Null(QuickLinkIcons.PathFor(QuickLinkIcons.NewName(), dir.Path));
+    }
+
+    [Fact]
+    public void Delete_IgnoresNamesThatArentOurs()
+    {
+        using var dir = new IconDir();
+        File.WriteAllText(dir.File("keep.png"), "x");
+        QuickLinkIcons.Delete("keep.png", dir.Path);
+        Assert.True(File.Exists(dir.File("keep.png")));
+    }
+
+    [Fact]
+    public void Sweep_DeletesOnlyUnreferencedIconsOfOurs()
+    {
+        using var dir = new IconDir();
+        var used = QuickLinkIcons.Save(TinyPng, dir.Path)!;
+        var orphan = QuickLinkIcons.Save(TinyPng, dir.Path)!;
+        File.WriteAllText(dir.File("notes.png"), "not ours");
+        File.WriteAllText(dir.File("readme.txt"), "not ours");
+        Directory.CreateDirectory(dir.File(QuickLinkIcons.NewName()));   // a folder named like an icon
+
+        int deleted = QuickLinkIcons.Sweep([used, null, "junk"], dir.Path);
+
+        Assert.Equal(1, deleted);
+        Assert.True(File.Exists(dir.File(used)));
+        Assert.False(File.Exists(dir.File(orphan)));
+        Assert.True(File.Exists(dir.File("notes.png")));
+        Assert.True(File.Exists(dir.File("readme.txt")));
+        Assert.Single(Directory.GetDirectories(dir.Path));
+    }
+
+    [Fact]
+    public void Sweep_MissingDirectory_IsANoOp()
+    {
+        Assert.Equal(0, QuickLinkIcons.Sweep([], Path.Combine(Path.GetTempPath(), "perch-none-" + Guid.NewGuid().ToString("N"))));
+    }
+
+    // The sweep deletes by what settings don't mention, so it must only trust a cleanly read file.
+    [Fact]
+    public void LoadedCleanly_IsTrueForFreshSettings()
+    {
+        Assert.True(new AppSettings().LoadedCleanly);
+    }
+
     [Fact]
     public void Favicon_OneIconPerSite()
     {

@@ -24,6 +24,8 @@ To set them up, open **Settings → Quick Links** and click **Add quick link…*
 - **File or folder**: choose a file with **File…** or a folder with **Folder…**. Clicking the link opens the file with its default app, or the folder in your file manager. A file link only opens files that app views, such as pictures, documents and PDFs. A program or script is shown in its folder instead, so add those as an App.
 - **Web link**: type an address. Clicking the link opens it in your browser, and a middle click opens it in a new browser window. Its icon is the site's own, fetched once a week.
 
+To give any link an icon of your own, click **Choose icon…** in its dialog and pick a PNG, JPEG, GIF, BMP or WebP image. Perch keeps a small copy, so you can move or delete the original. **Reset to default** brings back the link's own icon.
+
 You can also click a preset button (**+ GitKraken**, **+ Slack**, **+ Microsoft Teams**, **+ Outlook**) to add one of the apps Perch knows how to find. Use a link's toggle to hide it without removing it, or **Edit** and **Remove** to change it.
 
 :::note

@@ -36,6 +36,8 @@ internal sealed class QuickLink
     // File links: the path. Url links: the address. Unused for apps.
     public string Target  { get; set; } = "";
     public bool   Enabled { get; set; } = true;
+    // An imported icon that overrides the kind's own: a bare file name in QuickLinkIcons' folder, never a path.
+    public string? CustomIcon { get; set; }
 
     // The executable to launch: the configured path when it's set and still exists, otherwise a live
     // lookup for the well-known apps (handles version-bumped install dirs). Null if nothing resolves.
@@ -63,7 +65,10 @@ internal sealed class QuickLink
         return new string(Name.Where(c => !char.IsWhiteSpace(c)).ToArray()).ToLowerInvariant();
     }
 
-    public QuickLink Clone() => new() { Name = Name, Kind = Kind, ExePath = ExePath, Target = Target, Enabled = Enabled };
+    public QuickLink Clone() => new()
+    {
+        Name = Name, Kind = Kind, ExePath = ExePath, Target = Target, Enabled = Enabled, CustomIcon = CustomIcon,
+    };
 }
 
 /// <summary>What a click on a quick link should do, decided without touching the OS.</summary>

@@ -690,6 +690,14 @@ public partial class App : Application
                 // Startup + hourly update check (restores a persisted "update available" state first).
                 _updateService.Start();
 
+                // Drop imported quick-link icons no link uses any more (left behind by a crash between storing an
+                // icon and saving settings). Only after a clean load, since a salvaged file may be missing links.
+                if (settings.LoadedCleanly)
+                {
+                    var referenced = (settings.QuickLinks ?? []).Select(l => l.CustomIcon).ToList();
+                    System.Threading.Tasks.Task.Run(() => QuickLinkIcons.Sweep(referenced, QuickLinkIcons.DefaultDirectory));
+                }
+
                 // Self-managed hooks: on every launch, copy perch-hook to a stable per-user path and
                 // reconcile our managed block in ~/.claude/settings.json (idempotent; self-corrects after
                 // an update changes the versioned install dir), then migrate any user still on the retired
@@ -3474,9 +3482,10 @@ public partial class App : Application
 
     // Applies the enabled links to the overlay strip at once (initials), then resolves their icons off the UI
     // thread (the first shell lookup enumerates the Start Menu, ~1s) and swaps them in. Showing the links before
-    // their icons means one link whose icon lookup fails or stalls can't hide the rest. Local icons land first;
-    // web links' favicons follow in a second pass, so a slow site never holds up the app icons. Always sets the
-    // strip (an empty list clears it), so a link removed or disabled in Settings disappears immediately.
+    // their icons means one link whose icon lookup fails or stalls can't hide the rest. An imported icon wins over
+    // the kind's own. Local icons land first; web links' favicons follow in a second pass, so a slow site never
+    // holds up the app icons. Always sets the strip (an empty list clears it), so a link removed or disabled in
+    // Settings disappears immediately.
     private void ReloadQuickLinks(AppSettings settings)
     {
         if (_overlay is null || _quickLinkLauncher is null) return;
@@ -3487,6 +3496,7 @@ public partial class App : Application
         if (links.Count == 0) return;
 
         var launcher = _quickLinkLauncher;
+        string customDir = QuickLinkIcons.DefaultDirectory;
         var favicons = links.Any(l => l.Kind == QuickLinkKind.Url)
             ? _quickLinkFavicons ??= new QuickLinkFavicons(new Perch.Feeds.FeedFetcher())
             : null;
@@ -3500,14 +3510,16 @@ public partial class App : Application
         {
             var icons = links.Select(l =>
             {
-                try { return launcher.IconFile(l, 32); }
+                try { return QuickLinkIcons.PathFor(l.CustomIcon, customDir) ?? launcher.IconFile(l, 32); }
                 catch { return null; }
             }).ToList();
             Apply(icons);
             if (favicons is null) return;
 
-            var fetched = await System.Threading.Tasks.Task.WhenAll(links.Select(l =>
-                l.Kind == QuickLinkKind.Url ? favicons.GetAsync(l.Target) : System.Threading.Tasks.Task.FromResult<string?>(null)));
+            var fetched = await System.Threading.Tasks.Task.WhenAll(links.Select((l, i) =>
+                l.Kind == QuickLinkKind.Url && icons[i] is null
+                    ? favicons.GetAsync(l.Target)
+                    : System.Threading.Tasks.Task.FromResult<string?>(null)));
             Apply(icons.Select((icon, i) => icon ?? fetched[i]).ToList());
         });
     }
