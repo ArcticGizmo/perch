@@ -519,8 +519,9 @@ public partial class App : Application
             _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
-            _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
-            _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
+            _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider,
+                PlatformServices.FileRevealer, PlatformServices.UrlOpener);
+            _overlay.Canvas.QuickLinkActivated += OnQuickLinkActivated;
 
             // Hypertree strip: a click asks Hypertree's tray (via its CLI) to open its map.
             _overlay.Canvas.HypertreeMapRequested += OnHypertreeMapRequested;
@@ -688,6 +689,14 @@ public partial class App : Application
             {
                 // Startup + hourly update check (restores a persisted "update available" state first).
                 _updateService.Start();
+
+                // Drop imported quick-link icons no link uses any more (left behind by a crash between storing an
+                // icon and saving settings). Only after a clean load, since a salvaged file may be missing links.
+                if (settings.LoadedCleanly)
+                {
+                    var referenced = (settings.QuickLinks ?? []).Select(l => l.CustomIcon).ToList();
+                    System.Threading.Tasks.Task.Run(() => QuickLinkIcons.Sweep(referenced, QuickLinkIcons.DefaultDirectory));
+                }
 
                 // Self-managed hooks: on every launch, copy perch-hook to a stable per-user path and
                 // reconcile our managed block in ~/.claude/settings.json (idempotent; self-corrects after
@@ -3466,28 +3475,66 @@ public partial class App : Application
         _notifier?.Show(title, body, ToastLevel.Warning, null, null);
     }
 
-    // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first
-    // shell lookup enumerates the Start Menu, ~1s) then applying on the UI thread. Icons come back as PNG
-    // file paths from the seam. Always sets the strip — an empty list clears it — so a link removed or
-    // disabled in Settings disappears immediately; also syncs the upside-down flag.
+    // Bumped on every reload so a slow icon pass from an earlier edit can't overwrite a newer strip.
+    private int _quickLinksGeneration;
+    // Created on first use, so nobody without a web link pays for its HTTP clients.
+    private QuickLinkFavicons? _quickLinkFavicons;
+
+    // Applies the enabled links to the overlay strip at once (initials), then resolves their icons off the UI
+    // thread (the first shell lookup enumerates the Start Menu, ~1s) and swaps them in. Showing the links before
+    // their icons means one link whose icon lookup fails or stalls can't hide the rest. An imported icon wins over
+    // the kind's own. Local icons land first; web links' favicons follow in a second pass, so a slow site never
+    // holds up the app icons. Always sets the strip (an empty list clears it), so a link removed or disabled in
+    // Settings disappears immediately.
     private void ReloadQuickLinks(AppSettings settings)
     {
         if (_overlay is null || _quickLinkLauncher is null) return;
-        _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
 
         var links = (settings.QuickLinks ?? []).Where(l => l.Enabled).ToList();
-        if (links.Count == 0)
-        {
-            _overlay.Canvas.SetQuickLinks(links, new List<string?>());
-            return;
-        }
+        int generation = ++_quickLinksGeneration;
+        // File links get their mark at once from the extension; the off-thread pass below corrects a folder.
+        var glyphs = links.Select(l => QuickLinkGlyphs.For(l, isDirectory: false)).ToList();
+        _overlay.Canvas.SetQuickLinks(links, new List<string?>(), glyphs);
+        if (links.Count == 0) return;
 
         var launcher = _quickLinkLauncher;
-        System.Threading.Tasks.Task.Run(() =>
+        string customDir = QuickLinkIcons.DefaultDirectory;
+        var favicons = links.Any(l => l.Kind == QuickLinkKind.Url)
+            ? _quickLinkFavicons ??= new QuickLinkFavicons(new Perch.Feeds.FeedFetcher())
+            : null;
+
+        void Apply(List<string?> icons) => Dispatcher.UIThread.Post(() =>
         {
-            var icons = links.Select(l => launcher.IconFile(l, 32)).ToList();
-            Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetQuickLinks(links, icons));
+            if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons, glyphs);
         });
+
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            glyphs = links.Select(l =>
+                QuickLinkGlyphs.For(l, l.Kind == QuickLinkKind.File && Directory.Exists(l.Target.Trim()))).ToList();
+            var icons = links.Select(l =>
+            {
+                try { return QuickLinkIcons.PathFor(l.CustomIcon, customDir) ?? launcher.IconFile(l, 32); }
+                catch { return null; }
+            }).ToList();
+            Apply(icons);
+            if (favicons is null) return;
+
+            var fetched = await System.Threading.Tasks.Task.WhenAll(links.Select((l, i) =>
+                l.Kind == QuickLinkKind.Url && icons[i] is null
+                    ? favicons.GetAsync(l.Target)
+                    : System.Threading.Tasks.Task.FromResult<string?>(null)));
+            Apply(icons.Select((icon, i) => icon ?? fetched[i]).ToList());
+        });
+    }
+
+    // A quick-link click (middle = a web link in a new window). A file link whose file has gone says so rather
+    // than doing nothing.
+    private void OnQuickLinkActivated(QuickLink link, bool middleClick)
+    {
+        if (_quickLinkLauncher?.Open(link, middleClick) == QuickLinkOpenResult.Missing)
+            _notifier?.Show("Quick link", $"Can't find {link.Target}. Edit the link in Settings → Quick Links.",
+                ToastLevel.Warning, null, null);
     }
 
     // Renders the real host-app icon for the origin glyph — an IDE-hosted session (from the editor's

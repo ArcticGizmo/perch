@@ -60,7 +60,6 @@ internal static class OverlaySettingsGates
         c.SetMaxFriendsShown(s.MaxFriendsShown);
         c.SetSocialStatusFreshness(s.SocialStatusFreshnessHours);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
-        c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
         c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
         c.SetSectionOrder(OverlaySectionOrder.Normalize(s.SectionOrder));

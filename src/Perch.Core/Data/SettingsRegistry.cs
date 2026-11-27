@@ -385,12 +385,6 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.AchievementToasts),
             s => s.AchievementToasts, (s, v) => s.AchievementToasts = v, playful: true),
 
-        Toggle("upside-down-quick-links", "Upside-down quick links",
-            "Rotate the quick-link icons 180 degrees. For fun.",
-            SettingSurface.Whimsy, ["upside", "down", "rotate", "quick", "links", "flip", "fun"],
-            PreviewTarget.QuickLinks, nameof(AppSettings.UpsideDownQuickLinks),
-            s => s.UpsideDownQuickLinks, (s, v) => s.UpsideDownQuickLinks = v, playful: true),
-
         Toggle("basketball", "Desktop basketball",
             "A hoop beside the overlay and a ball that bounces around the screen. Flick the ball to shoot.",
             SettingSurface.Whimsy, ["basketball", "hoop", "ball", "physics", "shoot", "sport", "game", "fun"],

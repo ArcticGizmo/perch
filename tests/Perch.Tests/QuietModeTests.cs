@@ -20,7 +20,6 @@ public class QuietModeTests
         nameof(AppSettings.PerchReacts),
         nameof(AppSettings.NotifyOnAchievement),
         nameof(AppSettings.AchievementToasts),
-        nameof(AppSettings.UpsideDownQuickLinks),
         nameof(AppSettings.BasketballEnabled),
         nameof(AppSettings.NotifyOnFeedEntry),
     };
@@ -80,7 +79,6 @@ public class QuietModeTests
             PerchReacts = true,
             NotifyOnAchievement = true,
             AchievementToasts = true,
-            UpsideDownQuickLinks = true,
             // Not playful — should be untouched.
             ShowUsage = true,
             NotifyOnDone = true,
@@ -102,7 +100,6 @@ public class QuietModeTests
         Assert.False(eff.PerchReacts);
         Assert.False(eff.NotifyOnAchievement);
         Assert.False(eff.AchievementToasts);
-        Assert.False(eff.UpsideDownQuickLinks);
 
         // Non-playful settings survive, and the deadline is preserved so callers can still read the remaining time.
         Assert.True(eff.ShowUsage);

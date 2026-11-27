@@ -133,19 +133,28 @@ internal static class ShellIcon
     // Image.FromHbitmap discards. Falls back to FromHbitmap for any non-32bpp result.
     private static Bitmap FromHBitmapWithAlpha(IntPtr hbitmap)
     {
-        var bm = new BITMAP();
-        int read = GetObject(hbitmap, Marshal.SizeOf<BITMAP>(), ref bm);
-        if (read == 0 || bm.bmBitsPixel != 32 || bm.bmBits == IntPtr.Zero || bm.bmWidth <= 0 || bm.bmHeight <= 0)
+        var ds = new DIBSECTION();
+        int read = GetObject(hbitmap, Marshal.SizeOf<DIBSECTION>(), ref ds);
+        var bm = ds.dsBm;
+        if (read < Marshal.SizeOf<DIBSECTION>() || bm.bmBitsPixel != 32 || bm.bmBits == IntPtr.Zero
+            || bm.bmWidth <= 0 || bm.bmHeight <= 0)
             return Image.FromHbitmap(hbitmap);
 
         int w = bm.bmWidth, h = bm.bmHeight;
+        // A positive biHeight is a bottom-up DIB (the shell's usual answer): its first row in memory is the image's
+        // last, so rows are copied in reverse to come out upright. Every PNG the provider writes must be upright.
+        bool bottomUp = ds.dsBmih.biHeight > 0;
         var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);  // shell hands back premultiplied BGRA
         var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
         try
         {
-            int srcStride = w * 4;  // top-down 32bpp DIB
+            int srcStride = bm.bmWidthBytes;
+            int rowBytes = w * 4;
             for (int y = 0; y < h; y++)
-                CopyMemory(data.Scan0 + y * data.Stride, bm.bmBits + y * srcStride, (uint)srcStride);
+            {
+                int srcRow = bottomUp ? h - 1 - y : y;
+                CopyMemory(data.Scan0 + y * data.Stride, bm.bmBits + srcRow * srcStride, (uint)rowBytes);
+            }
         }
         finally { bmp.UnlockBits(data); }
         return bmp;
@@ -173,6 +182,27 @@ internal static class ShellIcon
         public int bmType, bmWidth, bmHeight, bmWidthBytes;
         public ushort bmPlanes, bmBitsPixel;
         public IntPtr bmBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth, biHeight;
+        public ushort biPlanes, biBitCount;
+        public uint biCompression, biSizeImage;
+        public int biXPelsPerMeter, biYPelsPerMeter;
+        public uint biClrUsed, biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DIBSECTION
+    {
+        public BITMAP dsBm;
+        public BITMAPINFOHEADER dsBmih;
+        public uint dsBitfield0, dsBitfield1, dsBitfield2;
+        public IntPtr dshSection;
+        public uint dsOffset;
     }
 
     [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -207,7 +237,7 @@ internal static class ShellIcon
         [MarshalAs(UnmanagedType.Interface)] out object ppv);
 
     [DllImport("gdi32.dll")]
-    private static extern int GetObject(IntPtr hObject, int nCount, ref BITMAP lpObject);
+    private static extern int GetObject(IntPtr hObject, int nCount, ref DIBSECTION lpObject);
 
     [DllImport("gdi32.dll")]
     private static extern bool DeleteObject(IntPtr hObject);

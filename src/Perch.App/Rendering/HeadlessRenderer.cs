@@ -440,6 +440,7 @@ internal static class HeadlessRenderer
         RenderGitHubAlertsWindow(outDir);
         RenderPrSessionWindow(outDir);
         RenderFeedDialog(outDir);
+        RenderQuickLinkDialog(outDir);
         RenderFeedStory(outDir);
         RenderLinkPopup(outDir);
 
@@ -555,6 +556,22 @@ internal static class HeadlessRenderer
         emptyProbe.SetHypertree(SampleHypertree());
         RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1x.png"), 96);
         RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1.5x.png"), 144);
+
+        // File links with no imported icon wear a drawn mark: a picture for an image, a folder, and a page for any
+        // other file. An app link with no icon still shows its initials.
+        var fileLinks = new List<QuickLink>
+        {
+            new() { Name = "Office Layout", Kind = QuickLinkKind.File, Target = @"C:\files\office-layout.png" },
+            new() { Name = "Projects", Kind = QuickLinkKind.File, Target = @"C:\work\projects" },
+            new() { Name = "Plan", Kind = QuickLinkKind.File, Target = @"C:\work\plan.pdf" },
+            new() { Name = "Slack" },
+        };
+        var fileGlyphs = fileLinks.Select(l => QuickLinkGlyphs.For(l, isDirectory: l.Name == "Projects")).ToList();
+        var fileLinksProbe = new OverlayCanvas();
+        fileLinksProbe.Update([]);
+        fileLinksProbe.SetQuickLinks(fileLinks, new List<string?>(), fileGlyphs);
+        RenderControl(fileLinksProbe, Path.Combine(outDir, "overlay_quicklinks_files_1x.png"), 96);
+        RenderControl(fileLinksProbe, Path.Combine(outDir, "overlay_quicklinks_files_1.5x.png"), 144);
 
         // Docked mode: the full-height reserved edge column, expanded (full panel, square corners, flush to
         // the edge) and collapsed (the narrow status-count strip). Rendered inside a fixed-height host so the
@@ -1795,8 +1812,7 @@ internal static class HeadlessRenderer
                 c.SetOriginIcon(exe, provider.GetIconFile("", null, exe, 32));
         }
         if (SampleData.Sessions().Any(s => s.IsDesktop))
-            c.SetOriginIcon(OverlayCanvas.DesktopOriginKey, provider.GetIconFile("Claude", null, null, 32));
-    }
+            c.SetOriginIcon(OverlayCanvas.DesktopOriginKey, provider.GetIconFile("Claude", null, null, 32));    }
 
     private static void RenderControl(Control control, string path, double dpi)
     {
@@ -1935,8 +1951,8 @@ internal static class HeadlessRenderer
 
     private static (IReadOnlyList<QuickLink> links, IReadOnlyList<string?> icons) SampleQuickLinks(string outDir)
     {
-        // Write the bundled brand icon to a PNG file so the icon-drawing path (decode + 180° flip) is
-        // exercised; the other two links carry no icon, so they draw initials.
+        // Write the bundled brand icon to a PNG file so the icon-drawing path (decode + draw) is exercised;
+        // the other two links carry no icon, so they draw initials.
         string brandPng = Path.Combine(outDir, "sample_quicklink.png");
         try
         {
@@ -4038,6 +4054,55 @@ internal static class HeadlessRenderer
             LinkText.DismissPopup();
             w.Close();
         }
+    }
+
+    // The quick-link dialog in each kind: a new app link, an old app link whose "program" is a picture (offering
+    // the switch to a file link), a file link, a web link, and a web link with an address that isn't one. The icon
+    // seam is stubbed so the app-name lookup never touches the shell.
+    private static void RenderQuickLinkDialog(string outDir)
+    {
+        Capture("quicklink_dialog_app_1x.png", null);
+        Capture("quicklink_dialog_app_convert_1x.png",
+            new QuickLink { Name = "Office Layout", ExePath = @"C:\Users\me\Documents\office-layout.png" });
+        Capture("quicklink_dialog_file_1x.png",
+            new QuickLink { Name = "Office Layout", Kind = QuickLinkKind.File, Target = @"C:\Users\me\Documents\files\office-layout.png" });
+        Capture("quicklink_dialog_url_1x.png",
+            new QuickLink { Name = "Perch docs", Kind = QuickLinkKind.Url, Target = "https://arcticgizmo.github.io/perch/" });
+        Capture("quicklink_dialog_url_invalid_1x.png",
+            new QuickLink { Name = "Calc", Kind = QuickLinkKind.Url, Target = "javascript:alert(1)" });
+        // An imported icon (the Perch mark, through the real fit-and-encode step).
+        byte[]? icon = null;
+        try
+        {
+            using var s = AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"));
+            using var mark = new Bitmap(s);
+            icon = QuickLinkIconImport.Fit(mark);
+        }
+        catch { /* the capture below just shows the default */ }
+        Capture("quicklink_dialog_custom_icon_1x.png",
+            new QuickLink { Name = "Perch docs", Kind = QuickLinkKind.Url, Target = "https://arcticgizmo.github.io/perch/" }, icon);
+
+        void Capture(string file, QuickLink? link, byte[]? seedIcon = null)
+        {
+            var w = new QuickLinkDialog(link, new NoIconProvider());
+            if (seedIcon is not null) w.SeedIconForRender(seedIcon);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    private sealed class NoIconProvider : Perch.Platform.IAppIconProvider
+    {
+        public string? GetIconFile(string name, string? explicitPath, string? resolvedPath, int pixelSize) => null;
+        public bool TryLaunchByName(string name) => false;
     }
 
     // The Add feed dialog after a check: a good feed, a web page given by mistake (with its hint), plain http (the

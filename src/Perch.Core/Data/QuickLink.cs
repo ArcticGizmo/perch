@@ -1,19 +1,43 @@
-﻿namespace Perch.Data;
+﻿using System.Text.Json.Serialization;
+
+namespace Perch.Data;
+
+/// <summary>What a quick link points at. Settings files that predate kinds carry none and read as
+/// <see cref="App"/>, which is what every link was then.</summary>
+[JsonConverter(typeof(TolerantStringEnumConverter<QuickLinkKind>))]
+internal enum QuickLinkKind
+{
+    /// <summary>An installed program: focused if running, otherwise launched.</summary>
+    App,
+    /// <summary>A file or folder, opened with its default handler.</summary>
+    File,
+    /// <summary>A web page, opened in the browser.</summary>
+    Url,
+}
 
 /// <summary>
 /// A user-configured shortcut shown in the overlay's quick-links row (the icon strip below the
-/// usage bars). Clicking it focuses the app's window if it's already running, or launches it.
+/// usage bars). An <see cref="QuickLinkKind.App"/> link focuses the app's window if it's already running,
+/// or launches it; a <see cref="QuickLinkKind.File"/> or <see cref="QuickLinkKind.Url"/> link opens its
+/// <see cref="Target"/> (see <see cref="QuickLinkRouting"/>).
 /// <para>
 /// <see cref="ExePath"/> may be left empty for the well-known apps (GitKraken, Slack), whose
 /// install location is discovered live via <see cref="KnownApps"/> so a version bump doesn't strand
-/// the link. Custom links always carry an explicit executable path.
+/// the link. Custom app links always carry an explicit executable path.
 /// </para>
 /// </summary>
 internal sealed class QuickLink
 {
     public string Name    { get; set; } = "";
+    public QuickLinkKind Kind { get; set; } = QuickLinkKind.App;
+    // App links only. The name stays "ExePath" because perch-hook's mini-parser and every existing settings
+    // file already use it.
     public string ExePath { get; set; } = "";
+    // File links: the path. Url links: the address. Unused for apps.
+    public string Target  { get; set; } = "";
     public bool   Enabled { get; set; } = true;
+    // An imported icon that overrides the kind's own: a bare file name in QuickLinkIcons' folder, never a path.
+    public string? CustomIcon { get; set; }
 
     // The executable to launch: the configured path when it's set and still exists, otherwise a live
     // lookup for the well-known apps (handles version-bumped install dirs). Null if nothing resolves.
@@ -41,7 +65,105 @@ internal sealed class QuickLink
         return new string(Name.Where(c => !char.IsWhiteSpace(c)).ToArray()).ToLowerInvariant();
     }
 
-    public QuickLink Clone() => new() { Name = Name, ExePath = ExePath, Enabled = Enabled };
+    public QuickLink Clone() => new()
+    {
+        Name = Name, Kind = Kind, ExePath = ExePath, Target = Target, Enabled = Enabled, CustomIcon = CustomIcon,
+    };
+}
+
+/// <summary>The drawn mark a quick link shows when it has no imported icon and isn't an app.</summary>
+internal enum QuickLinkGlyph { None, Image, Document, Folder }
+
+/// <summary>
+/// Picks a file link's drawn mark. A file link shows a generic mark rather than asking the shell for the file
+/// type's icon: that icon is the handler app's (Photos for a picture), it says less than "this is an image" does,
+/// and for packaged handlers the lookup is the one that can stall. Pure; the caller says whether the target is a
+/// directory, which is file system work and so stays off the paint path.
+/// </summary>
+internal static class QuickLinkGlyphs
+{
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico", ".svg",
+        ".heic", ".heif", ".avif", ".raw", ".psd",
+    };
+
+    public static QuickLinkGlyph For(QuickLink link, bool isDirectory)
+    {
+        if (link.Kind != QuickLinkKind.File || string.IsNullOrWhiteSpace(link.Target)) return QuickLinkGlyph.None;
+        if (isDirectory) return QuickLinkGlyph.Folder;
+        return ImageExtensions.Contains(Path.GetExtension(link.Target.Trim())) ? QuickLinkGlyph.Image : QuickLinkGlyph.Document;
+    }
+}
+
+/// <summary>What a click on a quick link should do, decided without touching the OS.</summary>
+internal enum QuickLinkActionKind
+{
+    /// <summary>Nothing to open (a blank target, or a URL that isn't http/https).</summary>
+    None,
+    FocusOrLaunchApp,
+    OpenFile,
+    OpenFolder,
+    OpenUrl,
+    OpenUrlInNewWindow,
+}
+
+internal readonly record struct QuickLinkAction(QuickLinkActionKind Kind, string? Target = null);
+
+/// <summary>
+/// Maps a quick link and the button that clicked it to an action. Pure apart from the file/folder existence
+/// check, which is injectable. A web link only ever opens an absolute http(s) URL (<see cref="OpenTargets.WebUrl"/>
+/// minus <c>mailto:</c>), so a hand-edited settings file can't turn one into a shell launch. A middle click opens
+/// a web link in a new browser window, as every link in Perch does; other kinds treat it as a left click.
+/// </summary>
+internal static class QuickLinkRouting
+{
+    public static QuickLinkAction Resolve(QuickLink link, bool middleClick) =>
+        Resolve(link, middleClick, Directory.Exists);
+
+    internal static QuickLinkAction Resolve(QuickLink link, bool middleClick, Func<string, bool> isDirectory)
+    {
+        switch (link.Kind)
+        {
+            case QuickLinkKind.File:
+                var path = link.Target.Trim();
+                if (path.Length == 0) return new(QuickLinkActionKind.None);
+                return new(isDirectory(path) ? QuickLinkActionKind.OpenFolder : QuickLinkActionKind.OpenFile, path);
+
+            case QuickLinkKind.Url:
+                return NormalizeUrl(link.Target) is { } url
+                    ? new(middleClick ? QuickLinkActionKind.OpenUrlInNewWindow : QuickLinkActionKind.OpenUrl, url)
+                    : new(QuickLinkActionKind.None);
+
+            default:
+                return new(QuickLinkActionKind.FocusOrLaunchApp);
+        }
+    }
+
+    /// <summary>
+    /// The canonical form of a web link the user typed, or null when it isn't an absolute http(s) URL with a host.
+    /// A bare host ("example.com/path", "localhost:3000") is read as https, since that's what people paste;
+    /// anything carrying some other scheme (<c>file:</c>, <c>javascript:</c>, <c>ms-settings:</c>, <c>mailto:</c>)
+    /// or a drive path is refused.
+    /// </summary>
+    public static string? NormalizeUrl(string? input)
+    {
+        var s = input?.Trim();
+        if (string.IsNullOrEmpty(s)) return null;
+        if (LooksLikeBareHost(s)) s = "https://" + s;
+        var url = OpenTargets.WebUrl(s);
+        return url is not null && OpenTargets.IsHttp(url) ? url : null;
+    }
+
+    // No scheme, not a path, and any colon introduces a port: "host.tld/…" or "localhost:3000/…".
+    private static bool LooksLikeBareHost(string s)
+    {
+        if (s.Contains("://", StringComparison.Ordinal) || s[0] is '/' or '\\') return false;
+        int end = s.IndexOfAny([':', '/', '?', '#']);
+        if (end >= 0 && s[end] == ':' && (end + 1 >= s.Length || !char.IsAsciiDigit(s[end + 1]))) return false;
+        var host = end >= 0 ? s[..end] : s;
+        return host.Contains('.') || host.Equals("localhost", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>

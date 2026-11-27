@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.21] - 2026-11-27
+
+- One slow quick-link icon no longer hides every quick link
+- Quick links to files, folders and web pages
+- Custom quick-link icons from any image
+- Picture, page and folder marks for file links
+- Icons come out of Windows the right way up
+- Retired the upside-down quick links setting (nothing left to invert)
+
+---
+
 ## [v0.6.20] - 2026-11-27
 
 - Sharp tray icon at 125% and 175% scale (it was being stretched, quietly)

@@ -1803,9 +1803,9 @@ internal sealed partial class SettingsWindow : Window
     private void BuildQuickLinksPage(StackPanel page)
     {
         page.Children.Add(SettingsUi.BodyText(
-            "Quick links are a row of icons below the usage bars in the overlay. Click an icon to open that " +
-            "app, or bring it to the front if it's already running. Add a shortcut to any program on your PC; " +
-            "use the toggle to show or hide one without removing it."));
+            "Quick links are a row of icons below the usage bars in the overlay. A link can be an app (opened, or " +
+            "brought to the front if it's already running), a file or folder, or a web page. Use the toggle to " +
+            "show or hide one without removing it."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -1824,12 +1824,6 @@ internal sealed partial class SettingsWindow : Window
 
         _quickLinkPresets = SettingsUi.ButtonRow();
         page.Children.Add(_quickLinkPresets);
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Upside-down icons",
-            SaveToggle(_settings.UpsideDownQuickLinks, v => { _settings.UpsideDownQuickLinks = v; _hooks.QuickLinksChanged?.Invoke(); })));
-        page.Children.Add(SettingsUi.BodyText("For when the world feels right way up and you'd rather it didn't."));
 
         RebuildQuickLinksList();
     }
@@ -1871,7 +1865,7 @@ internal sealed partial class SettingsWindow : Window
         textStack.Children.Add(new TextBlock
         {
             Text = QuickLinkSubtitle(link), FontSize = 12, Foreground = Palette.MutedBrush,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
         });
         Grid.SetColumn(textStack, 1);
 
@@ -1884,7 +1878,13 @@ internal sealed partial class SettingsWindow : Window
         remove.Foreground = new SolidColorBrush(Palette.Danger);
         remove.Margin = new Thickness(6, 0, 0, 0);
         remove.VerticalAlignment = VerticalAlignment.Center;
-        remove.Click += (_, _) => { _quickLinks.Remove(link); RebuildQuickLinksList(); RaiseQuickLinksChanged(); };
+        remove.Click += (_, _) =>
+        {
+            _quickLinks.Remove(link);
+            RebuildQuickLinksList();
+            RaiseQuickLinksChanged();
+            DeleteRetiredIcon(link.CustomIcon);
+        };
         Grid.SetColumn(remove, 3);
 
         grid.Children.Add(toggle);
@@ -1896,6 +1896,12 @@ internal sealed partial class SettingsWindow : Window
 
     private static string QuickLinkSubtitle(QuickLink link)
     {
+        if (link.Kind == QuickLinkKind.Url)
+            return QuickLinkRouting.NormalizeUrl(link.Target) ?? link.Target + "   ⚠ not a web address";
+        if (link.Kind == QuickLinkKind.File)
+            return File.Exists(link.Target) || Directory.Exists(link.Target)
+                ? link.Target
+                : link.Target + "   ⚠ not found";
         if (!string.IsNullOrWhiteSpace(link.ExePath))
             return File.Exists(link.ExePath) ? link.ExePath : link.ExePath + "   ⚠ file not found";
         var resolved = link.ResolveExe();
@@ -1928,15 +1934,37 @@ internal sealed partial class SettingsWindow : Window
         bool ok = await dlg.ShowDialog<bool>(this);
         if (!ok) return;
 
-        if (existing == null)
-            _quickLinks.Add(new QuickLink { Name = dlg.LinkName, ExePath = dlg.LinkPath, Enabled = true });
-        else
+        var link = existing ?? new QuickLink { Enabled = true };
+        link.Name = dlg.LinkName;
+        link.Kind = dlg.LinkKind;
+        link.ExePath = dlg.LinkKind == QuickLinkKind.App ? dlg.LinkPath : "";
+        link.Target = dlg.LinkTarget;
+
+        // A replaced or reset icon's old file goes only after the settings that stop naming it are saved, so a
+        // failed save never leaves a link pointing at a deleted file.
+        string? retired = null;
+        if (dlg.NewIcon is { } png && QuickLinkIcons.Save(png, QuickLinkIcons.DefaultDirectory) is { } stored)
         {
-            existing.Name = dlg.LinkName;
-            existing.ExePath = dlg.LinkPath;
+            retired = link.CustomIcon;
+            link.CustomIcon = stored;
         }
+        else if (dlg.IconReset)
+        {
+            retired = link.CustomIcon;
+            link.CustomIcon = null;
+        }
+
+        if (existing == null) _quickLinks.Add(link);
         RebuildQuickLinksList();
         RaiseQuickLinksChanged();
+        DeleteRetiredIcon(retired);
+    }
+
+    // Saving is declined for a session whose settings file couldn't be read; the file on disk may still name this
+    // icon, so it stays.
+    private void DeleteRetiredIcon(string? name)
+    {
+        if (!_settings.SaveSuppressed) QuickLinkIcons.Delete(name, QuickLinkIcons.DefaultDirectory);
     }
 
     private void RaiseQuickLinksChanged()

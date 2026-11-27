@@ -939,11 +939,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Quick-links strip: the enabled subset of the user's links, their decoded icons (null → draw
     // initials), and the hover index. Icons are resolved to PNG file paths by the app (off the platform
-    // seam) and decoded here once per SetQuickLinks. The source icons render upside-down, so each is
-    // flipped 180° unless the user opts into the upside-down look.
+    // seam) and decoded here once per SetQuickLinks.
     private IReadOnlyList<QuickLink> _quickLinks = [];
     private List<Bitmap?> _quickLinkIcons = [];
-    private bool _upsideDownQuickLinks;
     private int _hoveredQuickLink = -1;
 
     // Real host-app icons for the origin glyph — an IDE (keyed by the host's executable path) or Claude
@@ -1088,29 +1086,42 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Update(_sessions);
     }
 
-    /// <summary>Raised when a quick-link icon is clicked; the app wires this to the launcher's
-    /// LaunchOrFocus. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
-    internal event Action<QuickLink>? QuickLinkActivated;
+    /// <summary>Raised when a quick-link icon is clicked, with true for a middle click; the app opens the
+    /// link. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
+    internal event Action<QuickLink, bool>? QuickLinkActivated;
 
-    /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links and their
-    /// resolved icon file paths — a null path draws name-derived initials. Called on the UI thread on
-    /// startup and whenever the list is edited. Changes the panel height, so relayout.</summary>
-    internal void SetQuickLinks(IReadOnlyList<QuickLink> links, IReadOnlyList<string?> iconFiles)
+    /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links, their resolved
+    /// icon file paths, and the drawn mark for each link with no icon (a file link's image/page/folder). A link
+    /// with neither draws name-derived initials. Called on the UI thread on startup and whenever the list is
+    /// edited. Changes the panel height, so relayout.</summary>
+    internal void SetQuickLinks(IReadOnlyList<QuickLink> links, IReadOnlyList<string?> iconFiles,
+        IReadOnlyList<QuickLinkGlyph>? glyphs = null)
     {
         _quickLinks = links;
         _quickLinkIcons = new List<Bitmap?>(links.Count);
         for (int i = 0; i < links.Count; i++)
-            _quickLinkIcons.Add(DecodeIcon(i < iconFiles.Count ? iconFiles[i] : null));
+            _quickLinkIcons.Add(DecodeQuickLinkIcon(i < iconFiles.Count ? iconFiles[i] : null));
+        _quickLinkGlyphs = glyphs ?? [];
         _hoveredQuickLink = -1;
         RemeasurePanel();
     }
 
-    /// <summary>Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.</summary>
-    public void SetUpsideDownQuickLinks(bool upsideDown)
+    private IReadOnlyList<QuickLinkGlyph> _quickLinkGlyphs = [];
+
+    // Quick-link icons come from the shell cache, a downloaded favicon (vetted ≤1024px) or an imported icon
+    // (stored at 64px), and are drawn at 16 DIP; decoding to a fixed small width keeps a large favicon cheap and
+    // still sharp at high display scales.
+    private const int QuickLinkDecodeWidth = 64;
+
+    private static Bitmap? DecodeQuickLinkIcon(string? file)
     {
-        if (_upsideDownQuickLinks == upsideDown) return;
-        _upsideDownQuickLinks = upsideDown;
-        InvalidateVisual();
+        if (string.IsNullOrEmpty(file)) return null;
+        try
+        {
+            using var stream = File.OpenRead(file);
+            return Bitmap.DecodeToWidth(stream, QuickLinkDecodeWidth);
+        }
+        catch { return null; }
     }
 
     private static Bitmap? DecodeIcon(string? file)
@@ -2509,8 +2520,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // ── Quick-links row ────────────────────────────────────────────────────────
     // The enabled quick-link icons side-by-side, centred horizontally. Each slot shows its pre-decoded
-    // icon, or drawn initials over a name-derived colour when no icon resolved. The source icons render
-    // upside-down, so each is mirrored vertically about its own centre unless the user opts into upside-down.
+    // icon, or drawn initials over a name-derived colour when no icon resolved.
     private void DrawQuickLinksRow(DrawingContext ctx, double width)
     {
         const double IconSize = 16, IconGap = 14, HitPad = 4;
@@ -2543,23 +2553,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var icon = i < _quickLinkIcons.Count ? _quickLinkIcons[i] : null;
             var iconRect = new Rect(iconX, iconY, IconSize, IconSize);
 
+            var glyph = i < _quickLinkGlyphs.Count ? _quickLinkGlyphs[i] : QuickLinkGlyph.None;
             if (icon != null)
             {
-                if (_upsideDownQuickLinks)
-                {
-                    ctx.DrawImage(icon, iconRect);
-                }
-                else
-                {
-                    // Source icons are vertically flipped (upside-down); mirror about the horizontal
-                    // axis to right them. A full 180° rotation would also flip them horizontally.
-                    double cy = iconY + IconSize / 2;
-                    var flip = Matrix.CreateTranslation(0, -cy)
-                             * Matrix.CreateScale(1, -1)
-                             * Matrix.CreateTranslation(0, cy);
-                    using (ctx.PushTransform(flip))
-                        ctx.DrawImage(icon, iconRect);
-                }
+                ctx.DrawImage(icon, iconRect);
+            }
+            else if (glyph != QuickLinkGlyph.None)
+            {
+                DrawFileGlyph(ctx, glyph, iconRect.Center, _hoveredQuickLink == i ? Palette.FgBrush : MutedBrush);
             }
             else
             {
@@ -2570,6 +2571,80 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
     }
+
+    // A file link's mark, ~14px around `c`, stroked in a neutral shade so it can't be mistaken for the amber note
+    // button leading the row: a picture (frame, sun, hills), a page with a folded corner and three text lines, or a
+    // folder. Shapes are cached and drawn under a translation, like every overlay glyph.
+    private static void DrawFileGlyph(DrawingContext ctx, QuickLinkGlyph glyph, Point c, IBrush brush)
+    {
+        var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        using (At(ctx, c.X, c.Y))
+        {
+            switch (glyph)
+            {
+                case QuickLinkGlyph.Image:
+                    ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(-6.5, -5.5, 13, 11), 1.5));
+                    ctx.DrawEllipse(brush, null, new Point(-2.8, -2.2), 1.4, 1.4);
+                    ctx.DrawGeometry(null, pen, ImageHills);
+                    break;
+                case QuickLinkGlyph.Folder:
+                    ctx.DrawGeometry(null, pen, FolderShape);
+                    break;
+                default:
+                    ctx.DrawGeometry(null, pen, PageShape);
+                    ctx.DrawGeometry(null, pen, PageFold);
+                    ctx.DrawLine(pen, new Point(-2.5, -0.5), new Point(2.5, -0.5));
+                    ctx.DrawLine(pen, new Point(-2.5, 2), new Point(2.5, 2));
+                    ctx.DrawLine(pen, new Point(-2.5, 4.5), new Point(1, 4.5));
+                    break;
+            }
+        }
+    }
+
+    private const double FilePageW = 11, FilePageH = 14, FilePageFold = 3.5;
+
+    private static readonly Geometry PageShape = GlyphShape(gc =>
+    {
+        double l = -FilePageW / 2, t = -FilePageH / 2, r = l + FilePageW, b = t + FilePageH;
+        gc.BeginFigure(new Point(l, t), isFilled: false);
+        gc.LineTo(new Point(r - FilePageFold, t));
+        gc.LineTo(new Point(r, t + FilePageFold));
+        gc.LineTo(new Point(r, b));
+        gc.LineTo(new Point(l, b));
+        gc.EndFigure(true);
+    });
+
+    private static readonly Geometry PageFold = GlyphShape(gc =>
+    {
+        double t = -FilePageH / 2, r = FilePageW / 2;
+        gc.BeginFigure(new Point(r - FilePageFold, t), isFilled: false);
+        gc.LineTo(new Point(r - FilePageFold, t + FilePageFold));
+        gc.LineTo(new Point(r, t + FilePageFold));
+        gc.EndFigure(false);
+    });
+
+    // Two hills along the picture's bottom edge.
+    private static readonly Geometry ImageHills = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(-6.5, 4), isFilled: false);
+        gc.LineTo(new Point(-2.5, 0));
+        gc.LineTo(new Point(0.5, 3));
+        gc.LineTo(new Point(2.5, 1));
+        gc.LineTo(new Point(6.5, 5));
+        gc.EndFigure(false);
+    });
+
+    // A folder: the tab on the back's top-left, then the body.
+    private static readonly Geometry FolderShape = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(-7, -5), isFilled: false);
+        gc.LineTo(new Point(-2.5, -5));
+        gc.LineTo(new Point(-1, -3.5));
+        gc.LineTo(new Point(7, -3.5));
+        gc.LineTo(new Point(7, 5.5));
+        gc.LineTo(new Point(-7, 5.5));
+        gc.EndFigure(true);
+    });
 
     // Returns the index into _quickLinks under point p, or -1 if none (or the strip isn't shown).
     private int HitTestQuickLink(Point p)
@@ -2911,7 +2986,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
             if (tinted is not null)
             {
-                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted, flip: !session.IsPerchControlled);
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
             }
             else
             {
@@ -3531,25 +3606,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
-    // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
-    // out vertically flipped (see the quick-links strip), so by default mirror about the horizontal axis to
-    // right them; a bitmap decoded straight from a PNG asset (the Perch mark) is already upright, so it opts out.
-    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon, bool flip = true)
+    // the status-dot centre — so it lines up with the plain dots on other rows.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
     {
         var src = icon.Size;
         double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
-        var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
-        if (!flip)
-        {
-            ctx.DrawImage(icon, new Rect(src), dst);
-            return;
-        }
-        var mirror = Matrix.CreateTranslation(0, -cy)
-                   * Matrix.CreateScale(1, -1)
-                   * Matrix.CreateTranslation(0, cy);
-        using (ctx.PushTransform(mirror))
-            ctx.DrawImage(icon, new Rect(src), dst);
+        ctx.DrawImage(icon, new Rect(src), new Rect(cx - w / 2, cy - h / 2, w, h));
     }
 
     // VS Code: the blue folded-ribbon silhouette — a vertical spine on the left, with the two ribbon tips
@@ -4565,14 +4628,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // Middle-click the Jira glyph to open the ticket in a fresh browser window (mirrors the middle-click
-        // "open in new window" the URL menu items offer). Only the Jira glyph takes a middle click today.
+        // Middle-click the Jira glyph, or a quick link, to open it in a fresh browser window (mirrors the
+        // middle-click "open in new window" the URL menu items offer). A non-web quick link treats it as a click.
         if (props.IsMiddleButtonPressed)
         {
             int jiraMid = HitRect(_jiraRects, e.GetPosition(this));
             if (jiraMid >= 0 && _rows[jiraMid].Session is { JiraTicket: { } jira })
             {
                 PlatformServices.UrlOpener.OpenInNewWindow(jira.Url);
+                e.Handled = true;
+                return;
+            }
+            int qlMid = HitTestQuickLink(e.GetPosition(this));
+            if (qlMid >= 0 && qlMid < _quickLinks.Count)
+            {
+                QuickLinkActivated?.Invoke(_quickLinks[qlMid], true);
                 e.Handled = true;
                 return;
             }
@@ -5010,7 +5080,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int ql = HitTestQuickLink(p);
         if (ql >= 0 && ql < _quickLinks.Count)
         {
-            QuickLinkActivated?.Invoke(_quickLinks[ql]);
+            QuickLinkActivated?.Invoke(_quickLinks[ql], false);
             return;
         }
 
