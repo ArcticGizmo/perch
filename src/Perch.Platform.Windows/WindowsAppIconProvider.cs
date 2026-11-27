@@ -32,10 +32,31 @@ public sealed class WindowsAppIconProvider : IAppIconProvider
         lock (_gate)
         {
             if (_resolved.TryGetValue(key, out var cached)) return cached;
-            string? path = Render(name, explicitPath, resolvedPath, pixelSize, key);
+            string? path = RenderOnSta(name, explicitPath, resolvedPath, pixelSize, key);
             _resolved[key] = path;
             return path;
         }
+    }
+
+    // Generous enough for the first call, which also enumerates the whole AppsFolder (~1s+).
+    private static readonly TimeSpan RenderTimeout = TimeSpan.FromSeconds(10);
+
+    // The shell image factory is apartment-threaded: called from a thread-pool (MTA) thread, a file whose
+    // icon comes from a packaged handler (e.g. a .png owned by Photos) can block forever, and holding _gate
+    // would then starve every later icon request. So each render gets its own STA thread and a deadline; a
+    // render that misses it is abandoned (a background thread can't keep the process alive) and the link
+    // falls back to initials.
+    private static string? RenderOnSta(string name, string? explicitPath, string? resolvedPath, int size, string key)
+    {
+        string? result = null;
+        var thread = new Thread(() => result = Render(name, explicitPath, resolvedPath, size, key))
+        {
+            IsBackground = true,
+            Name = "Perch icon render",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return thread.Join(RenderTimeout) ? result : null;
     }
 
     // Resolves the icon bitmap (explicit path wins; then the Start-Menu logo; then a discovered exe),

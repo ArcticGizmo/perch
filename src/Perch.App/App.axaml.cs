@@ -3466,27 +3466,36 @@ public partial class App : Application
         _notifier?.Show(title, body, ToastLevel.Warning, null, null);
     }
 
-    // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first
-    // shell lookup enumerates the Start Menu, ~1s) then applying on the UI thread. Icons come back as PNG
-    // file paths from the seam. Always sets the strip — an empty list clears it — so a link removed or
-    // disabled in Settings disappears immediately; also syncs the upside-down flag.
+    // Bumped on every reload so a slow icon pass from an earlier edit can't overwrite a newer strip.
+    private int _quickLinksGeneration;
+
+    // Applies the enabled links to the overlay strip at once (initials), then resolves their icons off the UI
+    // thread (the first shell lookup enumerates the Start Menu, ~1s) and swaps them in. Showing the links before
+    // their icons means one link whose icon lookup fails or stalls can't hide the rest. Always sets the strip
+    // (an empty list clears it), so a link removed or disabled in Settings disappears immediately; also syncs
+    // the upside-down flag.
     private void ReloadQuickLinks(AppSettings settings)
     {
         if (_overlay is null || _quickLinkLauncher is null) return;
         _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
 
         var links = (settings.QuickLinks ?? []).Where(l => l.Enabled).ToList();
-        if (links.Count == 0)
-        {
-            _overlay.Canvas.SetQuickLinks(links, new List<string?>());
-            return;
-        }
+        int generation = ++_quickLinksGeneration;
+        _overlay.Canvas.SetQuickLinks(links, new List<string?>());
+        if (links.Count == 0) return;
 
         var launcher = _quickLinkLauncher;
         System.Threading.Tasks.Task.Run(() =>
         {
-            var icons = links.Select(l => launcher.IconFile(l, 32)).ToList();
-            Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetQuickLinks(links, icons));
+            var icons = links.Select(l =>
+            {
+                try { return launcher.IconFile(l, 32); }
+                catch { return null; }
+            }).ToList();
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons);
+            });
         });
     }
 
