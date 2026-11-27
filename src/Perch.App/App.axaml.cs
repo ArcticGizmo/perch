@@ -3492,7 +3492,9 @@ public partial class App : Application
 
         var links = (settings.QuickLinks ?? []).Where(l => l.Enabled).ToList();
         int generation = ++_quickLinksGeneration;
-        _overlay.Canvas.SetQuickLinks(links, new List<string?>());
+        // File links get their mark at once from the extension; the off-thread pass below corrects a folder.
+        var glyphs = links.Select(l => QuickLinkGlyphs.For(l, isDirectory: false)).ToList();
+        _overlay.Canvas.SetQuickLinks(links, new List<string?>(), glyphs);
         if (links.Count == 0) return;
 
         var launcher = _quickLinkLauncher;
@@ -3503,11 +3505,13 @@ public partial class App : Application
 
         void Apply(List<string?> icons) => Dispatcher.UIThread.Post(() =>
         {
-            if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons);
+            if (generation == _quickLinksGeneration) _overlay?.Canvas.SetQuickLinks(links, icons, glyphs);
         });
 
         System.Threading.Tasks.Task.Run(async () =>
         {
+            glyphs = links.Select(l =>
+                QuickLinkGlyphs.For(l, l.Kind == QuickLinkKind.File && Directory.Exists(l.Target.Trim()))).ToList();
             var icons = links.Select(l =>
             {
                 try { return QuickLinkIcons.PathFor(l.CustomIcon, customDir) ?? launcher.IconFile(l, 32); }

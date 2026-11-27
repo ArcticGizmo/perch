@@ -71,6 +71,31 @@ internal sealed class QuickLink
     };
 }
 
+/// <summary>The drawn mark a quick link shows when it has no imported icon and isn't an app.</summary>
+internal enum QuickLinkGlyph { None, Image, Document, Folder }
+
+/// <summary>
+/// Picks a file link's drawn mark. A file link shows a generic mark rather than asking the shell for the file
+/// type's icon: that icon is the handler app's (Photos for a picture), it says less than "this is an image" does,
+/// and for packaged handlers the lookup is the one that can stall. Pure; the caller says whether the target is a
+/// directory, which is file system work and so stays off the paint path.
+/// </summary>
+internal static class QuickLinkGlyphs
+{
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico", ".svg",
+        ".heic", ".heif", ".avif", ".raw", ".psd",
+    };
+
+    public static QuickLinkGlyph For(QuickLink link, bool isDirectory)
+    {
+        if (link.Kind != QuickLinkKind.File || string.IsNullOrWhiteSpace(link.Target)) return QuickLinkGlyph.None;
+        if (isDirectory) return QuickLinkGlyph.Folder;
+        return ImageExtensions.Contains(Path.GetExtension(link.Target.Trim())) ? QuickLinkGlyph.Image : QuickLinkGlyph.Document;
+    }
+}
+
 /// <summary>What a click on a quick link should do, decided without touching the OS.</summary>
 internal enum QuickLinkActionKind
 {

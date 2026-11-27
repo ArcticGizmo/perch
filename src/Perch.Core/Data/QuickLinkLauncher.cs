@@ -30,15 +30,11 @@ internal sealed class QuickLinkLauncher
         _urls = urls;
     }
 
-    /// <summary>The PNG file path for an app or file link's icon at the given pixel size, or null (draw initials).
-    /// Always null for a web link.</summary>
-    public string? IconFile(QuickLink link, int size) => link.Kind switch
-    {
-        QuickLinkKind.App => _icons.GetIconFile(link.Name, link.ExePath, link.ResolveExe(), size),
-        // The shell icon of the path itself: the file type's icon, or the folder icon.
-        QuickLinkKind.File when !string.IsNullOrWhiteSpace(link.Target) => _icons.GetIconFile(link.Name, link.Target.Trim(), null, size),
-        _ => null,
-    };
+    /// <summary>The PNG file path for an app link's icon at the given pixel size, or null (draw initials). Null for
+    /// a file link, which draws a <see cref="QuickLinkGlyphs"/> mark, and for a web link, whose favicon comes from
+    /// <see cref="QuickLinkFavicons"/>.</summary>
+    public string? IconFile(QuickLink link, int size) =>
+        link.Kind == QuickLinkKind.App ? _icons.GetIconFile(link.Name, link.ExePath, link.ResolveExe(), size) : null;
 
     /// <summary>Opens the link for a left or middle click. Never throws.</summary>
     public QuickLinkOpenResult Open(QuickLink link, bool middleClick)

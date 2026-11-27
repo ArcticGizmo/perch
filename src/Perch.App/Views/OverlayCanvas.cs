@@ -1090,18 +1090,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// link. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
     internal event Action<QuickLink, bool>? QuickLinkActivated;
 
-    /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links and their
-    /// resolved icon file paths — a null path draws name-derived initials. Called on the UI thread on
-    /// startup and whenever the list is edited. Changes the panel height, so relayout.</summary>
-    internal void SetQuickLinks(IReadOnlyList<QuickLink> links, IReadOnlyList<string?> iconFiles)
+    /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links, their resolved
+    /// icon file paths, and the drawn mark for each link with no icon (a file link's image/page/folder). A link
+    /// with neither draws name-derived initials. Called on the UI thread on startup and whenever the list is
+    /// edited. Changes the panel height, so relayout.</summary>
+    internal void SetQuickLinks(IReadOnlyList<QuickLink> links, IReadOnlyList<string?> iconFiles,
+        IReadOnlyList<QuickLinkGlyph>? glyphs = null)
     {
         _quickLinks = links;
         _quickLinkIcons = new List<Bitmap?>(links.Count);
         for (int i = 0; i < links.Count; i++)
             _quickLinkIcons.Add(DecodeQuickLinkIcon(i < iconFiles.Count ? iconFiles[i] : null));
+        _quickLinkGlyphs = glyphs ?? [];
         _hoveredQuickLink = -1;
         RemeasurePanel();
     }
+
+    private IReadOnlyList<QuickLinkGlyph> _quickLinkGlyphs = [];
 
     // Quick-link icons come from the shell cache, a downloaded favicon (vetted ≤1024px) or an imported icon
     // (stored at 64px), and are drawn at 16 DIP; decoding to a fixed small width keeps a large favicon cheap and
@@ -2548,9 +2553,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var icon = i < _quickLinkIcons.Count ? _quickLinkIcons[i] : null;
             var iconRect = new Rect(iconX, iconY, IconSize, IconSize);
 
+            var glyph = i < _quickLinkGlyphs.Count ? _quickLinkGlyphs[i] : QuickLinkGlyph.None;
             if (icon != null)
             {
                 ctx.DrawImage(icon, iconRect);
+            }
+            else if (glyph != QuickLinkGlyph.None)
+            {
+                DrawFileGlyph(ctx, glyph, iconRect.Center, _hoveredQuickLink == i ? Palette.FgBrush : MutedBrush);
             }
             else
             {
@@ -2561,6 +2571,80 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
     }
+
+    // A file link's mark, ~14px around `c`, stroked in a neutral shade so it can't be mistaken for the amber note
+    // button leading the row: a picture (frame, sun, hills), a page with a folded corner and three text lines, or a
+    // folder. Shapes are cached and drawn under a translation, like every overlay glyph.
+    private static void DrawFileGlyph(DrawingContext ctx, QuickLinkGlyph glyph, Point c, IBrush brush)
+    {
+        var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        using (At(ctx, c.X, c.Y))
+        {
+            switch (glyph)
+            {
+                case QuickLinkGlyph.Image:
+                    ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(-6.5, -5.5, 13, 11), 1.5));
+                    ctx.DrawEllipse(brush, null, new Point(-2.8, -2.2), 1.4, 1.4);
+                    ctx.DrawGeometry(null, pen, ImageHills);
+                    break;
+                case QuickLinkGlyph.Folder:
+                    ctx.DrawGeometry(null, pen, FolderShape);
+                    break;
+                default:
+                    ctx.DrawGeometry(null, pen, PageShape);
+                    ctx.DrawGeometry(null, pen, PageFold);
+                    ctx.DrawLine(pen, new Point(-2.5, -0.5), new Point(2.5, -0.5));
+                    ctx.DrawLine(pen, new Point(-2.5, 2), new Point(2.5, 2));
+                    ctx.DrawLine(pen, new Point(-2.5, 4.5), new Point(1, 4.5));
+                    break;
+            }
+        }
+    }
+
+    private const double FilePageW = 11, FilePageH = 14, FilePageFold = 3.5;
+
+    private static readonly Geometry PageShape = GlyphShape(gc =>
+    {
+        double l = -FilePageW / 2, t = -FilePageH / 2, r = l + FilePageW, b = t + FilePageH;
+        gc.BeginFigure(new Point(l, t), isFilled: false);
+        gc.LineTo(new Point(r - FilePageFold, t));
+        gc.LineTo(new Point(r, t + FilePageFold));
+        gc.LineTo(new Point(r, b));
+        gc.LineTo(new Point(l, b));
+        gc.EndFigure(true);
+    });
+
+    private static readonly Geometry PageFold = GlyphShape(gc =>
+    {
+        double t = -FilePageH / 2, r = FilePageW / 2;
+        gc.BeginFigure(new Point(r - FilePageFold, t), isFilled: false);
+        gc.LineTo(new Point(r - FilePageFold, t + FilePageFold));
+        gc.LineTo(new Point(r, t + FilePageFold));
+        gc.EndFigure(false);
+    });
+
+    // Two hills along the picture's bottom edge.
+    private static readonly Geometry ImageHills = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(-6.5, 4), isFilled: false);
+        gc.LineTo(new Point(-2.5, 0));
+        gc.LineTo(new Point(0.5, 3));
+        gc.LineTo(new Point(2.5, 1));
+        gc.LineTo(new Point(6.5, 5));
+        gc.EndFigure(false);
+    });
+
+    // A folder: the tab on the back's top-left, then the body.
+    private static readonly Geometry FolderShape = GlyphShape(gc =>
+    {
+        gc.BeginFigure(new Point(-7, -5), isFilled: false);
+        gc.LineTo(new Point(-2.5, -5));
+        gc.LineTo(new Point(-1, -3.5));
+        gc.LineTo(new Point(7, -3.5));
+        gc.LineTo(new Point(7, 5.5));
+        gc.LineTo(new Point(-7, 5.5));
+        gc.EndFigure(true);
+    });
 
     // Returns the index into _quickLinks under point p, or -1 if none (or the strip isn't shown).
     private int HitTestQuickLink(Point p)

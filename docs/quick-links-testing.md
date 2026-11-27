@@ -46,15 +46,16 @@ A link now says what it points at. The Add/Edit dialog has a three-way switch. F
 
 1. **Existing links:** after updating, every existing link still shows and opens exactly as before (they read as App links).
 2. **Convert hint:** edit the old image link (an App link whose program is a `.png`). Expect: "This path isn't a program." with **Make it a file link**. Click it: the dialog switches to *File or folder* with the path carried over. Save. The link now opens the image with its default viewer.
-3. **File link:** add a *File or folder* link to a PDF. Expect: the PDF's file-type icon on the strip; a click opens it in its viewer. The name is proposed from the file name until you type your own.
-4. **Folder link:** add a *File or folder* link via **Folder…**. Expect: a folder icon; a click opens that folder in Explorer.
-5. **Script safety:** add a *File or folder* link to a `.bat` or `.ps1`. Expect: a click opens Explorer with the file selected; the script does not run.
-6. **Missing file:** add a file link, then rename the file on disk. Click the link. Expect: a "Can't find …" toast. Settings shows the target with "⚠ not found".
-7. **Web link:** add a *Web link* to `github.com`. Expect: the address is accepted as `https://github.com/`, the name proposes "github.com", the strip shows initials immediately and GitHub's favicon shortly after. Left click opens it in the browser; middle click opens it in a new browser window.
-8. **Bad addresses:** in *Web link*, type `javascript:alert(1)`, `file:///C:/Windows/notepad.exe`, `mailto:a@b.com`. Expect: "Enter a web address, such as https://example.com." and **Save** disabled for each.
-9. **Intranet:** a web link to a private-network host (e.g. `http://192.168.1.10:8080`) still gets its favicon from that host.
-10. **No favicon:** a web link to a site with no `/favicon.ico` keeps its initials, and editing Settings repeatedly doesn't refetch it (one request a week).
-11. **Settings list:** long file paths in the Quick Links list keep their file name visible and lose the leading folders (leading ellipsis).
+3. **File link:** add a *File or folder* link to a PDF. Expect: a grey page mark (folded corner, three lines) on the strip, distinct from the amber note button; a click opens it in its viewer. The name is proposed from the file name until you type your own.
+4. **Image link:** a *File or folder* link to a `.png`/`.jpg` shows a grey picture mark straight away (no initials, no wait on the shell).
+5. **Folder link:** add a *File or folder* link via **Folder…**. Expect: a grey folder mark; a click opens that folder in Explorer.
+6. **Script safety:** add a *File or folder* link to a `.bat` or `.ps1`. Expect: a click opens Explorer with the file selected; the script does not run.
+7. **Missing file:** add a file link, then rename the file on disk. Click the link. Expect: a "Can't find …" toast. Settings shows the target with "⚠ not found".
+8. **Web link:** add a *Web link* to `github.com`. Expect: the address is accepted as `https://github.com/`, the name proposes "github.com", the strip shows initials immediately and GitHub's favicon shortly after. Left click opens it in the browser; middle click opens it in a new browser window.
+9. **Bad addresses:** in *Web link*, type `javascript:alert(1)`, `file:///C:/Windows/notepad.exe`, `mailto:a@b.com`. Expect: "Enter a web address, such as https://example.com." and **Save** disabled for each.
+10. **Intranet:** a web link to a private-network host (e.g. `http://192.168.1.10:8080`) still gets its favicon from that host.
+11. **No favicon:** a web link to a site with no `/favicon.ico` keeps its initials, and editing Settings repeatedly doesn't refetch it (one request a week).
+12. **Settings list:** long file paths in the Quick Links list keep their file name visible and lose the leading folders (leading ellipsis).
 
 ## Phase 4: custom icons
 

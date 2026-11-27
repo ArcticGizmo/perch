@@ -176,6 +176,38 @@ public class QuickLinkTests
         Assert.Null(QuickLinkRouting.NormalizeUrl(input));
     }
 
+    // ── File-link marks ─────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(@"C:\files\office-layout.png", "Image")]
+    [InlineData(@"C:\files\Photo.JPEG", "Image")]
+    [InlineData(@"C:\files\scan.webp ", "Image")]
+    [InlineData(@"C:\work\plan.pdf", "Document")]
+    [InlineData(@"C:\work\notes", "Document")]
+    [InlineData(@"C:\work\archive.tar.gz", "Document")]
+    public void FileLink_GetsImageOrPageMark(string target, string expected)
+    {
+        var link = new QuickLink { Kind = QuickLinkKind.File, Target = target };
+        Assert.Equal(Enum.Parse<QuickLinkGlyph>(expected), QuickLinkGlyphs.For(link, isDirectory: false));
+    }
+
+    [Fact]
+    public void FileLink_ToADirectory_GetsTheFolderMark_EvenWithADotInItsName()
+    {
+        var link = new QuickLink { Kind = QuickLinkKind.File, Target = @"C:\work\site.assets.png" };
+        Assert.Equal(QuickLinkGlyph.Folder, QuickLinkGlyphs.For(link, isDirectory: true));
+    }
+
+    [Theory]
+    [InlineData("App", @"C:\x.png")]
+    [InlineData("Url", "https://example.com/x.png")]
+    [InlineData("File", "   ")]
+    public void OnlyANonBlankFileLink_GetsAMark(string kind, string target)
+    {
+        var link = new QuickLink { Kind = Enum.Parse<QuickLinkKind>(kind), Target = target, ExePath = target };
+        Assert.Equal(QuickLinkGlyph.None, QuickLinkGlyphs.For(link, isDirectory: false));
+    }
+
     // ── Favicons ────────────────────────────────────────────────────────────────
 
     // A PNG header: enough for FeedIcon.Validate.

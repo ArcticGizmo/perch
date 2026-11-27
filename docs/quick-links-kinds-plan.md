@@ -6,6 +6,7 @@ Deviations from the plan as written below:
 - Web-link favicons come from the site's `/favicon.ico` only; a page's `<link rel="icon">` isn't read. Sites that only declare their icon in HTML show initials (or a custom icon).
 - The startup orphan sweep only runs after a clean settings load (`AppSettings.LoadedCleanly`): a salvaged file may be missing links whose icons are still wanted.
 - File links open through `IFileRevealer`: viewer-safe types open, anything executable is revealed in the file manager, and folders open directly.
+- File links don't ask the shell for a file-type icon (it's the handler app's icon, and for packaged handlers it's the lookup that stalls). With no imported icon they draw a mark instead of initials (`QuickLinkGlyphs`): a picture for image extensions, a folder for a directory, a page for anything else.
 
 ## Why
 

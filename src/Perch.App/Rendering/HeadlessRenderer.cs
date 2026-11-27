@@ -557,6 +557,22 @@ internal static class HeadlessRenderer
         RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1x.png"), 96);
         RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1.5x.png"), 144);
 
+        // File links with no imported icon wear a drawn mark: a picture for an image, a folder, and a page for any
+        // other file. An app link with no icon still shows its initials.
+        var fileLinks = new List<QuickLink>
+        {
+            new() { Name = "Office Layout", Kind = QuickLinkKind.File, Target = @"C:\files\office-layout.png" },
+            new() { Name = "Projects", Kind = QuickLinkKind.File, Target = @"C:\work\projects" },
+            new() { Name = "Plan", Kind = QuickLinkKind.File, Target = @"C:\work\plan.pdf" },
+            new() { Name = "Slack" },
+        };
+        var fileGlyphs = fileLinks.Select(l => QuickLinkGlyphs.For(l, isDirectory: l.Name == "Projects")).ToList();
+        var fileLinksProbe = new OverlayCanvas();
+        fileLinksProbe.Update([]);
+        fileLinksProbe.SetQuickLinks(fileLinks, new List<string?>(), fileGlyphs);
+        RenderControl(fileLinksProbe, Path.Combine(outDir, "overlay_quicklinks_files_1x.png"), 96);
+        RenderControl(fileLinksProbe, Path.Combine(outDir, "overlay_quicklinks_files_1.5x.png"), 144);
+
         // Docked mode: the full-height reserved edge column, expanded (full panel, square corners, flush to
         // the edge) and collapsed (the narrow status-count strip). Rendered inside a fixed-height host so the
         // owner-drawn column fills it the way the live full-height window does (the reservation itself is a
