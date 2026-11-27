@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.6.20] - 2026-11-27
+
+- Sharp tray icon at 125% and 175% scale (it was being stretched, quietly)
+- Crisper small icons in the taskbar and Explorer
+- Menus and hints land in the right place after a display scale change
+
+---
+
 ## [v0.6.19] - 2026-11-24
 
 - Sub-agent achievements count again (Claude Code renamed the tool and told nobody)
